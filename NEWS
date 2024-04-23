@@ -46,6 +46,7 @@ OVN v24.03.0 - 01 Mar 2024
     * IC_SB_Global now have "nb_ic_cfg" column for ISB informational status.
     * Availability_Zone now have "nb_ic_cfg" column for local AZ
       informational status.
+    * Add support for ovsdb-server `--config-file` option in ovn-ctl.
 
 OVN v23.09.0 - 15 Sep 2023
 --------------------------
