@@ -90,6 +90,10 @@ static bool use_ct_inv_match = true;
  */
 static bool default_acl_drop;
 
+/* If this option is 'true' northd will use limited 24-bit space for datapath
+ * and ports tunnel key allocation (12 bits for each instead of default 16). */
+static bool vxlan_mode;
+
 #define MAX_OVN_TAGS 4096
 
 
@@ -892,7 +896,7 @@ join_datapaths(const struct nbrec_logical_switch_table *nbrec_ls_table,
     }
 }
 
-static bool
+bool
 is_vxlan_mode(const struct sbrec_chassis_table *sbrec_chassis_table)
 {
     const struct sbrec_chassis *chassis;
@@ -907,25 +911,22 @@ is_vxlan_mode(const struct sbrec_chassis_table *sbrec_chassis_table)
 }
 
 uint32_t
-get_ovn_max_dp_key_local(const struct sbrec_chassis_table *sbrec_chassis_table)
+get_ovn_max_dp_key_local(bool _vxlan_mode)
 {
-    if (is_vxlan_mode(sbrec_chassis_table)) {
-        /* OVN_MAX_DP_GLOBAL_NUM doesn't apply for vxlan mode. */
+    if (_vxlan_mode) {
+        /* OVN_MAX_DP_GLOBAL_NUM doesn't apply for VXLAN mode. */
         return OVN_MAX_DP_VXLAN_KEY;
     }
     return OVN_MAX_DP_KEY - OVN_MAX_DP_GLOBAL_NUM;
 }
 
 static void
-ovn_datapath_allocate_key(const struct sbrec_chassis_table *sbrec_ch_table,
-                          struct hmap *datapaths, struct hmap *dp_tnlids,
+ovn_datapath_allocate_key(struct hmap *datapaths, struct hmap *dp_tnlids,
                           struct ovn_datapath *od, uint32_t *hint)
 {
     if (!od->tunnel_key) {
         od->tunnel_key = ovn_allocate_tnlid(dp_tnlids, "datapath",
-                                    OVN_MIN_DP_KEY_LOCAL,
-                                    get_ovn_max_dp_key_local(sbrec_ch_table),
-                                    hint);
+            OVN_MIN_DP_KEY_LOCAL, get_ovn_max_dp_key_local(vxlan_mode), hint);
         if (!od->tunnel_key) {
             if (od->sb) {
                 sbrec_datapath_binding_delete(od->sb);
@@ -938,7 +939,6 @@ ovn_datapath_allocate_key(const struct sbrec_chassis_table *sbrec_ch_table,
 
 static void
 ovn_datapath_assign_requested_tnl_id(
-    const struct sbrec_chassis_table *sbrec_chassis_table,
     struct hmap *dp_tnlids, struct ovn_datapath *od)
 {
     const struct smap *other_config = (od->nbs
@@ -947,8 +947,7 @@ ovn_datapath_assign_requested_tnl_id(
     uint32_t tunnel_key = smap_get_int(other_config, "requested-tnl-key", 0);
     if (tunnel_key) {
         const char *interconn_ts = smap_get(other_config, "interconn-ts");
-        if (!interconn_ts && is_vxlan_mode(sbrec_chassis_table) &&
-            tunnel_key >= 1 << 12) {
+        if (!interconn_ts && vxlan_mode && tunnel_key >= 1 << 12) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
             VLOG_WARN_RL(&rl, "Tunnel key %"PRIu32" for datapath %s is "
                          "incompatible with VXLAN", tunnel_key,
@@ -996,7 +995,6 @@ build_datapaths(struct ovsdb_idl_txn *ovnsb_txn,
                 const struct nbrec_logical_switch_table *nbrec_ls_table,
                 const struct nbrec_logical_router_table *nbrec_lr_table,
                 const struct sbrec_datapath_binding_table *sbrec_dp_table,
-                const struct sbrec_chassis_table *sbrec_chassis_table,
                 struct ovn_datapaths *ls_datapaths,
                 struct ovn_datapaths *lr_datapaths,
                 struct ovs_list *lr_list)
@@ -1011,12 +1009,11 @@ build_datapaths(struct ovsdb_idl_txn *ovnsb_txn,
     struct hmap dp_tnlids = HMAP_INITIALIZER(&dp_tnlids);
     struct ovn_datapath *od;
     LIST_FOR_EACH (od, list, &both) {
-        ovn_datapath_assign_requested_tnl_id(sbrec_chassis_table, &dp_tnlids,
-                                             od);
+        ovn_datapath_assign_requested_tnl_id(&dp_tnlids, od);
     }
     LIST_FOR_EACH (od, list, &nb_only) {
-        ovn_datapath_assign_requested_tnl_id(sbrec_chassis_table, &dp_tnlids,
-                                             od); }
+        ovn_datapath_assign_requested_tnl_id(&dp_tnlids, od);
+    }
 
     /* Keep nonconflicting tunnel IDs that are already assigned. */
     LIST_FOR_EACH (od, list, &both) {
@@ -1028,12 +1025,10 @@ build_datapaths(struct ovsdb_idl_txn *ovnsb_txn,
     /* Assign new tunnel ids where needed. */
     uint32_t hint = 0;
     LIST_FOR_EACH_SAFE (od, list, &both) {
-        ovn_datapath_allocate_key(sbrec_chassis_table,
-                                  datapaths, &dp_tnlids, od, &hint);
+        ovn_datapath_allocate_key(datapaths, &dp_tnlids, od, &hint);
     }
     LIST_FOR_EACH_SAFE (od, list, &nb_only) {
-        ovn_datapath_allocate_key(sbrec_chassis_table,
-                                  datapaths, &dp_tnlids, od, &hint);
+        ovn_datapath_allocate_key(datapaths, &dp_tnlids, od, &hint);
     }
 
     /* Sync tunnel ids from nb to sb. */
@@ -3993,16 +3988,14 @@ ovn_port_add_tnlid(struct ovn_port *op, uint32_t tunnel_key)
  * that the I-P engine can fallback to recompute if needed; otherwise return
  * true (even if the key is not allocated). */
 static bool
-ovn_port_assign_requested_tnl_id(
-    const struct sbrec_chassis_table *sbrec_chassis_table, struct ovn_port *op)
+ovn_port_assign_requested_tnl_id(struct ovn_port *op)
 {
     const struct smap *options = (op->nbsp
                                   ? &op->nbsp->options
                                   : &op->nbrp->options);
     uint32_t tunnel_key = smap_get_int(options, "requested-tnl-key", 0);
     if (tunnel_key) {
-        if (is_vxlan_mode(sbrec_chassis_table) &&
-                tunnel_key >= OVN_VXLAN_MIN_MULTICAST) {
+        if (vxlan_mode && tunnel_key >= OVN_VXLAN_MIN_MULTICAST) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
             VLOG_WARN_RL(&rl, "Tunnel key %"PRIu32" for port %s "
                          "is incompatible with VXLAN",
@@ -4022,11 +4015,10 @@ ovn_port_assign_requested_tnl_id(
 }
 
 static bool
-ovn_port_allocate_key(const struct sbrec_chassis_table *sbrec_chassis_table,
-                      struct ovn_port *op)
+ovn_port_allocate_key(struct ovn_port *op)
 {
     if (!op->tunnel_key) {
-        uint8_t key_bits = is_vxlan_mode(sbrec_chassis_table)? 12 : 16;
+        uint8_t key_bits = vxlan_mode ? 12 : 16;
         op->tunnel_key = ovn_allocate_tnlid(&op->od->port_tnlids, "port",
                                             1, (1u << (key_bits - 1)) - 1,
                                             &op->od->port_key_hint);
@@ -4046,7 +4038,6 @@ ovn_port_allocate_key(const struct sbrec_chassis_table *sbrec_chassis_table,
 static void
 build_ports(struct ovsdb_idl_txn *ovnsb_txn,
     const struct sbrec_port_binding_table *sbrec_port_binding_table,
-    const struct sbrec_chassis_table *sbrec_chassis_table,
     const struct sbrec_mirror_table *sbrec_mirror_table,
     const struct sbrec_mac_binding_table *sbrec_mac_binding_table,
     const struct sbrec_ha_chassis_group_table *sbrec_ha_chassis_group_table,
@@ -4080,10 +4071,10 @@ build_ports(struct ovsdb_idl_txn *ovnsb_txn,
     /* Assign explicitly requested tunnel ids first. */
     struct ovn_port *op;
     LIST_FOR_EACH (op, list, &both) {
-        ovn_port_assign_requested_tnl_id(sbrec_chassis_table, op);
+        ovn_port_assign_requested_tnl_id(op);
     }
     LIST_FOR_EACH (op, list, &nb_only) {
-        ovn_port_assign_requested_tnl_id(sbrec_chassis_table, op);
+        ovn_port_assign_requested_tnl_id(op);
     }
 
     /* Keep nonconflicting tunnel IDs that are already assigned. */
@@ -4095,14 +4086,14 @@ build_ports(struct ovsdb_idl_txn *ovnsb_txn,
 
     /* Assign new tunnel ids where needed. */
     LIST_FOR_EACH_SAFE (op, list, &both) {
-        if (!ovn_port_allocate_key(sbrec_chassis_table, op)) {
+        if (!ovn_port_allocate_key(op)) {
             sbrec_port_binding_delete(op->sb);
             ovs_list_remove(&op->list);
             ovn_port_destroy(ports, op);
         }
     }
     LIST_FOR_EACH_SAFE (op, list, &nb_only) {
-        if (!ovn_port_allocate_key(sbrec_chassis_table, op)) {
+        if (!ovn_port_allocate_key(op)) {
             ovs_list_remove(&op->list);
             ovn_port_destroy(ports, op);
         }
@@ -4312,14 +4303,13 @@ ls_port_init(struct ovn_port *op, struct ovsdb_idl_txn *ovnsb_txn,
              struct hmap *ls_ports, struct ovn_datapath *od,
              const struct sbrec_port_binding *sb,
              const struct sbrec_mirror_table *sbrec_mirror_table,
-             const struct sbrec_chassis_table *sbrec_chassis_table,
              struct ovsdb_idl_index *sbrec_chassis_by_name,
              struct ovsdb_idl_index *sbrec_chassis_by_hostname)
 {
     op->od = od;
     parse_lsp_addrs(op);
     /* Assign explicitly requested tunnel ids first. */
-    if (!ovn_port_assign_requested_tnl_id(sbrec_chassis_table, op)) {
+    if (!ovn_port_assign_requested_tnl_id(op)) {
         return false;
     }
     if (sb) {
@@ -4336,7 +4326,7 @@ ls_port_init(struct ovn_port *op, struct ovsdb_idl_txn *ovnsb_txn,
         sbrec_port_binding_set_logical_port(op->sb, op->key);
     }
     /* Assign new tunnel ids where needed. */
-    if (!ovn_port_allocate_key(sbrec_chassis_table, op)) {
+    if (!ovn_port_allocate_key(op)) {
         if (op->sb) {
             sbrec_port_binding_delete(op->sb);
         }
@@ -4355,7 +4345,6 @@ ls_port_create(struct ovsdb_idl_txn *ovnsb_txn, struct hmap *ls_ports,
                const char *key, const struct nbrec_logical_switch_port *nbsp,
                struct ovn_datapath *od, const struct sbrec_port_binding *sb,
                const struct sbrec_mirror_table *sbrec_mirror_table,
-               const struct sbrec_chassis_table *sbrec_chassis_table,
                struct ovsdb_idl_index *sbrec_chassis_by_name,
                struct ovsdb_idl_index *sbrec_chassis_by_hostname)
 {
@@ -4363,8 +4352,8 @@ ls_port_create(struct ovsdb_idl_txn *ovnsb_txn, struct hmap *ls_ports,
                                           NULL);
     hmap_insert(&od->ports, &op->dp_node, hmap_node_hash(&op->key_node));
     if (!ls_port_init(op, ovnsb_txn, ls_ports, od, sb,
-                      sbrec_mirror_table, sbrec_chassis_table,
-                      sbrec_chassis_by_name, sbrec_chassis_by_hostname)) {
+                      sbrec_mirror_table, sbrec_chassis_by_name,
+                      sbrec_chassis_by_hostname)) {
         ovn_port_destroy(ls_ports, op);
         return NULL;
     }
@@ -4380,7 +4369,6 @@ ls_port_reinit(struct ovn_port *op, struct ovsdb_idl_txn *ovnsb_txn,
                 struct ovn_datapath *od,
                 const struct sbrec_port_binding *sb,
                 const struct sbrec_mirror_table *sbrec_mirror_table,
-                const struct sbrec_chassis_table *sbrec_chassis_table,
                 struct ovsdb_idl_index *sbrec_chassis_by_name,
                 struct ovsdb_idl_index *sbrec_chassis_by_hostname)
 {
@@ -4389,8 +4377,8 @@ ls_port_reinit(struct ovn_port *op, struct ovsdb_idl_txn *ovnsb_txn,
     ovn_port_set_nb(op, nbsp, nbrp);
     op->l3dgw_port = op->cr_port = NULL;
     return ls_port_init(op, ovnsb_txn, ls_ports, od, sb,
-                        sbrec_mirror_table, sbrec_chassis_table,
-                        sbrec_chassis_by_name, sbrec_chassis_by_hostname);
+                        sbrec_mirror_table, sbrec_chassis_by_name,
+                        sbrec_chassis_by_hostname);
 }
 
 /* Returns true if the logical switch has changes which can be
@@ -4534,7 +4522,6 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
             op = ls_port_create(ovnsb_idl_txn, &nd->ls_ports,
                                 new_nbsp->name, new_nbsp, od, NULL,
                                 ni->sbrec_mirror_table,
-                                ni->sbrec_chassis_table,
                                 ni->sbrec_chassis_by_name,
                                 ni->sbrec_chassis_by_hostname);
             if (!op) {
@@ -4568,7 +4555,6 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
             if (!ls_port_reinit(op, ovnsb_idl_txn, &nd->ls_ports,
                                 new_nbsp, NULL,
                                 od, sb, ni->sbrec_mirror_table,
-                                ni->sbrec_chassis_table,
                                 ni->sbrec_chassis_by_name,
                                 ni->sbrec_chassis_by_hostname)) {
                 goto fail;
@@ -17627,11 +17613,12 @@ ovnnb_db_run(struct northd_input *input_data,
     use_common_zone = smap_get_bool(input_data->nb_options, "use_common_zone",
                                     false);
 
+    vxlan_mode = is_vxlan_mode(input_data->sbrec_chassis_table);
+
     build_datapaths(ovnsb_txn,
                     input_data->nbrec_logical_switch_table,
                     input_data->nbrec_logical_router_table,
                     input_data->sbrec_datapath_binding_table,
-                    input_data->sbrec_chassis_table,
                     &data->ls_datapaths,
                     &data->lr_datapaths, &data->lr_list);
     build_lb_datapaths(input_data->lbs, input_data->lbgrps,
@@ -17639,7 +17626,6 @@ ovnnb_db_run(struct northd_input *input_data,
                        &data->lb_datapaths_map, &data->lb_group_datapaths_map);
     build_ports(ovnsb_txn,
                 input_data->sbrec_port_binding_table,
-                input_data->sbrec_chassis_table,
                 input_data->sbrec_mirror_table,
                 input_data->sbrec_mac_binding_table,
                 input_data->sbrec_ha_chassis_group_table,
