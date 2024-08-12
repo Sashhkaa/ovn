@@ -3,6 +3,10 @@ Post v22.09.1
   - Add ovn-ctl commands for (re)starting/stopping OVSDB relay for OVN SB DB.
   - Add new ovn-db@.service systemd unit to run ovsdb-servers in separate
     systemd units.
+  - Added two new experimental logical router port options,
+    "routing-protocol-redirect" and "routing-protocols", that allow
+    redirection of routing protocol traffic received by a router port
+    to a different logical switch port.
 
 OVN v22.09.1 - 20 Dec 2022
 --------------------------
