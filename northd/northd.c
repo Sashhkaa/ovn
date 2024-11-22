@@ -2153,6 +2153,32 @@ create_cr_port(struct ovn_port *op, struct hmap *ports,
     return crp;
 }
 
+static struct ovn_port *
+create_mirror_port(struct ovn_port *op, struct hmap *ports,
+                   struct ovs_list *both_dbs, struct ovs_list *nb_only,
+                   const char *mirror_port_name)
+{
+    char *mp_name = ovn_mirror_port(mirror_port_name);
+
+    struct ovn_port *mp = ovn_port_find(ports, mp_name);
+     if (mp && mp->sb) {
+        ovn_port_set_nb(mp, op->nbsp, NULL);
+        ovs_list_remove(&mp->list);
+        ovs_list_push_back(both_dbs, &mp->list);
+    } else {
+        mp = ovn_port_create(ports, mp_name, op->nbsp, NULL, NULL);
+        ovs_list_push_back(nb_only, &mp->list);
+    }
+
+    mp->mr_parent_port = xstrdup(mirror_port_name);
+    mp->primary_port = op;
+    op->mr_port = mp;
+    mp->od = op->od;
+    free(mp_name);
+
+    return mp;
+}
+
 /* Returns true if chassis resident port needs to be created for
  * op's peer logical switch.  False otherwise.
  *
@@ -2281,6 +2307,11 @@ join_logical_ports(const struct sbrec_port_binding_table *sbrec_pb_table,
             hmap_insert(&od->ports, &op->dp_node,
                         hmap_node_hash(&op->key_node));
             tag_alloc_add_existing_tags(tag_alloc_table, nbsp);
+
+            const char *name = smap_get(&nbsp->options, "mirror-port");
+            if (name) {
+                create_mirror_port(op, ports, both, nb_only, name);
+            }
         }
     }
 
@@ -3148,7 +3179,7 @@ ovn_port_update_sbrec(struct ovsdb_idl_txn *ovnsb_txn,
         ds_destroy(&s);
 
         sbrec_port_binding_set_external_ids(op->sb, &op->nbrp->external_ids);
-    } else {
+    } else if (!op->mr_parent_port) {
         if (!lsp_is_router(op->nbsp)) {
             uint32_t queue_id = smap_get_int(
                     &op->sb->options, "qdisc_queue_id", 0);
@@ -3330,6 +3361,10 @@ ovn_port_update_sbrec(struct ovsdb_idl_txn *ovnsb_txn,
             sbrec_port_binding_update_mirror_rules(sbrec_mirror_table, op);
         }
 
+    } else {
+        /* Type: mirror port*/
+        sbrec_port_binding_set_type(op->sb, "mirror");
+        sbrec_port_binding_set_mirror_port(op->sb, op->mr_parent_port);
     }
     if (op->tunnel_key != op->sb->tunnel_key) {
         sbrec_port_binding_set_tunnel_key(op->sb, op->tunnel_key);
@@ -4596,6 +4631,18 @@ check_lsp_changes_other_than_up(const struct nbrec_logical_switch_port *nbsp)
     return false;
 }
 
+static bool
+lsp_handle_lsp_option_changes(const struct nbrec_logical_switch *changes_ls)
+{
+    for (size_t i = 0; i < changes_ls->n_ports; i++) {
+        if (nbrec_logical_switch_port_is_updated(changes_ls->ports[i],
+            NBREC_LOGICAL_SWITCH_PORT_COL_OPTIONS)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* Handles logical switch port changes of a changed logical switch.
  * Returns false, if any logical port can't be incrementally handled.
  */
@@ -4793,6 +4840,10 @@ northd_handle_ls_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
 
         /* Check if the ls changes can be handled or not. */
         if (!ls_changes_can_be_handled(changed_ls)) {
+            goto fail;
+        }
+
+        if (!lsp_handle_lsp_option_changes(changed_ls)) {
             goto fail;
         }
 
@@ -5819,6 +5870,104 @@ build_dhcpv6_action(struct ovn_port *op, struct in6_addr *offer_ip,
                   server_mac, server_ip);
 
     return true;
+}
+
+static void
+build_mirror_serving_lflow(struct ovn_datapath *od,
+                         struct lflow_table *lflows)
+{
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_MIRROR, 0,
+                  "1", "next;", NULL);
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_MIRROR, 0,
+                  "1", "next;", NULL);
+}
+
+static void
+build_mirror_ingress_lflow(struct ovn_port *op,
+                           struct lflow_table *lflows,
+                           struct nbrec_mirror_rule *rule)
+{
+    struct ds match = DS_EMPTY_INITIALIZER;
+    struct ds action = DS_EMPTY_INITIALIZER;
+
+    if (!strcmp(rule->action, "allow")) {
+        ds_put_format(&action, "clone {outport = %s; output;}; next;",
+                      op->mr_port->json_key);
+    } else {
+        ds_put_cstr(&action, "next;");
+    }
+
+    ds_put_format(&match, "inport == %s && %s", op->json_key, rule->match);
+
+    ovn_lflow_add(lflows, op->od, S_SWITCH_IN_MIRROR, rule->priority,
+                  ds_cstr(&match), ds_cstr(&action), op->lflow_ref);
+
+    ds_clear(&match);
+    ds_clear(&action);
+}
+
+static void
+build_mirror_egress_lflow(struct ovn_port *op,
+                          struct lflow_table *lflows,
+                          struct nbrec_mirror_rule *rule)
+{
+    struct ds match = DS_EMPTY_INITIALIZER;
+    struct ds action = DS_EMPTY_INITIALIZER;
+
+    if (!strcmp(rule->action, "allow")) {
+        ds_put_format(&action, "clone {outport = %s; next(pipeline=ingress,table=%d);}; next;",
+                      op->mr_port->json_key, ovn_stage_get_table(S_SWITCH_IN_L2_UNKNOWN));
+    } else {
+        ds_put_cstr(&action, "next;");
+    }
+
+    ds_put_format(&match, "outport == %s && %s", op->json_key, rule->match);
+
+    ovn_lflow_add(lflows, op->od, S_SWITCH_OUT_MIRROR, rule->priority,
+                  ds_cstr(&match), ds_cstr(&action), op->lflow_ref);
+
+
+    ds_clear(&match);
+    ds_clear(&action);
+}
+
+enum mirror_stage {
+    IN_MIRROR,
+    OUT_MIRROR,
+    BOTH_MIRROR,
+};
+
+/* Logical switch datapath: Mirror policy match.
+ * Table 2 in ingress, table 0 in egress. */
+static void
+build_mirror_lflows(struct ovn_port *op,
+                   struct lflow_table *lflows)
+{
+    enum mirror_stage stage;
+
+    if (!op->mr_port) {
+        return;
+    }
+
+    for (size_t i = 0; i < op->nbsp->n_mirror_rules; i++) {
+        for (size_t j = 0; j < op->nbsp->mirror_rules[i]->n_mirror_rule; j++) {
+            struct nbrec_mirror_rule *mirror_rule =
+                                      op->nbsp->mirror_rules[i]->mirror_rule[j];
+
+            stage = !strcmp(op->nbsp->mirror_rules[i]->filter, "from-lport") ? IN_MIRROR :
+                    !strcmp(op->nbsp->mirror_rules[i]->filter, "to-lport") ? OUT_MIRROR :
+                    BOTH_MIRROR;
+
+            if (stage == IN_MIRROR) {
+                build_mirror_ingress_lflow(op, lflows, mirror_rule);
+            } else if (stage == OUT_MIRROR) {
+                build_mirror_egress_lflow(op, lflows, mirror_rule);
+            } else {
+                build_mirror_ingress_lflow(op, lflows, mirror_rule);
+                build_mirror_egress_lflow(op, lflows, mirror_rule);
+            }
+        }
+    }
 }
 
 /* Adds the logical flows in the (in/out) check port sec stage only if
@@ -17000,6 +17149,7 @@ build_lswitch_and_lrouter_iterate_by_ls(struct ovn_datapath *od,
                                         struct lswitch_flow_build_info *lsi)
 {
     ovs_assert(od->nbs);
+    build_mirror_serving_lflow(od, lsi->lflows);
     build_lswitch_lflows_pre_acl_and_acl(od, lsi->lflows,
                                          lsi->meter_groups, NULL);
 
@@ -17075,6 +17225,7 @@ build_lswitch_and_lrouter_iterate_by_lsp(struct ovn_port *op,
     ovs_assert(op->nbsp);
 
     /* Build Logical Switch Flows. */
+    build_mirror_lflows(op, lflows);
     build_lswitch_port_sec_op(op, lflows, actions, match);
     build_lswitch_learn_fdb_op(op, lflows, actions, match);
     build_lswitch_arp_nd_responder_skip_local(op, lflows, match);
@@ -18065,7 +18216,8 @@ mirror_needs_update(const struct nbrec_mirror *nb_mirror,
 
     if (nb_mirror->index != sb_mirror->index) {
         return true;
-    } else if (strcmp(nb_mirror->sink, sb_mirror->sink)) {
+    } else if (nb_mirror->sink && sb_mirror->sink &&
+        strcmp(nb_mirror->sink, sb_mirror->sink)) {
         return true;
     } else if (strcmp(nb_mirror->type, sb_mirror->type)) {
         return true;
@@ -18096,8 +18248,10 @@ sync_mirrors_iterate_nb_mirror(struct ovsdb_idl_txn *ovnsb_txn,
     if (new_sb_mirror || mirror_needs_update(nb_mirror, sb_mirror)) {
         sbrec_mirror_set_filter(sb_mirror, nb_mirror->filter);
         sbrec_mirror_set_index(sb_mirror, nb_mirror->index);
-        sbrec_mirror_set_sink(sb_mirror, nb_mirror->sink);
         sbrec_mirror_set_type(sb_mirror, nb_mirror->type);
+        if (strcmp(nb_mirror->type, "vremote")) {
+            sbrec_mirror_set_sink(sb_mirror, nb_mirror->sink);
+        }
     }
 }
 
@@ -18127,6 +18281,7 @@ sync_mirrors(struct ovsdb_idl_txn *ovnsb_txn,
     }
     shash_destroy(&sb_mirrors);
 }
+
 
 /*
  * struct 'dns_info' is used to sync the DNS records between OVN Northbound db
@@ -18886,7 +19041,7 @@ ovnnb_db_run(struct northd_input *input_data,
     stopwatch_start(CLEAR_LFLOWS_CTX_STOPWATCH_NAME, time_msec());
 
     sync_mirrors(ovnsb_txn, input_data->nbrec_mirror_table,
-                 input_data->sbrec_mirror_table);
+                input_data->sbrec_mirror_table);
     sync_dns_entries(ovnsb_txn, input_data->sbrec_dns_table,
                      &data->ls_datapaths.datapaths);
     sync_template_vars(ovnsb_txn, input_data->nbrec_chassis_template_var_table,

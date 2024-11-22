@@ -361,7 +361,7 @@ parse_NEXT(struct action_context *ctx)
             return;
         }
     }
-
+    
     if (table >= ctx->pp->n_tables) {
         lexer_error(ctx->lexer,
                     "\"next\" action cannot advance beyond table %d.",
