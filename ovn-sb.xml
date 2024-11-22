@@ -785,6 +785,14 @@
         </dd>
       </dl>
 
+      <dl>
+        <dt><code>mirror_applied(<var>lport</var>)</code></dt>
+        <dd>
+          Evaluates to true if there any mirror rules on <var>lport</var>
+          (a quoted string) and to false elsewhere.
+        </dd>
+      </dl>
+
       <p><em>Symbols</em></p>
 
       <p>
@@ -3036,7 +3044,7 @@ tcp.flags = RST;
     <column name="type">
       <p>
         The value of this field specifies the mirror type - <code>gre</code>,
-        <code>erspan</code> or <code>local</code>.
+        <code>erspan</code>, <code>local</code> or <code>vremote</code>.
       </p>
     </column>
 
@@ -3301,6 +3309,9 @@ tcp.flags = RST;
         reference to a <ref table="Encap"/> record.
 
         See also <ref column="additional_chassis"/>.
+      </column>
+
+      <column name="mirror_port">
       </column>
 
       <column name="chassis">

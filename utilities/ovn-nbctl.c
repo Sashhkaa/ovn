@@ -292,7 +292,8 @@ QoS commands:\n\
 Mirror commands:\n\
   mirror-add NAME TYPE [INDEX] FILTER {IP | MIRROR-ID} \n\
                             add a mirror with given name\n\
-                            specify TYPE 'gre', 'erspan', or 'local'\n\
+                            specify TYPE 'gre', 'erspan', 'local'\n\
+                                or 'vremote'.\n\
                             specify the tunnel INDEX value\n\
                                 (indicates key if GRE\n\
                                  erpsan_idx if ERSPAN)\n\
@@ -301,8 +302,13 @@ Mirror commands:\n\
                             specify Sink / Destination i.e. Remote IP, or a\n\
                                 local interface with external-ids:mirror-id\n\
                                 matching MIRROR-ID\n\
+                                In case of vremote type there is no need for sink.\n\
   mirror-del [NAME]         remove mirrors\n\
   mirror-list               print mirrors\n\
+  mirror-rule-add MIRROR-NAME PRIORITY MATCH ACTION PORT \n\
+                            add a mirror filter to given mirror\n\
+  mirror-rule-del [MIRROR-NAME] [PRIORITY] [MATCH] remove mirrors\n\
+  mirror-rule-list [MIROR-NAME] print mirror rule\n\
 \n\
 Meter commands:\n\
   [--fair]\n\
@@ -1808,11 +1814,11 @@ nbctl_lsp_attach_mirror(struct ctl_context *ctx)
         return;
     }
 
+    bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
     /* Check if same mirror rule already exists for the lsp */
     for (size_t i = 0; i < lsp->n_mirror_rules; i++) {
         if (uuid_equals(&lsp->mirror_rules[i]->header_.uuid,
                         &mirror->header_.uuid)) {
-            bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
             if (!may_exist) {
                 ctl_error(ctx, "mirror %s is already attached to the "
                           "logical port %s.",
@@ -7709,10 +7715,12 @@ parse_mirror_type(const char *arg, const char **type_p)
         *type_p = "erspan";
     } else if (arg[0] == 'l') {
         *type_p = "local";
+    } else if (arg[0] == 'v') {
+        *type_p = "vremote";
     } else {
         *type_p = NULL;
         return xasprintf("%s: type must be \"gre\", "
-                         "\"erspan\", or \"local\"", arg);
+                         "\"erspan\", or \"local\" or \"vremote\"", arg);
     }
     return NULL;
 }
@@ -7725,6 +7733,7 @@ nbctl_pre_mirror_add(struct ctl_context *ctx)
     ovsdb_idl_add_column(ctx->idl, &nbrec_mirror_col_index);
     ovsdb_idl_add_column(ctx->idl, &nbrec_mirror_col_sink);
     ovsdb_idl_add_column(ctx->idl, &nbrec_mirror_col_type);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_mirror_col_mirror_rule);
 }
 
 static void
@@ -7749,14 +7758,17 @@ nbctl_mirror_add(struct ctl_context *ctx)
         }
     }
 
-    /* Type - gre/erspan/local */
+    /* Type - gre/erspan/local/vremote */
     error = parse_mirror_type(ctx->argv[pos++], &type);
     if (error) {
         ctx->error = error;
         return;
     }
 
-    if (strcmp(type, "local")) {
+    int is_local = !strcmp(type, "local");
+    int is_vremote = !strcmp(type, "vremote");
+
+    if (!(is_local || is_vremote)) {
         /* tunnel index / GRE key / ERSPAN idx */
         if (!str_to_long(ctx->argv[pos++], 10, (long int *) &index)) {
             ctl_error(ctx, "Invalid Index");
@@ -7771,11 +7783,19 @@ nbctl_mirror_add(struct ctl_context *ctx)
         return;
     }
 
+    if (is_vremote) {
+        goto addition;
+    }
+
     /* Destination / Sink details */
     sink = ctx->argv[pos++];
+    if (!sink) {
+        ctl_error(ctx, "cannot create mirror type gre/erspan/local without sink. ");
+        return;   
+    }
 
     /* check if it is a valid ip unless it is type 'local' */
-    if (strcmp(type, "local")) {
+    if (!is_local) {
         char *new_sink_ip = normalize_ipv4_addr_str(sink);
         if (!new_sink_ip) {
             new_sink_ip = normalize_ipv6_addr_str(sink);
@@ -7788,6 +7808,7 @@ nbctl_mirror_add(struct ctl_context *ctx)
         free(new_sink_ip);
     }
 
+addition:
     /* Create the mirror. */
     struct nbrec_mirror *mirror = nbrec_mirror_insert(ctx->txn);
     nbrec_mirror_set_name(mirror, name);
@@ -7795,7 +7816,7 @@ nbctl_mirror_add(struct ctl_context *ctx)
     nbrec_mirror_set_filter(mirror, filter);
     nbrec_mirror_set_type(mirror, type);
     nbrec_mirror_set_sink(mirror, sink);
-
+    nbrec_mirror_set_mirror_rule(mirror, NULL, 0);
 }
 
 static void
@@ -7824,6 +7845,141 @@ nbctl_mirror_del(struct ctl_context *ctx)
         }
         nbrec_mirror_delete(mirror);
         return;
+    }
+}
+
+static int
+rule_cmp(const void *mirror1_, const void *mirror2_)
+{
+    const struct nbrec_mirror_rule *const *mirror_1 = mirror1_;
+    const struct nbrec_mirror_rule *const *mirror_2 = mirror2_;
+
+    const struct nbrec_mirror_rule *mirror1 = *mirror_1;
+    const struct nbrec_mirror_rule *mirror2 = *mirror_2;
+
+    if (mirror1->priority != mirror2->priority) {
+        return mirror1->priority - mirror2->priority;
+    }
+
+    int result = strcmp(mirror1->match, mirror2->match);
+    if (result) {
+        return result;
+    }
+
+    return strcmp(mirror1->action, mirror2->action);
+}
+
+static void
+nbctl_pre_mirror_rule_add(struct ctl_context *ctx)
+{
+    ovsdb_idl_add_column(ctx->idl, &nbrec_mirror_rule_col_match);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_mirror_rule_col_action);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_mirror_rule_col_priority);
+    /* find mirror by name. */
+    ovsdb_idl_add_column(ctx->idl, &nbrec_mirror_col_name);
+    /* to insert in table. */
+    ovsdb_idl_add_column(ctx->idl, &nbrec_mirror_col_mirror_rule);
+}
+
+static void
+nbctl_mirror_rule_add(struct ctl_context *ctx)
+{
+    const struct nbrec_mirror_rule *mirror_rule = NULL;
+    const struct nbrec_mirror *mirror = NULL;
+    int64_t priority = 0;
+    char *error = NULL;
+
+    error = mirror_by_name_or_uuid(ctx, ctx->argv[1], true, &mirror);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
+
+    /*Parse priority. */
+    error = parse_priority(ctx->argv[2], &priority);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
+    /* Parse action. */
+    const char *action = ctx->argv[4];
+    /*Validate action*/
+    if (strcmp(action, "allow") && strcmp(action, "drop")) {
+        ctl_error(ctx, "%s: action must be one of \"allow\", \"drop\"",
+                action);
+    }
+
+    mirror_rule = nbrec_mirror_rule_insert(ctx->txn);
+    nbrec_mirror_rule_set_match(mirror_rule, ctx->argv[3]);
+    nbrec_mirror_rule_set_action(mirror_rule, action);
+    nbrec_mirror_rule_set_priority(mirror_rule, priority);
+   
+
+    bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
+    /* Check if same mirror rule exists for this mirror. */
+    for (size_t i = 0; i < mirror->n_mirror_rule; i++) {
+        if (!rule_cmp(&mirror_rule, &mirror->mirror_rule[i])) {
+            if (!may_exist) {
+                ctl_error(ctx, "Same mirror-rule already exists on the mirror %s.",
+                          ctx->argv[1]);
+            } else {
+                nbrec_mirror_rule_delete(mirror_rule);
+            }
+            return;
+        }
+    }
+
+    /* Insert mirror rule to mirror. */
+    nbrec_mirror_update_mirror_rule_addvalue(mirror, mirror_rule);
+}
+
+static void
+nbctl_pre_mirror_rule_del(struct ctl_context *ctx)
+{
+    ovsdb_idl_add_column(ctx->idl, &nbrec_mirror_col_name);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_mirror_rule_col_action);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_mirror_rule_col_priority);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_mirror_rule_col_match);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_mirror_col_mirror_rule);
+}
+
+static void
+nbctl_mirror_rule_del(struct ctl_context *ctx)
+{
+    const struct nbrec_mirror *mirror = NULL;
+    int64_t priority = 0;
+    char *error = NULL;
+
+    error = mirror_by_name_or_uuid(ctx, ctx->argv[1], true, &mirror);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
+
+    if (ctx->argc == 2) {
+        for (size_t i = 0; i < mirror->n_mirror_rule; i++) {
+            nbrec_mirror_update_mirror_rule_delvalue(mirror, mirror->mirror_rule[i]);
+            nbrec_mirror_rule_delete(mirror->mirror_rule[i]);
+        }
+    } else {
+        error = parse_priority(ctx->argv[2], &priority);
+        if (error) {
+            ctx->error = error;
+            return;
+        }
+
+        if (ctx->argc == 3) {
+            ctl_error(ctx, "cannot specify priority without match");
+            return;
+        }
+
+        for (size_t i = 0; i < mirror->n_mirror_rule; i++) {
+            if (priority == mirror->mirror_rule[i]->priority &&
+                !strcmp(ctx->argv[3], mirror->mirror_rule[i]->match)) {
+                    nbrec_mirror_update_mirror_rule_delvalue(mirror, mirror->mirror_rule[i]);
+                    nbrec_mirror_rule_delete(mirror->mirror_rule[i]);
+            }
+        }
     }
 }
 
@@ -7862,12 +8018,17 @@ nbctl_mirror_list(struct ctl_context *ctx)
 
     for (size_t i = 0; i < n_mirrors; i++) {
         mirror = mirrors[i];
+        bool is_vremote = !strcmp(mirror->type, "vremote");
+        bool is_local = !strcmp(mirror->type, "local");
+
         ds_put_format(&ctx->output, "%s:\n", mirror->name);
         /* print all the values */
         ds_put_format(&ctx->output, "  Type     :  %s\n", mirror->type);
-        ds_put_format(&ctx->output, "  Sink     :  %s\n", mirror->sink);
+        if (!is_vremote) {
+            ds_put_format(&ctx->output, "  Sink     :  %s\n", mirror->sink);
+        }
         ds_put_format(&ctx->output, "  Filter   :  %s\n", mirror->filter);
-        if (strcmp(mirror->type, "local")) {
+        if (!(is_local || is_vremote)) {
             ds_put_format(&ctx->output, "  Index/Key:  %"PRId64"\n",
                           mirror->index);
         }
@@ -7875,6 +8036,48 @@ nbctl_mirror_list(struct ctl_context *ctx)
     }
 
     free(mirrors);
+}
+
+static void
+nbctl_pre_mirror_rule_list(struct ctl_context *ctx)
+{
+    ovsdb_idl_add_column(ctx->idl, &nbrec_mirror_rule_col_action);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_mirror_rule_col_match);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_mirror_rule_col_priority);
+}
+
+static void
+nbctl_mirror_rule_list(struct ctl_context *ctx)
+{
+    const struct nbrec_mirror_rule **mirror_rules = NULL;
+    const struct nbrec_mirror_rule *mirror_rule;
+    size_t n_capacity = 0;
+    size_t n_mirror_rules= 0;
+
+    NBREC_MIRROR_RULE_FOR_EACH (mirror_rule, ctx->idl) {
+        if (n_mirror_rules == n_capacity) {
+            mirror_rules = x2nrealloc(mirror_rules, &n_capacity, sizeof *mirror_rules);
+        }
+
+        mirror_rules[n_mirror_rules] = mirror_rule;
+        n_mirror_rules++;
+    }
+
+    if (n_mirror_rules) {
+        qsort(mirror_rules, n_mirror_rules, sizeof *mirror_rules, rule_cmp);
+    }
+
+    for (size_t i = 0; i < n_mirror_rules; i++) {
+        mirror_rule = mirror_rules[i];
+
+        /* print all the values */
+        ds_put_format(&ctx->output, "   Action    :  %s\n", mirror_rule->action);
+        ds_put_format(&ctx->output, "   Macth     :  %s\n", mirror_rule->match);
+        ds_put_format(&ctx->output, "   Priority  :  %"PRId64"\n", mirror_rule->priority);
+        ds_put_cstr(&ctx->output, "\n");
+    }
+
+    free(mirror_rules);
 }
 
 static const struct ctl_table_class tables[NBREC_N_TABLES] = {
@@ -7974,13 +8177,21 @@ static const struct ctl_command_syntax nbctl_commands[] = {
       NULL, "", RO },
 
     /* mirror commands. */
-    { "mirror-add", 4, 5,
-      "NAME TYPE INDEX FILTER IP",
+    { "mirror-add", 3, 5,
+      "NAME TYPE INDEX FILTER [IP]",
       nbctl_pre_mirror_add, nbctl_mirror_add, NULL, "--may-exist", RW },
     { "mirror-del", 0, 1, "[NAME]",
       nbctl_pre_mirror_del, nbctl_mirror_del, NULL, "", RW },
     { "mirror-list", 0, 0, "", nbctl_pre_mirror_list, nbctl_mirror_list,
       NULL, "", RO },
+
+    /* mirror rule commands. */
+    { "mirror-rule-add", 4, 4, "MIRROR-NAME PRIORITY MATCH ACTION",
+      nbctl_pre_mirror_rule_add, nbctl_mirror_rule_add, NULL, "", RW},
+    { "mirror-rule-del", 1, 3, "MIRROR-NAME [PRIORITY] [MATCH]", nbctl_pre_mirror_rule_del,
+      nbctl_mirror_rule_del, NULL, "", RW },
+    { "mirror-rule-list", 0, 0, "MIRROR-NAME", nbctl_pre_mirror_rule_list,
+      nbctl_mirror_rule_list, NULL, "", RW },
 
     /* meter commands. */
     { "meter-add", 4, 5, "NAME ACTION RATE UNIT [BURST]", nbctl_pre_meter_add,

@@ -1,7 +1,7 @@
 {
     "name": "OVN_Northbound",
-    "version": "7.6.0",
-    "cksum": "2171465655 38284",
+    "version": "7.6.1",
+    "cksum": "1593674432 39131",
     "tables": {
         "NB_Global": {
             "columns": {
@@ -359,16 +359,33 @@
                                             "enum": ["set", ["from-lport",
                                                              "to-lport",
                                                              "both"]]}}},
-                "sink":{"type": "string"},
+                "sink": {"type": {"key": "string", "min": 0, "max": 1}},
                 "type": {"type": {"key": {"type": "string",
                                           "enum": ["set", ["gre",
                                                            "erspan",
-                                                           "local"]]}}},
+                                                           "local",
+                                                           "vremote"]]}}},
                 "index": {"type": "integer"},
+                "mirror_rule": {"type": {"key": {"type": "uuid",
+                            "refTable": "Mirror_rule",
+                            "refType": "strong"},
+                            "min": 0,
+                            "max": "unlimited"}},
                 "external_ids": {
                     "type": {"key": "string", "value": "string",
                              "min": 0, "max": "unlimited"}}},
             "indexes": [["name"]],
+            "isRoot": true},
+        "Mirror_rule": {
+            "columns": {
+                "name": {"type": "string"},
+                "match": {"type": "string"},
+                "action": {"type": {
+                    "key": {"type": "string",
+                            "enum": ["set", ["allow", "drop"]]}}},
+                "priority": {"type": {"key": {"type": "integer",
+                                "minInteger": 0,
+                                "maxInteger": 32767}}}},
             "isRoot": true},
         "Meter": {
             "columns": {

@@ -3062,7 +3062,7 @@ or
     <column name="type">
       <p>
         The value of this field specifies the mirror type - <code>gre</code>,
-        <code>erspan</code> or <code>local</code>.
+        <code>erspan</code>, <code>local</code> or <code>vremote</code>.
       </p>
     </column>
 
@@ -3076,8 +3076,59 @@ or
       </p>
     </column>
 
+    <column name="mirror_rule">
+      <p>
+        The value of this field represents the mirror rule for filtering 
+        mirror traffic. 
+      </p>
+    </column>
+
     <column name="external_ids">
       See <em>External IDs</em> at the beginning of this document.
+    </column>
+  </table>
+
+  <table name="Mirror_rule" title="Mirror rule entry">
+    <p>
+      Each row in this table represents a mirror rule that can be used
+      for filtering traffic for mirroring traffic.
+    </p>
+
+    <column name="name">
+      <p>
+      Represents the name of the mirror to which this rule will be bounded.
+      </p>
+    </column>
+
+    <column name="match">
+      <p>
+      The packets that the mirror rule should match,
+      in the same expression language used for the
+      <ref column="match" table="Logical_Flow" db="OVN_Southbound"/>
+      column in the OVN Southbound database's
+      <ref table="Logical_Flow" db="OVN_Southbound"/> table.
+      </p>
+    </column>
+
+    <column name="action">
+      <p>The action to take when the Mirror rule matches:</p>
+      <ul>
+        <li>
+         <code>allow</code>: Mirror the packet.
+        </li>
+
+        <li>
+        <code>drop</code>: Do nothing with clone packet.
+        </li>
+      </ul>
+    </column>
+
+    <column name="priority">
+      <p>
+        The mirror filter priority. Rules with numerically higher priority
+        take precedence over those with lower. A rule is uniquely identified
+        by the priority and match string.
+      </p>
     </column>
   </table>
 
