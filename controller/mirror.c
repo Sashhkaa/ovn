@@ -122,6 +122,10 @@ mirror_run(struct ovsdb_idl_txn *ovs_idl_txn,
     const struct sbrec_mirror *sb_mirror;
     SBREC_MIRROR_TABLE_FOR_EACH (sb_mirror, sb_mirror_table) {
         struct ovn_mirror *m = ovn_mirror_create(sb_mirror->name);
+         /* We don't need to add mirror to ovs if it is vremote mirror. */
+        if (!strcmp(sb_mirror->type, "vremote")) {
+            continue;
+        }
         m->sb_mirror = sb_mirror;
         ovn_mirror_add(&ovn_mirrors, m);
     }
@@ -174,6 +178,7 @@ mirror_run(struct ovsdb_idl_txn *ovs_idl_txn,
      * create/update or delete the ovsrec mirror(s). */
      SHASH_FOR_EACH (node, &ovn_mirrors) {
         struct ovn_mirror *m = node->data;
+        /* We don't need to add mirror to ovs if it is vremote mirror. */
         sync_ovn_mirror(m, ovs_idl_txn, br_int, &ovs_local_mirror_ports);
      }
 

@@ -1650,6 +1650,7 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
     int tag = 0;
     bool nested_container = false;
     const struct sbrec_port_binding *parent_port = NULL;
+    const struct sbrec_port_binding *mirror_port = NULL;
     ofp_port_t ofport;
     if (binding->parent_port && *binding->parent_port) {
         if (!binding->tag) {
@@ -1669,6 +1670,19 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
                  * parent port, it is requested on different chassis ignore
                  * this container port.
                  */
+                return;
+            }
+        }
+    } else if (binding->mirror_port && *binding->mirror_port) {
+        ofport = local_binding_get_lport_ofport(local_bindings,
+                                                binding->mirror_port);
+        if (ofport) {
+            nested_container = true;
+            mirror_port = lport_lookup_by_name(
+                sbrec_port_binding_by_name, binding->mirror_port);
+
+            if (mirror_port
+                && !lport_can_bind_on_this_chassis(chassis, mirror_port)) {
                 return;
             }
         }
@@ -1730,6 +1744,8 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
         /* Pass the parent port binding if the port is a nested
          * container. */
         put_local_common_flows(dp_key, binding, parent_port, &zone_ids,
+                               debug, ofpacts_p, flow_table);
+        put_local_common_flows(dp_key, binding, mirror_port, &zone_ids,
                                debug, ofpacts_p, flow_table);
 
         /* Table 0, Priority 150 and 100.
