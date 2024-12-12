@@ -7,6 +7,8 @@ Post v22.09.1
     "routing-protocol-redirect" and "routing-protocols", that allow
     redirection of routing protocol traffic received by a router port
     to a different logical switch port.
+  - The experimental logical router port options "routing-protocol-redirect"
+    and "routing-protocols" are now also usable on distributed gateway ports.
 
 OVN v22.09.1 - 20 Dec 2022
 --------------------------
