@@ -6025,6 +6025,27 @@ skip_port_from_conntrack(const struct ovn_datapath *od, struct ovn_port *op,
 }
 
 static void
+build_stateless_for_lb_filter(const struct ovn_datapath *od,
+                              const struct nbrec_acl *acl,
+                              struct lflow_table *lflows,
+                              struct lflow_ref *lflow_ref)
+{
+    const char *action = REGBIT_ACL_VERDICT_ALLOW" = 1;"
+                         REGBIT_CONNTRACK_COMMIT" = 1; next;";
+    if (!strcmp(acl->direction, "from-lport")) {
+        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_PRE_ACL, 65532,
+                                acl->match, "next;", &acl->header_, lflow_ref);
+        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_ACL_EVAL,
+                                65532, acl->match, action, &acl->header_, lflow_ref);
+    } else {
+        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_OUT_PRE_ACL, 65532,
+                                acl->match, "next;", &acl->header_, lflow_ref);
+        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_OUT_ACL_EVAL,
+                                65532, acl->match, action, &acl->header_, lflow_ref);
+    }
+}
+
+static void
 build_stateless_filter(const struct ovn_datapath *od,
                        const struct nbrec_acl *acl,
                        struct lflow_table *lflows,
@@ -6054,10 +6075,17 @@ build_stateless_filters(const struct ovn_datapath *od,
                         struct lflow_table *lflows,
                         struct lflow_ref *lflow_ref)
 {
+    bool skip_stateless = smap_get_bool(&od->nbs->other_config,
+                                        "skip_stateless", false);
+
     for (size_t i = 0; i < od->nbs->n_acls; i++) {
         const struct nbrec_acl *acl = od->nbs->acls[i];
         if (!strcmp(acl->action, "allow-stateless")) {
-            build_stateless_filter(od, acl, lflows, lflow_ref);
+            if (skip_stateless) {
+                build_stateless_for_lb_filter(od, acl, lflows, lflow_ref);
+            } else {
+                build_stateless_filter(od, acl, lflows, lflow_ref);
+            }
         }
     }
 
@@ -6073,7 +6101,11 @@ build_stateless_filters(const struct ovn_datapath *od,
             const struct nbrec_acl *acl = ls_pg_rec->nb_pg->acls[i];
 
             if (!strcmp(acl->action, "allow-stateless")) {
-                build_stateless_filter(od, acl, lflows, lflow_ref);
+                if (skip_stateless) {
+                    build_stateless_for_lb_filter(od, acl, lflows, lflow_ref);
+                } else {
+                    build_stateless_filter(od, acl, lflows, lflow_ref);
+                }
             }
         }
     }

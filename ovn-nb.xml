@@ -795,6 +795,13 @@
         to 0, which means disabled.
       </column>
 
+      <column name="other_config" key="skip_stateless" type='{"type": "boolean"}'>
+        For the correct operation of the load balancer, when using stateless
+        ACLs and for the load balancer on the logical switch that matches these
+        rules, enable this option. Without this option, packets governed
+        by stateless ACLs will be processed as stateless and LB will not work.
+      </column>
+
       <column name="other_config" key="ct-zone-limit"
               type='{"type": "integer", "minInteger": 0,
                      "maxInteger": 4294967295}'>
