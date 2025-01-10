@@ -1334,7 +1334,8 @@ test_parse_actions(struct ovs_cmdl_context *ctx OVS_UNUSED)
             .dhcpv6_opts = &dhcpv6_opts,
             .nd_ra_opts = &nd_ra_opts,
             .controller_event_opts = &event_opts,
-            .n_tables = 24,
+            .pipeline = OVNACT_P_INGRESS,
+            .n_tables = 30,
             .cur_ltable = 10,
         };
         struct lex_str exp_input =

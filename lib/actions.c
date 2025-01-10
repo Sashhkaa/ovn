@@ -362,7 +362,10 @@ parse_NEXT(struct action_context *ctx)
         }
     }
 
-    if (table >= ctx->pp->n_tables) {
+    if ((pipeline == OVNACT_P_INGRESS
+        && table >= LOG_PIPELINE_INGRESS_LEN) ||
+        (pipeline == OVNACT_P_EGRESS
+        && table >= LOG_PIPELINE_EGRESS_LEN)) {
         lexer_error(ctx->lexer,
                     "\"next\" action cannot advance beyond table %d.",
                     ctx->pp->n_tables - 1);

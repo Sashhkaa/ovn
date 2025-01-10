@@ -1017,8 +1017,8 @@ next();
     Syntax error at `)' expecting "pipeline" or "table".
 next(10;
     Syntax error at `;' expecting `)'.
-next(24);
-    "next" action cannot advance beyond table 23.
+next(31);
+    "next" action cannot advance beyond table 30.
 
 next(table=lflow_table);
     formats as next;
