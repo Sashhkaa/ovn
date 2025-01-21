@@ -588,6 +588,20 @@ ovntrace_port_find_by_key(const struct ovntrace_datapath *dp,
     return NULL;
 }
 
+static const struct ovntrace_port *
+ovntrace_port_find_by_name(const struct ovntrace_datapath *dp,
+                           const char *name)
+{
+    const struct shash_node *node;
+    SHASH_FOR_EACH (node, &ports) {
+        const struct ovntrace_port *port = node->data;
+        if (port->dp == dp && port->name == name) {
+            return port;
+        }
+    }
+    return NULL;
+}
+
 static const char *
 ovntrace_port_key_to_name(const struct ovntrace_datapath *dp,
                           uint16_t key)
@@ -3057,6 +3071,26 @@ execute_check_out_port_sec(const struct ovnact_result *dl,
 }
 
 static void
+execute_mirror(const struct ovnact_mirror *mirror,
+               const struct ovntrace_datapath *dp,
+               struct ovs_list *super)
+{
+    const struct ovntrace_port *port;
+
+    port = ovntrace_port_find_by_name(dp, mirror->port);
+
+    if (port) {
+        ovntrace_node_append(super, OVNTRACE_NODE_TRANSFORMATION,
+                             "clone");
+        ovntrace_node_append(super, OVNTRACE_NODE_OUTPUT,
+                             "output(\"%s\")", port->name);
+    } else {
+        ovntrace_node_append(super, OVNTRACE_NODE_OUTPUT,
+        "/* omitting output because no taget port found. */");
+    }
+}
+
+static void
 trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
               const struct ovntrace_datapath *dp, struct flow *uflow,
               uint8_t table_id, enum ovnact_pipeline pipeline,
@@ -3366,6 +3400,9 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
         case OVNACT_CHECK_OUT_PORT_SEC:
             execute_check_out_port_sec(ovnact_get_CHECK_OUT_PORT_SEC(a),
                                        dp, uflow);
+            break;
+        case OVNACT_MIRROR:
+            execute_mirror(ovnact_get_MIRROR(a), dp, super);
             break;
         case OVNACT_COMMIT_ECMP_NH:
             break;

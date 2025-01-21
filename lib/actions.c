@@ -5426,6 +5426,62 @@ encode_MAC_CACHE_USE(const struct ovnact_null *null OVS_UNUSED,
     emit_resubmit(ofpacts, ep->mac_cache_use_table);
 }
 
+static void
+parse_MIRROR_action(struct action_context *ctx)
+{
+    if (!lexer_force_match(ctx->lexer, LEX_T_LPAREN)) {
+        return;
+    }
+
+    if (ctx->lexer->token.type != LEX_T_STRING) {
+        lexer_syntax_error(ctx->lexer, "expecting port name string");
+        return;
+    }
+
+    struct ovnact_mirror *mirror = ovnact_put_MIRROR(ctx->ovnacts);
+    mirror->port = xstrdup(ctx->lexer->token.s);
+
+    lexer_get(ctx->lexer);
+    (void) (lexer_force_match(ctx->lexer, LEX_T_RPAREN));
+}
+
+static void
+format_MIRROR(const struct ovnact_mirror *mirror,
+              struct ds *s)
+{
+    ds_put_cstr(s, "mirror(");
+    ds_put_format(s, "\"%s\"", mirror->port);
+    ds_put_cstr(s, ");");
+}
+
+static void
+encode_MIRROR(const struct ovnact_mirror *mirror,
+              const struct ovnact_encode_params *ep,
+              struct ofpbuf *ofpacts)
+{
+    size_t clone_ofs = ofpacts->size;
+    ovs_be32 vport_key;
+
+    if (!ep->lookup_port(ep->aux, mirror->port, &vport_key)) {
+        return;
+    }
+
+    struct ofpact_nest *clone = ofpact_put_CLONE(ofpacts);
+
+    put_load(vport_key, MFF_LOG_OUTPORT, 0, 32, ofpacts);
+    emit_resubmit(ofpacts, OFTABLE_REMOTE_OUTPUT);
+    clone = ofpbuf_at_assert(ofpacts, clone_ofs, sizeof *clone);
+    ofpacts->header = clone;
+
+    ofpact_finish_CLONE(ofpacts, &clone);
+}
+
+static void
+ovnact_mirror_free(struct ovnact_mirror *mirror OVS_UNUSED)
+{
+    free(mirror->port);
+}
+
 /* Parses an assignment or exchange or put_dhcp_opts action. */
 static void
 parse_set_action(struct action_context *ctx)
@@ -5635,6 +5691,8 @@ parse_action(struct action_context *ctx)
         parse_sample(ctx);
     } else if (lexer_match_id(ctx->lexer, "mac_cache_use")) {
         ovnact_put_MAC_CACHE_USE(ctx->ovnacts);
+    } else if (lexer_match_id(ctx->lexer, "mirror")) {
+        parse_MIRROR_action(ctx);
     } else {
         lexer_syntax_error(ctx->lexer, "expecting action");
     }

@@ -1624,23 +1624,27 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
 
     int tag = 0;
     bool nested_container = false;
-    const struct sbrec_port_binding *parent_port = NULL;
+    const struct sbrec_port_binding *binding_port = NULL;
     ofp_port_t ofport;
-    if (binding->parent_port && *binding->parent_port) {
-        if (!binding->tag) {
+    bool is_mirror = !strcmp(binding->type, "mirror");
+    if ((binding->parent_port && *binding->parent_port) || is_mirror) {
+        if (!binding->tag && !is_mirror) {
             return;
         }
+        const char *binding_port_name = is_mirror ? binding->mirror_port :
+                                        binding->parent_port;
         ofport = local_binding_get_lport_ofport(local_bindings,
-                                                binding->parent_port);
+                                                binding_port_name);
         if (ofport) {
-            tag = *binding->tag;
+            if (!is_mirror) {
+                tag = *binding->tag;
+            }
             nested_container = true;
-            parent_port = lport_lookup_by_name(
-                sbrec_port_binding_by_name, binding->parent_port);
-
-            if (parent_port
+            binding_port = lport_lookup_by_name(
+                sbrec_port_binding_by_name, binding_port_name);
+            if (binding_port
                 && (lport_can_bind_on_this_chassis(chassis,
-                    parent_port) != CAN_BIND_AS_MAIN)) {
+                binding_port) != CAN_BIND_AS_MAIN)) {
                 /* Even though there is an ofport for this container
                  * parent port, it is requested on different chassis ignore
                  * this container port.
@@ -1705,7 +1709,7 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
         struct zone_ids zone_ids = get_zone_ids(binding, ct_zones);
         /* Pass the parent port binding if the port is a nested
          * container. */
-        put_local_common_flows(dp_key, binding, parent_port, &zone_ids,
+        put_local_common_flows(dp_key, binding, binding_port, &zone_ids,
                                debug, ofpacts_p, flow_table);
 
         /* Table 0, Priority 150 and 100.

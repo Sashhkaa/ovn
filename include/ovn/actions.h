@@ -128,6 +128,7 @@ struct collector_set_ids;
     OVNACT(CHK_LB_AFF,        ovnact_result)          \
     OVNACT(SAMPLE,            ovnact_sample)          \
     OVNACT(MAC_CACHE_USE,     ovnact_null)            \
+    OVNACT(MIRROR,            ovnact_mirror)          \
 
 /* enum ovnact_type, with a member OVNACT_<ENUM> for each action. */
 enum OVS_PACKED_ENUM ovnact_type {
@@ -523,6 +524,14 @@ struct ovnact_commit_lb_aff {
     uint16_t backend_port;
 
     uint16_t timeout;
+};
+
+/* OVNACT_MIRROR. */
+struct ovnact_mirror {
+    struct ovnact ovnact;
+
+    /* Argument. */
+    char *port; /* Mirror serving port for output action. */
 };
 
 /* Internal use by the helpers below. */
