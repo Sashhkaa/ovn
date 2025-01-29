@@ -6001,7 +6001,7 @@ build_mirror_lflow(struct ovn_port *op,
             ds_put_format(&action, "next(pipeline=ingress, table=%d);}; ",
                           ovn_stage_get_table(S_SWITCH_IN_L2_UNKNOWN));
         } else {
-            ds_put_format(&action, "output;}; ");
+            ds_put_cstr(&action, "output;}; ");
         }
     }
 
@@ -6036,7 +6036,7 @@ build_mirror_pass_lflow(struct ovn_port *op,
     } else {
         dir = "inport";
         stage = S_SWITCH_IN_MIRROR;
-        ds_put_format(&action, "output;}; next;");
+        ds_put_cstr(&action, "output;}; next;");
     }
 
     ds_put_format(&match, "%s == %s", dir, op->json_key);
