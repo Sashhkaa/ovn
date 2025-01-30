@@ -2075,7 +2075,7 @@ create_mirror_port(struct ovn_port *op, struct hmap *ports,
 
     op->is_mirror_source_port = true;
     mp->primary_port = op;
-    mp->mirror_target_port = xstrdup(nb_mirror->sink);
+    mp->mirror_target_port = target_port;
     mp->od = op->od;
 
     free(mp_name);
@@ -3051,7 +3051,7 @@ ovn_port_update_sbrec(struct ovsdb_idl_txn *ovnsb_txn,
              * with mirror target port to act it like container port without
              * tag it by vlan tag. */
             sbrec_port_binding_set_type(op->sb, "mirror");
-            sbrec_port_binding_set_mirror_port(op->sb, op->mirror_target_port);
+            sbrec_port_binding_set_mirror_port(op->sb, op->mirror_target_port->key);
             goto common;
         }
         if (!lsp_is_router(op->nbsp)) {
