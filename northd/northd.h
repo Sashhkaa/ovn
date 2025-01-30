@@ -644,8 +644,8 @@ struct ovn_port {
 
     /* If this ovn_port is a mirror target port, this field is set for
      * a parent port. */
-    const char *mirror_target_port;
-
+    struct ovn_port *mirror_target_port;
+    
     bool has_unknown; /* If the addresses have 'unknown' defined. */
 
     /* The port's peer:
