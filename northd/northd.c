@@ -2160,7 +2160,6 @@ create_mirror_port(struct ovn_port *op, struct hmap *ports,
         ovs_list_push_back(nb_only, &mp->list);
     }
 
-    op->is_mirror_source_port = true;
     mp->primary_port = op;
     mp->mirror_target_port = target_port;
     mp->od = op->od;
@@ -2260,7 +2259,6 @@ join_logical_ports_lsp(struct hmap *ports,
 
     /* Create mirror targets port bindings if there any mirror
      * with lport type attached to this port. */
-    op->is_mirror_source_port = false;
     for (size_t j = 0; j < nbsp->n_mirror_rules; j++) {
         struct nbrec_mirror *mirror = nbsp->mirror_rules[j];
         if (!strcmp(mirror->type, "lport")) {
@@ -6055,17 +6053,21 @@ build_mirror_lflows(struct ovn_port *op,
 {
     enum mirror_filter filter;
 
-    if (!op->is_mirror_source_port) {
-        return;
-    }
-
     for (size_t i = 0; i < op->nbsp->n_mirror_rules; i++) {
         struct nbrec_mirror *mirror = op->nbsp->mirror_rules[i];
+
+        if (strcmp(mirror->type, "lport")) {
+            continue;
+        }
+
         struct ovn_port *target_port = ovn_port_find(ls_ports,
                             ovn_mirror_port_name(ovn_datapath_name(op->od->sb),
                                                  mirror->sink));
 
-        if (strcmp(mirror->type, "lport") || !target_port) {
+        /* Mirror serving port wasn't created
+         * because the target port doesn't exist.
+         */
+        if (!target_port) {
             continue;
         }
 

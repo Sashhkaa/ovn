@@ -639,9 +639,6 @@ struct ovn_port {
      * to NULL. */
     struct ovn_port *cr_port;
 
-    /* If this ovn_port is a mirror source port, this field is set to true. */
-    bool is_mirror_source_port;
-
     /* If this ovn_port is a mirror target port, this field is set for
      * a parent port. */
     struct ovn_port *mirror_target_port;
