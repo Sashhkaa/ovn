@@ -5848,6 +5848,28 @@ build_mirror_pass_lflow(struct ovn_port *op,
 }
 
 static void
+build_mirror_target_port_lflow(const struct ovn_port *serving_port,
+                               const struct hmap *ls_ports,
+                               struct lflow_table *lflows)
+{
+    struct ds match = DS_EMPTY_INITIALIZER;
+    struct ds action = DS_EMPTY_INITIALIZER;
+
+    struct ovn_port *target_port = ovn_port_find(ls_ports,
+                                   serving_port->mirror_target_port->key);
+
+    ds_put_format(&match, "outport == %s",   serving_port->json_key);
+    ds_put_format(&action, "next(pipeline=ingress, table=%d);",
+                  ovn_stage_get_table(S_SWITCH_OUT_APPLY_PORT_SEC));
+
+    ovn_lflow_add(lflows, target_port->od, S_SWITCH_OUT_PRE_ACL, UINT16_MAX,
+                  ds_cstr(&match), ds_cstr(&action), target_port->lflow_ref);
+
+    ds_clear(&match);
+    ds_clear(&action);
+}
+
+static void
 build_mirror_lflows(struct ovn_port *op,
                     const struct hmap *ls_ports,
                     struct lflow_table *lflows)
@@ -5861,13 +5883,13 @@ build_mirror_lflows(struct ovn_port *op,
             continue;
         }
 
-        struct ovn_port *target_port = ovn_port_find(ls_ports,
+        struct ovn_port *serving_port = ovn_port_find(ls_ports,
                             ovn_mirror_port_name(ovn_datapath_name(op->od->sb),
                                                  mirror->sink));
         /* Mirror serving port was not created
          * because the target port does not exist.
          */
-        if (!target_port) {
+        if (!serving_port) {
             continue;
         }
 
@@ -5892,6 +5914,8 @@ build_mirror_lflows(struct ovn_port *op,
                 build_mirror_lflow(op, lflows, mirror, rule, true);
             }
         }
+
+        build_mirror_target_port_lflow(serving_port, ls_ports, lflows);
     }
 }
 
