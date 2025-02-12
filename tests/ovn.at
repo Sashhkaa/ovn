@@ -6935,7 +6935,7 @@ ciaddr=`ip_to_hex 0 0 0 0`
 request_ip=0
 expected_dhcp_opts=""
 test_dhcp 18 1 f00000000001 04 0 $ciaddr $offer_ip $request_ip 0 0 ff1000000001 $server_ip 02 $expected_dhcp_opts
-AT_CHECK([fgrep -iq 'DHCPDECLINE from f0:00:00:00:00:01, 10.0.0.4 duplicated' hv1/ovn-controller.log], [0], [])
+AT_CHECK([grep -iq 'DHCPDECLINE from f0:00:00:00:00:01, 10.0.0.4 duplicated' hv1/ovn-controller.log], [0], [])
 
 # Send Etherboot.
 
@@ -7778,6 +7778,99 @@ AT_CHECK([grep "nw_src=192.168.1.0/24,nw_dst=172.16.1.0/24" brflows | \
 1
 ])
 echo "packet hit reroute policy"
+
+# Expected packet has TTL decreased by 1
+expected="eth.src==$ls3_ro_mac && eth.dst==$ls3_p1_mac &&
+       ip4 && ip.ttl==63 && ip4.src==$ls1_p1_ip && ip4.dst==$ls2_p1_ip &&
+       udp && udp.src==53 && udp.dst==4369"
+echo $expected | ovstest test-ovn expr-to-packets > 3.expected
+
+OVN_CHECK_PACKETS([pbr-hv/vif3-tx.pcap], [3.expected])
+
+#
+# Test routing policy chains
+#
+
+# Create 3 chains: any drop, any allow, any reroute
+check ovn-nbctl --wait=hv lr-policy-del R1
+check ovn-nbctl --wait=hv --chain anydrop lr-policy-add R1 111 "1" drop
+check ovn-nbctl --wait=hv --chain anyallow lr-policy-add R1 112 "1" allow
+check ovn-nbctl --wait=hv --chain anyreroute lr-policy-add R1 113 "1" reroute 20.20.1.2
+
+reset_pcap_file vif2 pbr-hv/vif2
+reset_pcap_file vif3 pbr-hv/vif3
+
+# Create a policy jumping to drop chain
+check ovn-nbctl --wait=hv lr-policy-add R1 201 "ip4.src==192.168.1.0/24 && ip4.dst==172.16.1.0/24" jump anydrop
+
+# Check logical flow
+AT_CHECK([ovn-sbctl dump-flows | grep lr_in_policy | grep "192.168.1.0" | wc -l], [0], [dnl
+1
+])
+
+# Send packet.
+packet="inport==\"ls1-lp1\" && eth.src==$ls1_p1_mac && eth.dst==$ls1_ro_mac &&
+       ip4 && ip.ttl==64 && ip4.src==$ls1_p1_ip && ip4.dst==$ls2_p1_ip &&
+       udp && udp.src==53 && udp.dst==4369"
+
+OVS_WAIT_UNTIL([as pbr-hv ovs-appctl -t ovn-controller inject-pkt "$packet"])
+
+# Check if packet hit the drop policy
+OVS_WAIT_UNTIL([test "1" = "$(ovs-ofctl dump-flows br-int | \
+    grep "actions=drop" | \
+    grep "priority=111" | grep "n_packets=1" -c)"])
+
+# Expected to drop the packet.
+$PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" pbr-hv/vif2-tx.pcap > vif2.packets
+rcvd_packet=`cat vif2.packets`
+
+AT_FAIL_IF([test "$rcvd_packet" != ""])
+
+# Create a priority policy jumping to allow chain
+check ovn-nbctl --wait=hv lr-policy-add R1 301 "ip4.src==192.168.1.0/24 && ip4.dst==172.16.1.0/24"  jump anyallow
+
+# Check logical flow
+AT_CHECK([ovn-sbctl dump-flows | grep lr_in_policy | grep "192.168.1.0" -c], [0], [dnl
+2
+])
+
+# Send packet.
+packet="inport==\"ls1-lp1\" && eth.src==$ls1_p1_mac && eth.dst==$ls1_ro_mac &&
+       ip4 && ip.ttl==64 && ip4.src==$ls1_p1_ip && ip4.dst==$ls2_p1_ip &&
+       udp && udp.src==53 && udp.dst==4369"
+OVS_WAIT_UNTIL([as pbr-hv ovs-appctl -t ovn-controller inject-pkt "$packet"])
+
+# Check if packet hit the allow policy
+OVS_WAIT_UNTIL([test "1" = "$(ovs-ofctl dump-flows br-int | \
+    grep "priority=112" | grep "n_packets=1" -c)"])
+
+# Expected packet has TTL decreased by 1
+expected="eth.src==$ls2_ro_mac && eth.dst==$ls2_p1_mac &&
+       ip4 && ip.ttl==63 && ip4.src==$ls1_p1_ip && ip4.dst==$ls2_p1_ip &&
+       udp && udp.src==53 && udp.dst==4369"
+echo $expected | ovstest test-ovn expr-to-packets > expected
+
+OVN_CHECK_PACKETS([pbr-hv/vif2-tx.pcap], [expected])
+
+# Create a priority policy jumping to reroute chain
+check ovn-nbctl --wait=hv lr-policy-add R1 401 "ip4.src==192.168.1.0/24 && ip4.dst==172.16.1.0/24"  jump anyreroute
+
+# Check logical flow
+AT_CHECK([ovn-sbctl dump-flows | grep lr_in_policy | \
+    grep "192.168.1.0" | \
+    grep "priority=30" -c], [0], [dnl
+1
+])
+
+# Send packet.
+packet="inport==\"ls1-lp1\" && eth.src==$ls1_p1_mac && eth.dst==$ls1_ro_mac &&
+       ip4 && ip.ttl==64 && ip4.src==$ls1_p1_ip && ip4.dst==$ls2_p1_ip &&
+       udp && udp.src==53 && udp.dst==4369"
+OVS_WAIT_UNTIL([as pbr-hv ovs-appctl -t ovn-controller inject-pkt "$packet"])
+
+# Check if packet hit the allow policy
+OVS_WAIT_UNTIL([test "1" = "$(ovs-ofctl dump-flows br-int | \
+    grep "priority=113" | grep "n_packets=1" -c)"])
 
 # Expected packet has TTL decreased by 1
 expected="eth.src==$ls3_ro_mac && eth.dst==$ls3_p1_mac &&
@@ -20423,7 +20516,7 @@ eth_dst=00000000ff01
 ip_src=$(ip_to_hex 10 0 0 10)
 ip_dst=$(ip_to_hex 172 168 0 101)
 send_icmp_packet 1 1 $eth_src $eth_dst $ip_src $ip_dst c4c9 0000000000000000000000
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int metadata=0x$lr0_dp_key | awk '/table=26, n_packets=1, n_bytes=45/{print $7" "$8}'],[0],[dnl
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int metadata=0x$lr0_dp_key | awk '/table=27, n_packets=1, n_bytes=45/{print $7" "$8}'],[0],[dnl
 priority=80,ip,reg15=0x3,metadata=0x3,nw_src=10.0.0.10 actions=drop
 ])
 
@@ -26415,7 +26508,7 @@ ovn-sbctl dump-flows > sbflows
 AT_CAPTURE_FILE([sbflows])
 AT_CAPTURE_FILE([offlows])
 OVS_WAIT_UNTIL([
-    as hv1 ovs-ofctl dump-flows br-int table=21 > offlows
+    as hv1 ovs-ofctl dump-flows br-int table=22 > offlows
     test $(grep -c "load:0x64->NXM_NX_PKT_MARK" offlows) = 1 && \
     test $(grep -c "load:0x3->NXM_NX_PKT_MARK" offlows) = 1 && \
     test $(grep -c "load:0x4->NXM_NX_PKT_MARK" offlows) = 1 && \
@@ -26508,12 +26601,12 @@ send_ipv4_pkt hv1 hv1-vif1 505400000003 00000000ff01 \
     $(ip_to_hex 10 0 0 3) $(ip_to_hex 172 168 0 120)
 
 OVS_WAIT_UNTIL([
-    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=21 | \
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=22 | \
     grep "load:0x2->NXM_NX_PKT_MARK" -c)
 ])
 
 AT_CHECK([
-    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=21 | \
+    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=22 | \
     grep "load:0x64->NXM_NX_PKT_MARK" -c)
 ])
 
@@ -27210,7 +27303,7 @@ AT_CHECK([
     grep "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_LABEL\\[[80..95\\]]))" -c)
 ])
 AT_CHECK([
-    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=21 | \
+    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=22 | \
     grep "priority=200" | \
     grep "actions=move:NXM_NX_CT_LABEL\\[[32..79\\]]->NXM_OF_ETH_DST\\[[\\]]" -c)
 ])
@@ -27221,7 +27314,7 @@ AT_CHECK([
     grep "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_LABEL\\[[80..95\\]]))" -c)
 ])
 AT_CHECK([
-    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=21 | \
+    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=22 | \
     grep "priority=200" | \
     grep "actions=move:NXM_NX_CT_LABEL\\[[32..79\\]]->NXM_OF_ETH_DST\\[[\\]]" -c)
 ])
@@ -27243,7 +27336,7 @@ AT_CHECK([
         grep "priority=100" | \
         grep -c "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],.*exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_MARK\\[[16..31\\]]))"
 
-        grep table=23 hv${hv}flows | \
+        grep table=24 hv${hv}flows | \
         grep "priority=200" | \
         grep -c "move:NXM_NX_CT_LABEL\\[[\\]]->NXM_NX_XXREG1\\[[\\]],move:NXM_NX_XXREG1\\[[32..79\\]]->NXM_OF_ETH_DST"
     done; :], [0], [dnl
@@ -27336,7 +27429,7 @@ AT_CHECK([
     grep "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_LABEL\\[[80..95\\]]))" -c)
 ])
 AT_CHECK([
-    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=21 | \
+    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=22 | \
     grep "priority=200" | \
     grep "actions=move:NXM_NX_CT_LABEL\\[[32..79\\]]->NXM_OF_ETH_DST\\[[\\]]" -c)
 ])
@@ -27347,7 +27440,7 @@ AT_CHECK([
     grep "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_MARK\\[[16..31\\]]))" -c)
 ])
 AT_CHECK([
-    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=21 | \
+    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=22 | \
     grep "priority=200" | \
     grep "actions=move:NXM_NX_CT_LABEL\\[[\\]]->NXM_OF_ETH_DST\\[[\\]]" -c)
 ])
@@ -27368,7 +27461,7 @@ AT_CHECK([
         grep "priority=100" | \
         grep -c "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],.*exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_MARK\\[[16..31\\]]))"
 
-        grep table=23 hv${hv}flows | \
+        grep table=24 hv${hv}flows | \
         grep "priority=200" | \
         grep -c "move:NXM_NX_CT_LABEL\\[[\\]]->NXM_NX_XXREG1\\[[\\]],move:NXM_NX_XXREG1\\[[32..79\\]]->NXM_OF_ETH_DST"
     done; :], [0], [dnl
@@ -27832,7 +27925,7 @@ AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep "actions=controller" | grep 
 ])
 
 # The packet should've been dropped in the lr_in_arp_resolve stage.
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=23, n_packets=1,.* priority=1,ip,metadata=0x${sw_key},nw_dst=10.0.1.1 actions=drop" -c], [0], [dnl
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=24, n_packets=1,.* priority=1,ip,metadata=0x${sw_key},nw_dst=10.0.1.1 actions=drop" -c], [0], [dnl
 1
 ])
 

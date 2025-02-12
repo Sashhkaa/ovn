@@ -166,13 +166,14 @@ enum ovn_stage {
     PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_PRE,  10, "lr_in_ip_routing_pre")  \
     PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING,      11, "lr_in_ip_routing")      \
     PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_ECMP, 12, "lr_in_ip_routing_ecmp") \
-    PIPELINE_STAGE(ROUTER, IN,  POLICY,          13, "lr_in_policy")          \
-    PIPELINE_STAGE(ROUTER, IN,  POLICY_ECMP,     14, "lr_in_policy_ecmp")     \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,     15, "lr_in_arp_resolve")     \
-    PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN,     16, "lr_in_chk_pkt_len")     \
-    PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,     17, "lr_in_larger_pkts")     \
-    PIPELINE_STAGE(ROUTER, IN,  GW_REDIRECT,     18, "lr_in_gw_redirect")     \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST,     19, "lr_in_arp_request")     \
+    PIPELINE_STAGE(ROUTER, IN,  POLICY_PRE,      13, "lr_in_policy_pre")      \
+    PIPELINE_STAGE(ROUTER, IN,  POLICY,          14, "lr_in_policy")          \
+    PIPELINE_STAGE(ROUTER, IN,  POLICY_ECMP,     15, "lr_in_policy_ecmp")     \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,     16, "lr_in_arp_resolve")     \
+    PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN,     17, "lr_in_chk_pkt_len")     \
+    PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,     18, "lr_in_larger_pkts")     \
+    PIPELINE_STAGE(ROUTER, IN,  GW_REDIRECT,     19, "lr_in_gw_redirect")     \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST,     20, "lr_in_arp_request")     \
                                                                       \
     /* Logical router egress stages. */                               \
     PIPELINE_STAGE(ROUTER, OUT, CHECK_DNAT_LOCAL,   0,                       \
@@ -248,7 +249,7 @@ enum ovn_stage {
 #define REG_SRC_IPV4 "reg1"
 #define REG_SRC_IPV6 "xxreg1"
 #define REG_ROUTE_TABLE_ID "reg7"
-
+#define REG_POLICY_CHAIN_ID "reg9[16..31]"
 #define REG_ORIG_TP_DPORT_ROUTER   "reg9[16..31]"
 
 /* Register used for setting a label for ACLs in a Logical Switch. */
@@ -8911,11 +8912,42 @@ get_outport_for_routing_policy_nexthop(struct ovn_datapath *od,
     return NULL;
 }
 
+static bool
+policy_chain_id(struct simap *chain_ids, const char *chain_name, uint32_t *id)
+{
+    if (chain_name && *chain_name) {
+        *id = simap_get(chain_ids, chain_name);
+        return true;
+    }
+
+    return false;
+}
+
+static void
+policy_chain_add(struct simap *chain_ids, const char *chain_name)
+{
+    uint32_t id = simap_count(chain_ids) + 1;
+
+    if (id == UINT16_MAX) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_WARN_RL(&rl, "Too many policy chains for Logical Router.");
+        return;
+    }
+
+    if (!simap_put(chain_ids, chain_name, id)) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_WARN_RL(&rl, "Policy chain id unexpectedly appeared");
+    }
+}
+
 static void
 build_routing_policy_flow(struct hmap *lflows, struct ovn_datapath *od,
                           const struct hmap *ports,
                           const struct nbrec_logical_router_policy *rule,
-                          const struct ovsdb_idl_row *stage_hint)
+                          const struct ovsdb_idl_row *stage_hint,
+                          bool chains_used,
+                          uint32_t chain_id,
+                          uint32_t jump_chain_id)
 {
     struct ds match = DS_EMPTY_INITIALIZER;
     struct ds actions = DS_EMPTY_INITIALIZER;
@@ -8959,6 +8991,10 @@ build_routing_policy_flow(struct hmap *lflows, struct ovn_datapath *od,
                       out_port->lrp_networks.ea_s,
                       out_port->json_key);
 
+    } else if (!strcmp(rule->action, "jump")) {
+        ds_put_format(&actions, REG_POLICY_CHAIN_ID
+                      "=%d; next(pipeline=ingress, table=%d);",
+                      jump_chain_id, ovn_stage_get_table(S_ROUTER_IN_POLICY));
     } else if (!strcmp(rule->action, "drop")) {
         ds_put_cstr(&actions, "drop;");
     } else if (!strcmp(rule->action, "allow")) {
@@ -8968,7 +9004,13 @@ build_routing_policy_flow(struct hmap *lflows, struct ovn_datapath *od,
         }
         ds_put_cstr(&actions, REG_ECMP_GROUP_ID" = 0; next;");
     }
-    ds_put_format(&match, "%s", rule->match);
+
+    if (!chains_used) {
+        ds_put_format(&match, "%s", rule->match);
+    } else {
+        ds_put_format(&match, REG_POLICY_CHAIN_ID" == %d && (%s)", chain_id,
+                      rule->match);
+    }
 
     ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_POLICY, rule->priority,
                             ds_cstr(&match), ds_cstr(&actions), stage_hint);
@@ -11679,10 +11721,33 @@ build_ingress_policy_flows_for_lrouter(
         const struct hmap *ports)
 {
     if (od->nbr) {
+        /* Policy generation is different if chains are used. */
+        struct simap chain_ids;
+        bool chains_used;
+
+        simap_init(&chain_ids);
+
+        /* Create chain numeric ids for policies with chain name set */
+        for (int i = 0; i < od->nbr->n_policies; i++) {
+            const struct nbrec_logical_router_policy *rule
+                = od->nbr->policies[i];
+            uint32_t id;
+
+            if (policy_chain_id(&chain_ids, rule->chain, &id) && id == 0) {
+                policy_chain_add(&chain_ids, rule->chain);
+            }
+        }
+
+        chains_used = !simap_is_empty(&chain_ids);
+
         /* This is a catch-all rule. It has the lowest priority (0)
          * does a match-all("1") and pass-through (next) */
         ovn_lflow_add(lflows, od, S_ROUTER_IN_POLICY, 0, "1",
                       REG_ECMP_GROUP_ID" = 0; next;");
+
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_POLICY_PRE, 0, "1",
+                      REG_POLICY_CHAIN_ID" = 0; next;");
+
         ovn_lflow_add(lflows, od, S_ROUTER_IN_POLICY_ECMP, 150,
                       REG_ECMP_GROUP_ID" == 0", "next;");
 
@@ -11694,15 +11759,53 @@ build_ingress_policy_flows_for_lrouter(
             bool is_ecmp_reroute =
                 (!strcmp(rule->action, "reroute") && rule->n_nexthops > 1);
 
+            uint32_t chain_id = 0;
+            uint32_t jump_chain_id = 0;
+
+            /* Skip policy if chain name is set but id was not created above */
+            if (policy_chain_id(&chain_ids, rule->chain, &chain_id)
+                && chain_id == 0) {
+                continue;
+            }
+
+            if (!strcmp(rule->action, "jump")) {
+                /* Skip policy if action is 'jump' but no target chain is set */
+                if (!policy_chain_id(&chain_ids, rule->jump_chain,
+                                     &jump_chain_id)) {
+                    static struct vlog_rate_limit rl
+                        = VLOG_RATE_LIMIT_INIT(5, 1);
+                    VLOG_WARN_RL(&rl,
+                                 "Logical router: %s, policy action 'jump'"
+                                 " has empty target",
+                                 od->nbr->name);
+                    continue;
+                }
+
+                /* Skip policy if action is 'jump' but target chain name
+                   is not resolved to numeric id */
+                if (jump_chain_id == 0) {
+                    static struct vlog_rate_limit rl
+                        = VLOG_RATE_LIMIT_INIT(5, 1);
+                    VLOG_WARN_RL(&rl,
+                                 "Logical router: %s, policy action 'jump'"
+                                 " follows to non-existent chain %s",
+                                 od->nbr->name, rule->jump_chain);
+                    continue;
+                }
+            }
+
             if (is_ecmp_reroute) {
                 build_ecmp_routing_policy_flows(lflows, od, ports, rule,
                                                 ecmp_group_id);
                 ecmp_group_id++;
             } else {
                 build_routing_policy_flow(lflows, od, ports, rule,
-                                          &rule->header_);
+                                          &rule->header_, chains_used,
+                                          chain_id, jump_chain_id);
             }
         }
+
+        simap_destroy(&chain_ids);
     }
 }
 
