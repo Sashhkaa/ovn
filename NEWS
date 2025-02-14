@@ -80,6 +80,8 @@ Post v24.09.0
        interface names using "dynamic-routing-port-mapping".
    - Add "options:ct-commit-all" to LR, that enables commit of all traffic
      to DNAT and SNAT zone when LR is stateful.
+   - Add support for ovn overlay mirroring between logical switch ports,
+     according filtering of mirrored traffic (Experimental).
 
 OVN v24.09.0 - 13 Sep 2024
 --------------------------
