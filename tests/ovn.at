@@ -803,6 +803,7 @@ m4_define([NEXT], [m4_if(
 
 m4_define([oflow_in_table], [NEXT(ingress, lflow_table)])
 m4_define([oflow_out_table], [NEXT(egress, lflow_table)])
+m4_define([remote_out_table], [OFTABLE_REMOTE_OUTPUT])
 
 AT_DATA([test-cases.txt], [
 # drop
@@ -2286,6 +2287,13 @@ flood_remote;
 
 flood_remote();
     Syntax error at `(' expecting `;'.
+
+#mirror
+mirror("lsp1");
+    encodes as clone(set_field:0x11->reg15,resubmit(,remote_out_table))
+
+mirror(lsp1);
+    Syntax error at `lsp1' expecting port name string.
 
 # Miscellaneous negative tests.
 ;
