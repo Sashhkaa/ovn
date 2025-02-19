@@ -5781,20 +5781,9 @@ build_mirror_lflow(struct ovn_port *op,
         stage = S_SWITCH_IN_MIRROR;
     }
 
+    ds_put_format(&action, "mirror(%s);", serving_port->json_key);
+    
     ds_put_format(&match, "%s == %s && %s", dir, op->json_key, rule->match);
-
-    if (!strcmp(rule->action, "mirror")) {
-        ds_put_format(&action, "clone {outport = %s; ",
-                      serving_port->json_key);
-        if (egress) {
-            ds_put_format(&action, "next(pipeline=ingress, table=%d);}; ",
-                          ovn_stage_get_table(S_SWITCH_IN_L2_UNKNOWN));
-        } else {
-            ds_put_cstr(&action, "output;}; ");
-        }
-    }
-
-    ds_put_cstr(&action, "next;");
 
     ovn_lflow_add(lflows, op->od, stage, priority, ds_cstr(&match),
                   ds_cstr(&action), op->lflow_ref);
@@ -5813,19 +5802,15 @@ build_mirror_pass_lflow(struct ovn_port *op,
     enum ovn_stage stage;
     const char *dir;
 
-    ds_put_format(&action, "clone {outport = %s; ",
-                                serving_port->json_key);
-
     if (egress) {
         dir = "outport";
         stage = S_SWITCH_OUT_MIRROR;
-        ds_put_format(&action, "next(pipeline=ingress, table=%d);}; next;",
-                      ovn_stage_get_table(S_SWITCH_IN_L2_UNKNOWN));
     } else {
         dir = "inport";
         stage = S_SWITCH_IN_MIRROR;
-        ds_put_cstr(&action, "output;}; next;");
     }
+
+    ds_put_format(&action, "mirror(%s);", serving_port->json_key);
 
     ds_put_format(&match, "%s == %s", dir, op->json_key);
 
@@ -5850,7 +5835,7 @@ build_mirror_target_port_lflow(const struct ovn_port *serving_port,
     struct ovn_port *target_port = ovn_port_find(ls_ports,
                                    serving_port->mirror_target_port->key);
 
-    ds_put_format(&match, "outport == %s",   serving_port->json_key);
+    ds_put_format(&match,  "outport == %s",   serving_port->json_key);
     ds_put_format(&action, "next(pipeline=egress, table=%d);",
                   ovn_stage_get_table(S_SWITCH_OUT_APPLY_PORT_SEC));
 

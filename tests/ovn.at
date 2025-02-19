@@ -18465,7 +18465,7 @@ check_column "$hv3_uuid" sb:Port_Binding chassis logical_port=mp-ls1-ls2-lp2
 
 AT_CHECK([ovn-sbctl lflow-list ls1 | grep mirror| ovn_strip_lflows], [0], [dnl
   table=??(ls_in_mirror       ), priority=0    , match=(1), action=(next;)
-  table=??(ls_in_mirror       ), priority=100  , match=(inport == "ls1-lp1"), action=(clone {outport = "mp-ls1-ls2-lp2"; output;}; next;)
+  table=??(ls_in_mirror       ), priority=100  , match=(inport == "ls1-lp1"), action=(mirror("mp-ls1-ls2-lp2");)
   table=??(ls_out_mirror      ), priority=0    , match=(1), action=(next;)
 ])
 
