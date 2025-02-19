@@ -3120,6 +3120,13 @@ execute_check_out_port_sec(const struct ovnact_result *dl,
     mf_write_subfield_flow(&sf, &sv, uflow);
 }
 
+/* TODO: mirror action tracking in trace. */
+static void
+execute_mirror()
+{
+
+}
+
 static void
 trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
               const struct ovntrace_datapath *dp, struct flow *uflow,
@@ -3439,6 +3446,9 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
         case OVNACT_CHECK_OUT_PORT_SEC:
             execute_check_out_port_sec(ovnact_get_CHECK_OUT_PORT_SEC(a),
                                        dp, uflow);
+            break;
+        case OVNACT_MIRROR:
+            execute_mirror();
             break;
         case OVNACT_COMMIT_ECMP_NH:
             break;

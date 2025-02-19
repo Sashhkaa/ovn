@@ -817,6 +817,20 @@ next; drop;
 output;
     encodes as resubmit(,OFTABLE_SAVE_INPORT)
 
+#check_clone_ingress
+clone {outport = "lsp1"; output;}; next;
+    formats as clone { outport = "lsp1"; output; }; next;
+    encodes as clone(set_field:0x11->reg15,resubmit(,64)),resubmit(,19)
+
+#check_clone_egress
+clone {outport = "lsp1"; next(pipeline=ingress, table=28);}; next;
+    encodes as clone(set_field:0x11->reg15,resubmit(,42)),resubmit(,19)
+
+#mirror
+mirror("lsp1");
+    formats as mirror(lsp1);
+    encodes as clone(set_field:0x11000000->reg15,resubmit(,42)),resubmit(,19)
+
 # next
 next;
     encodes as resubmit(,oflow_in_table)
