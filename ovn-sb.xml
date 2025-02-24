@@ -2915,6 +2915,20 @@ tcp.flags = RST;
           </p>
         </dd>
 
+      <dt><code>mirror(<var>P</var>);</code></dt>
+        <dd>
+          <p>
+            <b>Parameters</b>: logical port string field <var>P</var>
+            of type <code>mirror</code>.
+          </p>
+
+          <p>
+           When using an lport mirror, it clones the packet and outputs it
+           to the local/remote chassis through the mirrored port <var>P</var>
+           to the target port.
+          </p>
+        </dd>
+
       </dl>
     </column>
 
@@ -3076,7 +3090,7 @@ tcp.flags = RST;
     <column name="type">
       <p>
         The value of this field specifies the mirror type - <code>gre</code>,
-        <code>erspan</code> or <code>local</code>.
+        <code>erspan</code>, <code>local</code> or <code>lport</code>.
       </p>
     </column>
 
@@ -3333,6 +3347,10 @@ tcp.flags = RST;
         Points to preferred encapsulation configuration to transmit
         logical dataplane packets to this chassis. The entry is reference to
         a <ref table="Encap"/> record.
+      </column>
+
+      <column name="mirror_port">
+       Points to mirror target port fot lport mirror type.
       </column>
 
       <column name="additional_encap">
