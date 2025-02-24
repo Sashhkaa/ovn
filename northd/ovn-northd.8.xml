@@ -399,6 +399,10 @@
     </ul>
 
     <h3>Ingress Table 2: Mirror </h3>
+    <p>
+      NOTE: this feature is experimental and may be subject to
+      removal/change in the future.
+    </p>
 
     <p>
       Overlay remote mirror table contains the following
@@ -2472,6 +2476,10 @@ output;
     </p>
 
     <h3>Egress Table 7: Mirror </h3>
+    <p>
+      NOTE: this feature is experimental and may be subject to
+      removal/change in the future.
+    </p>
 
     <p>
       Overlay remote mirror table contains the following

@@ -3257,6 +3257,11 @@ or
 
   <table name="Mirror" title="Mirror Entry">
     <p>
+      NOTE for lport mirror type: this feature is experimental and may
+      be subject to removal/change in the future.
+    </p>
+
+    <p>
       Each row in this table represents a mirror that can be used for
       port mirroring. These mirrors are referenced by the
       <ref column="mirror_rules" table="Logical_Switch_Port"/> column in

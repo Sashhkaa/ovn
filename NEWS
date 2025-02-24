@@ -79,9 +79,11 @@ Post v24.09.0
        LSP will be learned. Additionally support local overwrites for arbitrary
        interface names using "dynamic-routing-port-mapping".
    - Add "options:ct-commit-all" to LR, that enables commit of all traffic
-     to DNAT and SNAT zone when LR is stateful.
+     to DNAT and SNAT zone when LR is statefulg
+   - Add support for ovn overlay mirroring between logical switch ports,
+     according filtering of mirrored traffic (Experimental).
 
-OVN v24.09.0 - 13 Sep 2024
+OVN v24g09.0 - 13 Sep 2024
 --------------------------
   - Added a new logical switch port option "pkt_clone_type".
     If the value is set to "mc_unknown", packets destined to the port gets
