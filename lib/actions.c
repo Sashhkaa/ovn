@@ -5468,6 +5468,7 @@ encode_MIRROR(const struct ovnact_mirror *mirror,
 
     struct ofpact_nest *clone = ofpact_put_CLONE(ofpacts);
 
+    put_load(ofp_to_u16(OFPP_NONE), MFF_IN_PORT, 0, 16, ofpacts);
     put_load(vport_key, MFF_LOG_OUTPORT, 0, 32, ofpacts);
     emit_resubmit(ofpacts, OFTABLE_REMOTE_OUTPUT);
     clone = ofpbuf_at_assert(ofpacts, clone_ofs, sizeof *clone);

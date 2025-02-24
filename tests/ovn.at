@@ -2342,7 +2342,7 @@ mac_cache_use;
 
 #mirror
 mirror("lsp1");
-    encodes as clone(set_field:0x11->reg15,resubmit(,remote_out_table))
+    encodes as clone(set_field:ANY->in_port,set_field:0x11->reg15,resubmit(,43))
 
 mirror(lsp1);
     Syntax error at `lsp1' expecting port name string.
@@ -18051,7 +18051,7 @@ logical_port        : mp-ls1-ls2-lp2
 hv3_uuid=$(fetch_column sb:Chassis _uuid name=hv3)
 check_column "$hv3_uuid" sb:Port_Binding chassis logical_port=mp-ls1-ls2-lp2
 
-AT_CHECK([ovn-sbctl lflow-list ls1 | grep mirror| ovn_strip_lflows], [0], [dnl
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep mirror | sed 's/table=../table=??/' | sort], [0], [dnl
   table=??(ls_in_mirror       ), priority=0    , match=(1), action=(next;)
   table=??(ls_in_mirror       ), priority=100  , match=(inport == "ls1-lp1"), action=(mirror("mp-ls1-ls2-lp2"); next;)
   table=??(ls_out_mirror      ), priority=0    , match=(1), action=(next;)
@@ -18104,7 +18104,7 @@ ovn-sbctl list port_b
 AT_CHECK([ovn-sbctl list port_binding | grep mp-ls1-ls2-lp2], [1], [dnl
 ])
 
-AT_CHECK([ovn-sbctl lflow-list ls1 | grep mirror| ovn_strip_lflows], [0], [dnl
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep mirror | sed 's/table=../table=??/' | sort], [0], [dnl
   table=??(ls_in_mirror       ), priority=0    , match=(1), action=(next;)
   table=??(ls_out_mirror      ), priority=0    , match=(1), action=(next;)
 ])
@@ -18137,7 +18137,7 @@ check ovn-nbctl lsp-attach-mirror ls1-lp1 mirror0
 check ovn-nbctl mirror-rule-add mirror0 200 '1' skip
 check ovn-nbctl --wait=hv sync
 
-AT_CHECK([ovn-sbctl lflow-list ls1 | grep mirror| ovn_strip_lflows], [0], [dnl
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep mirror | sed 's/table=../table=??/' | sort], [0], [dnl
   table=??(ls_in_mirror       ), priority=0    , match=(1), action=(next;)
   table=??(ls_in_mirror       ), priority=100  , match=(inport == "ls1-lp1"), action=(mirror("mp-ls1-ls2-lp2"); next;)
   table=??(ls_in_mirror       ), priority=300  , match=(inport == "ls1-lp1" && 1), action=(next;)
@@ -18159,7 +18159,7 @@ OVN_CHECK_PACKETS([hv3/vif1-tx.pcap], [expected])
 check ovn-nbctl mirror-rule-add mirror0 300 'udp.dst == 4369' mirror
 check ovn-nbctl --wait=hv sync
 
-AT_CHECK([ovn-sbctl lflow-list ls1 | grep mirror| ovn_strip_lflows], [0], [dnl
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep mirror | sed 's/table=../table=??/' | sort], [0], [dnl
   table=??(ls_in_mirror       ), priority=0    , match=(1), action=(next;)
   table=??(ls_in_mirror       ), priority=100  , match=(inport == "ls1-lp1"), action=(mirror("mp-ls1-ls2-lp2"); next;)
   table=??(ls_in_mirror       ), priority=300  , match=(inport == "ls1-lp1" && 1), action=(next;)
