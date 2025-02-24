@@ -670,9 +670,9 @@ lflow_table_add_lflow(struct lflow_table *lflow_table,
 
     ovs_assert(!od ||
                ovn_stage_to_datapath_type(stage) == ovn_datapath_get_type(od));
-
     hash = ovn_logical_flow_hash(ovn_stage_get_table(stage),
                                  ovn_stage_get_pipeline(stage),
+                                 ovn_stage_to_str(stage),
                                  priority, match,
                                  actions);
 
@@ -909,6 +909,8 @@ ovn_lflow_equal(const struct ovn_lflow *a, enum ovn_stage stage,
                 const char *actions, const char *ctrl_meter)
 {
     return (a->stage == stage
+            && !strcmp(ovn_stage_to_str(a->stage),
+                       ovn_stage_to_str(stage))
             && a->priority == priority
             && !strcmp(a->match, match)
             && !strcmp(a->actions, actions)

@@ -646,16 +646,19 @@ sbrec_logical_flow_hash(const struct sbrec_logical_flow *lf)
 {
     return ovn_logical_flow_hash(lf->table_id,
                                  ovn_pipeline_from_name(lf->pipeline),
+                                 smap_get_def(&lf->external_ids,
+                                              "stage-name", ""),
                                  lf->priority, lf->match,
                                  lf->actions);
 }
 
 uint32_t
 ovn_logical_flow_hash(uint8_t table_id, enum ovn_pipeline pipeline,
-                      uint16_t priority,
+                      const char *stage, uint16_t priority,
                       const char *match, const char *actions)
 {
     size_t hash = hash_2words((table_id << 16) | priority, pipeline);
+    hash = hash_string(stage, hash);
     hash = hash_string(match, hash);
     return hash_string(actions, hash);
 }
