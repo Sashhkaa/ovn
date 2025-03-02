@@ -1,0 +1,231 @@
+From 842a9dedc7097b9070227fea3b99b43cf4a72b90 Mon Sep 17 00:00:00 2001
+From: Alexandra Rukomoinikova <arukomoinikova@k2.cloud>
+Date: Mon, 3 Mar 2025 01:14:28 +0300
+Subject: [PATCH] lib: enhance the OVS cmd_show for options args
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+In the case of the ovn-sbctl command, it would be useful to display only
+certain сhassis.
+
+Signed-off-by: Alexandra Rukomoinikova <arukomoinikova@k2.cloud>
+---
+ lib/db-ctl-base.c     | 57 ++++++++++++++++++++++++++++++++++++++++---
+ lib/db-ctl-base.h     |  1 +
+ utilities/ovs-vsctl.c |  9 ++++++-
+ vtep/vtep-ctl.c       |  8 +++++-
+ 4 files changed, 69 insertions(+), 6 deletions(-)
+
+diff --git a/lib/db-ctl-base.c b/lib/db-ctl-base.c
+index de046a4ed..7035a33dc 100644
+--- a/lib/db-ctl-base.c
++++ b/lib/db-ctl-base.c
+@@ -42,6 +42,19 @@
+ 
+ VLOG_DEFINE_THIS_MODULE(db_ctl_base);
+ 
++#define INIT_CTL_COMMAND(max_args_val) \
++    {                            \
++        .name = "show",           \
++        .min_args = 0,             \
++        .max_args = max_args_val,   \
++        .arguments = "",             \
++        .prerequisites = pre_cmd_show,\
++        .run = cmd_show,               \
++        .postprocess = NULL,            \
++        .options = "",                   \
++        .mode = RO                        \
++    }
++
+ /* This array defines the 'show' command output format.  User can check the
+  * definition in utilities/ovs-vsctl.c as reference.
+  *
+@@ -2135,6 +2148,36 @@ cmd_show_weak_ref(struct ctl_context *ctx, const struct cmd_show_table *show,
+     }
+ }
+ 
++static bool
++cmd_show_row_filter(struct ctl_context *ctx, const struct ovsdb_idl_row *row)
++{
++    const struct cmd_show_table *show = cmd_show_find_table_by_row(row);
++    struct ds value = DS_EMPTY_INITIALIZER;
++    bool match_found = false;
++
++    for (size_t i = 0; i < ARRAY_SIZE(show->columns_filter); i++) {
++        const struct ovsdb_idl_column *column = show->columns_filter[i];
++        if (!column) {
++            continue;
++        }
++
++        const struct ovsdb_datum *datum = ovsdb_idl_read(row, column);
++        ovsdb_datum_to_string(datum, &column->type, &value);
++
++        for (size_t j = 1; j < ctx->argc; j++) {
++            if (value.string && !strcmp(value.string, ctx->argv[j])) {
++                match_found = true;
++                goto cleanup;
++            }
++        }
++        ds_clear(&value);
++    }
++
++cleanup:
++    ds_destroy(&value);
++    return match_found;
++}
++
+ /* 'shown' records the tables that has been displayed by the current
+  * command to avoid duplicated prints.
+  */
+@@ -2251,7 +2294,9 @@ cmd_show(struct ctl_context *ctx)
+ 
+     for (row = ovsdb_idl_first_row(ctx->idl, cmd_show_tables[0].table);
+          row; row = ovsdb_idl_next_row(row)) {
+-        cmd_show_row(ctx, row, 0, &shown);
++        if (ctx->argc <= 1 || cmd_show_row_filter(ctx, row)) {
++            cmd_show_row(ctx, row, 0, &shown);
++        }
+     }
+ 
+     ovs_assert(sset_is_empty(&shown));
+@@ -2547,9 +2592,13 @@ ctl_init__(const struct ovsdb_idl_class *idl_class_,
+ 
+     cmd_show_tables = cmd_show_tables_;
+     if (cmd_show_tables) {
+-        static const struct ctl_command_syntax show =
+-            {"show", 0, 0, "", pre_cmd_show, cmd_show, NULL, "", RO};
+-        ctl_register_command(&show);
++        if (!cmd_show_tables->columns_filter) {
++            static const struct ctl_command_syntax show = INIT_CTL_COMMAND(0);
++            ctl_register_command(&show);
++        } else {
++            static const struct ctl_command_syntax show = INIT_CTL_COMMAND(INT_MAX);
++            ctl_register_command(&show);
++        }
+     }
+ }
+ 
+diff --git a/lib/db-ctl-base.h b/lib/db-ctl-base.h
+index ea7e97b78..828f41fa4 100644
+--- a/lib/db-ctl-base.h
++++ b/lib/db-ctl-base.h
+@@ -201,6 +201,7 @@ struct cmd_show_table {
+     const struct ovsdb_idl_column *name_column;
+     const struct ovsdb_idl_column *columns[4]; /* Seems like a good number. */
+     const struct weak_ref_table wref_table;
++    const struct ovsdb_idl_column *columns_filter[3]; /* Seems like a good number. */
+ };
+ 
+ 
+diff --git a/utilities/ovs-vsctl.c b/utilities/ovs-vsctl.c
+index dd494622f..3b630dc3c 100644
+--- a/utilities/ovs-vsctl.c
++++ b/utilities/ovs-vsctl.c
+@@ -1042,6 +1042,7 @@ static struct cmd_show_table cmd_show_tables[] = {
+      {&ovsrec_open_vswitch_col_manager_options,
+       &ovsrec_open_vswitch_col_bridges,
+       &ovsrec_open_vswitch_col_ovs_version},
++     {NULL, NULL, NULL},
+      {NULL, NULL, NULL}
+     },
+ 
+@@ -1051,6 +1052,7 @@ static struct cmd_show_table cmd_show_tables[] = {
+       &ovsrec_bridge_col_fail_mode,
+       &ovsrec_bridge_col_datapath_type,
+       &ovsrec_bridge_col_ports},
++     {NULL, NULL, NULL},
+      {NULL, NULL, NULL}
+     },
+ 
+@@ -1059,6 +1061,7 @@ static struct cmd_show_table cmd_show_tables[] = {
+      {&ovsrec_port_col_tag,
+       &ovsrec_port_col_trunks,
+       &ovsrec_port_col_interfaces},
++     {NULL, NULL, NULL},
+      {NULL, NULL, NULL}
+     },
+ 
+@@ -1068,6 +1071,7 @@ static struct cmd_show_table cmd_show_tables[] = {
+       &ovsrec_interface_col_options,
+       &ovsrec_interface_col_error,
+       &ovsrec_interface_col_bfd_status},
++     {NULL, NULL, NULL},
+      {NULL, NULL, NULL}
+     },
+ 
+@@ -1076,6 +1080,7 @@ static struct cmd_show_table cmd_show_tables[] = {
+      {&ovsrec_controller_col_is_connected,
+       NULL,
+       NULL},
++     {NULL, NULL, NULL},
+      {NULL, NULL, NULL}
+     },
+ 
+@@ -1084,10 +1089,12 @@ static struct cmd_show_table cmd_show_tables[] = {
+      {&ovsrec_manager_col_is_connected,
+       NULL,
+       NULL},
++     {NULL, NULL, NULL},
+      {NULL, NULL, NULL}
+     },
+ 
+-    {NULL, NULL, {NULL, NULL, NULL}, {NULL, NULL, NULL}}
++    {NULL, NULL, {NULL, NULL, NULL}, {NULL, NULL, NULL},
++                                     {NULL, NULL, NULL}}
+ };
+ 
+ static void
+diff --git a/vtep/vtep-ctl.c b/vtep/vtep-ctl.c
+index 880c95f0e..1b166b1b2 100644
+--- a/vtep/vtep-ctl.c
++++ b/vtep/vtep-ctl.c
+@@ -388,6 +388,7 @@ static struct cmd_show_table cmd_show_tables[] = {
+      {&vteprec_global_col_managers,
+       &vteprec_global_col_switches,
+       NULL},
++     {NULL, NULL, NULL},
+      {NULL, NULL, NULL}
+     },
+ 
+@@ -396,6 +397,7 @@ static struct cmd_show_table cmd_show_tables[] = {
+      {&vteprec_manager_col_is_connected,
+       NULL,
+       NULL},
++     {NULL, NULL, NULL},
+      {NULL, NULL, NULL}
+     },
+ 
+@@ -404,6 +406,7 @@ static struct cmd_show_table cmd_show_tables[] = {
+      {&vteprec_physical_switch_col_management_ips,
+       &vteprec_physical_switch_col_tunnel_ips,
+       &vteprec_physical_switch_col_ports},
++     {NULL, NULL, NULL},
+      {NULL, NULL, NULL}
+     },
+ 
+@@ -412,6 +415,7 @@ static struct cmd_show_table cmd_show_tables[] = {
+      {&vteprec_physical_port_col_vlan_bindings,
+       NULL,
+       NULL},
++     {NULL, NULL, NULL},
+      {NULL, NULL, NULL}
+     },
+ 
+@@ -420,10 +424,12 @@ static struct cmd_show_table cmd_show_tables[] = {
+      {NULL,
+       NULL,
+       NULL},
++     {NULL, NULL, NULL},
+      {NULL, NULL, NULL}
+     },
+ 
+-    {NULL, NULL, {NULL, NULL, NULL}, {NULL, NULL, NULL}}
++    {NULL, NULL, {NULL, NULL, NULL}, {NULL, NULL, NULL},
++                                     {NULL, NULL, NULL}}
+ };
+ 
+ /* vtep-ctl specific context.  Inherits the 'struct ctl_context' as base. */
+-- 
+2.34.1
+

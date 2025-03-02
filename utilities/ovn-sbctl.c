@@ -91,7 +91,7 @@ sbctl_usage(void)
 usage: %s [OPTIONS] COMMAND [ARG...]\n\
 \n\
 General commands:\n\
-  show                        print overview of database contents\n\
+  show CHASSIS-NAME CHASSIS-HOSTNAME  print overview of database contents\n\
 \n\
 Chassis commands:\n\
   chassis-add CHASSIS ENCAP-TYPE ENCAP-IP  create a new chassis named\n\
@@ -412,16 +412,21 @@ static struct cmd_show_table cmd_show_tables[] = {
       NULL},
      {&sbrec_table_port_binding,
       &sbrec_port_binding_col_logical_port,
-      &sbrec_port_binding_col_chassis}},
+      &sbrec_port_binding_col_chassis},
+     {&sbrec_chassis_col_name,
+      &sbrec_chassis_col_hostname,
+      NULL}},
 
     {&sbrec_table_encap,
      &sbrec_encap_col_type,
      {&sbrec_encap_col_ip,
       &sbrec_encap_col_options,
       NULL},
+     {NULL, NULL, NULL},
      {NULL, NULL, NULL}},
 
-    {NULL, NULL, {NULL, NULL, NULL}, {NULL, NULL, NULL}},
+    {NULL, NULL, {NULL, NULL, NULL, NULL}, {NULL, NULL, NULL},
+                                           {NULL, NULL, NULL}},
 };
 
 static void
