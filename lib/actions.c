@@ -5582,7 +5582,7 @@ encode_MIRROR(const struct ovnact_mirror *mirror,
               struct ofpbuf *ofpacts)
 {
     size_t clone_ofs = ofpacts->size;
-    ovs_be32 vport_key;
+    uint32_t vport_key;
 
     if (!ep->lookup_port(ep->aux, mirror->port, &vport_key)) {
         return;
