@@ -1782,7 +1782,7 @@ consider_port_binding(const struct physical_ctx *ctx,
 
             if (binding_port
                 && lport_can_bind_on_this_chassis(ctx->chassis,
-                                                  binding_port)) {
+                        binding_port) != CAN_BIND_AS_MAIN) {
                 /* Even though there is an ofport for this container
                  * parent port, it is requested on different chassis ignore
                  * this container port.
