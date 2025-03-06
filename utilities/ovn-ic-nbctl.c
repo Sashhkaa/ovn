@@ -398,9 +398,12 @@ static struct cmd_show_table cmd_show_tables[] = {
     {&icnbrec_table_transit_switch,
      &icnbrec_transit_switch_col_name,
      {NULL},
-     {NULL, NULL, NULL}},
+     {NULL, NULL, NULL},
+     {NULL, NULL, NULL}
+    },
 
-    {NULL, NULL, {NULL, NULL, NULL}, {NULL, NULL, NULL}},
+    {NULL, NULL, {NULL, NULL, NULL}, {NULL, NULL, NULL},
+                                     {NULL, NULL, NULL}},
 };
 
 static void
