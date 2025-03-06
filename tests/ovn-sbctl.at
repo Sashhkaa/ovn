@@ -164,6 +164,41 @@ Chassis ch0
     Port_Binding vif0
 ])
 
+AT_CHECK([ovn-sbctl chassis-add ch1 geneve 1.2.3.6])
+AT_CHECK([ovn-sbctl chassis-add ch2 geneve 1.2.3.7])
+AT_CHECK([ovn-sbctl chassis-add ch3 geneve 1.2.3.4])
+
+AT_CHECK([ovn-sbctl show | grep Chassis | sort], [0], [dnl
+Chassis ch0
+Chassis ch1
+Chassis ch2
+Chassis ch3
+])
+
+AT_CHECK([ovn-sbctl show 1.2.3.6 1.2.3.4 | grep Chassis | sort], [0], [dnl
+Chassis ch1
+Chassis ch3
+])
+
+AT_CHECK([ovn-sbctl show 1.2.3.4 ch1 ch2 | grep Chassis | sort], [0], [dnl
+Chassis ch1
+Chassis ch2
+Chassis ch3
+])
+
+AT_CHECK([ovn-sbctl show ch0 ch1 | grep Chassi | sort], [0], [dnl
+Chassis ch0
+Chassis ch1
+])
+
+ch1uuid=$(fetch_column Chassis _uuid name=ch1)
+
+AT_CHECK([ovn-sbctl set Chassis $ch1uuid hostname=host1])
+AT_CHECK([ovn-sbctl show host1 ch2 | grep Chassis | sort], [0], [dnl
+Chassis ch1
+Chassis ch2
+])
+
 uuid=$(ovn-sbctl --columns=_uuid list Chassis ch0 | cut -d ':' -f2 | tr -d ' ')
 AT_CHECK_UNQUOTED([ovn-sbctl --columns=logical_port,mac,chassis list Port_Binding], [0], [dnl
 logical_port        : vif0
