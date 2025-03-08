@@ -17,7 +17,8 @@ jobs:
       dependencies: |
         automake libtool gcc bc libjemalloc2 libjemalloc-dev    \
         libssl-dev llvm-dev libelf-dev libnuma-dev libpcap-dev  \
-        selinux-policy-dev ncat python3-scapy isc-dhcp-server
+        selinux-policy-dev ncat python3-scapy isc-dhcp-server \
+        iputils-arping
       m32_dependecies: gcc-multilib
       CC:          ${{ matrix.cfg.compiler }}
       LIBS:        ${{ matrix.cfg.libs }}
@@ -28,7 +29,7 @@ jobs:
       SANITIZERS:  ${{ matrix.cfg.sanitizers }}
 
     name: linux ${{ join(matrix.cfg.*, ' ') }}
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
 
     strategy:
       fail-fast: false
@@ -58,20 +59,20 @@ jobs:
     steps:
     - name: checkout
       if: github.event_name == 'push' || github.event_name == 'pull_request'
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
         submodules: recursive
 
     # For weekly runs, don't update submodules
     - name: checkout without submodule
       if: github.event_name == 'schedule'
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
 
     # Weekly runs test using OVS master instead of the
     # submodule.
     - name: checkout OVS master
       if: github.event_name == 'schedule'
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
         repository: 'openvswitch/ovs'
         path: 'ovs'
@@ -100,9 +101,17 @@ jobs:
         echo "$HOME/.local/bin" >> $GITHUB_PATH
 
     - name: set up python
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.x'
+        python-version: '3.11'
+
+    - name: Reduce ASLR entropy
+      if:   matrix.cfg.sanitizers != ''
+      # Asan in llvm 14 provided in ubuntu-22.04 is incompatible with
+      # high-entropy ASLR configured in much newer kernels that GitHub
+      # runners are using leading to random crashes:
+      #   https://github.com/actions/runner-images/issues/9491
+      run: sudo sysctl -w vm.mmap_rnd_bits=28
 
     - name: prepare
       run:  ./.ci/linux-prepare.sh
@@ -127,7 +136,7 @@ jobs:
 
     - name: upload logs on failure
       if: failure() || cancelled()
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: logs-linux-${{ join(matrix.cfg.*, '-') }}
         path: logs.tgz
@@ -146,18 +155,18 @@ jobs:
     steps:
     - name: checkout
       if: github.event_name == 'push' || github.event_name == 'pull_request'
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
         submodules: recursive
     # For weekly runs, don't update submodules
     - name: checkout without submodule
       if: github.event_name == 'schedule'
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
     # Weekly runs test using OVS master instead of the
     # submodule.
     - name: checkout OVS master
       if: github.event_name == 'schedule'
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
         repository: 'openvswitch/ovs'
         path: 'ovs'
@@ -169,16 +178,66 @@ jobs:
         echo "$HOME/bin"        >> $GITHUB_PATH
         echo "$HOME/.local/bin" >> $GITHUB_PATH
     - name: set up python
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.x'
+        python-version: '3.12'
     - name: prepare
       run:  ./.ci/osx-prepare.sh
     - name: build
       run:  ./.ci/osx-build.sh
     - name: upload logs on failure
       if: failure()
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: logs-osx-clang---disable-ssl
         path: config.log
+
+  build-linux-rpm:
+    name: linux rpm fedora
+    runs-on: ubuntu-22.04
+    container: fedora:38
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+
+    steps:
+      - name: install dependencies
+        run: dnf install -y dnf-plugins-core git rpm-build
+
+      - name: checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: install build dependencies
+        run: |
+          sed -e 's/@VERSION@/0.0.1/' rhel/ovn-fedora.spec.in \
+          > /tmp/ovn.spec
+          dnf builddep -y /tmp/ovn.spec
+
+      - name: configure OvS
+        run: ./boot.sh && ./configure
+        working-directory: ovs
+
+      - name: make dist OvS
+        run: make dist
+        working-directory: ovs
+
+      - name: configure OVN
+        run:  ./boot.sh && ./configure
+
+      - name: make dist OVN
+        run: make dist
+
+      - name: build RPM
+        run:  make rpm-fedora
+
+      - name: upload rpm packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-packages
+          path: |
+            rpm/rpmbuild/SRPMS/*.rpm
+            rpm/rpmbuild/RPMS/*/*.rpm
+          retention-days: 14
