@@ -6038,13 +6038,6 @@ build_stateless_filter(const struct ovn_datapath *od,
                                 action,
                                 &acl->header_,
                                 lflow_ref);
-    } else {
-        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_OUT_PRE_ACL,
-                                acl->priority + OVN_ACL_PRI_OFFSET,
-                                acl->match,
-                                action,
-                                &acl->header_,
-                                lflow_ref);
     }
 }
 
@@ -6071,7 +6064,6 @@ build_stateless_filters(const struct ovn_datapath *od,
     HMAP_FOR_EACH (ls_pg_rec, key_node, &ls_pg->nb_pgs) {
         for (size_t i = 0; i < ls_pg_rec->nb_pg->n_acls; i++) {
             const struct nbrec_acl *acl = ls_pg_rec->nb_pg->acls[i];
-
             if (!strcmp(acl->action, "allow-stateless")) {
                 build_stateless_filter(od, acl, lflows, lflow_ref);
             }
@@ -7817,8 +7809,7 @@ build_lb_rules_pre_stateful(struct lflow_table *lflows,
         }
         ds_put_cstr(action, "ct_lb_mark;");
 
-        ds_put_format(match, REGBIT_CONNTRACK_NAT" == 1 && %s.dst == %s",
-                      ip_match, lb_vip->vip_str);
+        ds_put_format(match "%s.dst == %s", ip_match, lb_vip->vip_str);
         if (lb_vip->port_str) {
             ds_put_format(match, " && %s.dst == %s", proto, lb_vip->port_str);
         }
@@ -7826,6 +7817,17 @@ build_lb_rules_pre_stateful(struct lflow_table *lflows,
         ovn_lflow_add_with_dp_group(
             lflows, lb_dps->nb_ls_map, ods_size(ls_datapaths),
             S_SWITCH_IN_PRE_STATEFUL, 120, ds_cstr(match), ds_cstr(action),
+            &lb->nlb->header_, lb_dps->lflow_ref);
+
+        ds_clear(&action);
+        ds_clear(&match);
+
+        ds_put_cstr(action, "ct_lb_mark;");
+        ds_put_format(match "%s.dst == %s", ip_match, lb_vip->vip_str);
+
+        ovn_lflow_add_with_dp_group(
+            lflows, lb_dps->nb_ls_map, ods_size(ls_datapaths),
+            S_SWITCH_IN_PRE_STATEFUL, 130, ds_cstr(match), ds_cstr(action),
             &lb->nlb->header_, lb_dps->lflow_ref);
     }
 }
