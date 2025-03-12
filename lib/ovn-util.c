@@ -892,7 +892,11 @@ ip_address_and_port_from_lb_key(const char *key, char **ip_address,
     return true;
 }
 
-/* Increment this for any logical flow changes, if an existing OVN action is
+/*
+ * Checksum for pipeline stages:
+ * cksum = 1317960254 5844
+ *
+ * Increment this for any logical flow changes, if an existing OVN action is
  * modified or a stage is added to a logical pipeline.
  *
  * This value is also used to handle some backward compatibility during

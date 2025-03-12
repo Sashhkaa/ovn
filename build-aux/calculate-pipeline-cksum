@@ -1,0 +1,4 @@
+#!/bin/sh
+
+file=$1
+grep '^\s*PIPELINE_STAGE(' $file | cksum
