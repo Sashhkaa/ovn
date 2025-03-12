@@ -10,3 +10,4 @@
 ^debian/rules$
 ^\.gitmodules$
 ^utilities/containers/Makefile
+openvswitch-.*tar.gz.shadow
