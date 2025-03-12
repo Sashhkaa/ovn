@@ -1,0 +1,31 @@
+#!/bin/sh -ex
+
+OVS=openvswitch-3.3.4
+
+# Prepare openvswitch.
+rm -vrf ./ovs
+cp "${OVS}.tar.gz.shadow" "${OVS}.tar.gz"
+tar -vxf "${OVS}.tar.gz"
+ln -s "./${OVS}" ./ovs
+pushd "${OVS}"
+./boot.sh
+./configure
+make -j$(nproc) dist
+popd
+
+# Prepare ovn tarball.
+./boot.sh
+./configure
+make -j$(nproc) dist
+cp -vf rhel/ovn-fedora.spec .
+
+# Customize rpm release with BUILDID from git SHA
+HEAD_SHA=$(git rev-parse --short --verify HEAD)
+TAG=$(git show-ref --tags -d | grep "$HEAD_SHA" | awk '{print $2}' | \
+      xargs -I {} git name-rev --tags --name-only {})
+
+if [ -z "$TAG" ]; then
+  BUILDID=".$(date --date="$(git show -s --format=%ci "$HEAD_SHA")" '+%Y%m%d%H%M').git$HEAD_SHA"
+fi
+
+sed "s/\(ROCKIT[0-9]*\)\(%{?dist}\)/\1${BUILDID}\2/" -i ovn-fedora.spec
