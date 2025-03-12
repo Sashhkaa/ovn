@@ -42,18 +42,18 @@ Provides: openvswitch-ovn-common = %{?epoch:%{epoch}:}%{version}-%{release}
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
 License: ASL 2.0 and LGPLv2+ and SISSL
-Release: 1%{?dist}
+Release: 1.ROCKIT1%{?dist}
 Source: http://openvswitch.org/releases/ovn-%{version}.tar.gz
 Source10: http://openvswitch.org/releases/openvswitch-%{ovsver}.tar.gz
 
 BuildRequires: gcc gcc-c++
 BuildRequires: autoconf automake libtool
 BuildRequires: systemd-units openssl openssl-devel
-BuildRequires: python3-devel
+BuildRequires: python%{python3_pkgversion}-devel
 BuildRequires: desktop-file-utils
 BuildRequires: groff graphviz
 BuildRequires: checkpolicy, selinux-policy-devel
-BuildRequires: /usr/bin/sphinx-build
+BuildRequires: /usr/bin/sphinx-build-3
 # make check dependencies
 BuildRequires: procps-ng
 %if %{with libcapng}
