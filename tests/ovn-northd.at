@@ -3747,10 +3747,18 @@ for direction in from to; do
 done
 check ovn-nbctl --wait=sb sync
 
-# TCP packets should not go to conntrack for load balancing.
+# TCP packets should go to conntrack for load balancing.
 flow="inport == \"lsp1\" && ${flow_eth} && ${flow_ip} && ${flow_tcp}"
 AT_CHECK_UNQUOTED([ovn_trace --ct new --ct new --minimal ls "${flow}"], [0], [dnl
-output("lsp2");
+ct_lb_mark {
+    ct_lb_mark {
+        reg0[[6]] = 0;
+        reg0[[12]] = 0;
+        ct_lb_mark /* default (use --ct to customize) */ {
+            output("lsp2");
+        };
+    };
+};
 ])
 
 # UDP packets still go to conntrack.
@@ -3883,10 +3891,18 @@ for direction in from to; do
 done
 check ovn-nbctl --wait=sb sync
 
-# TCP packets should not go to conntrack for load balancing.
+# TCP packets should go to conntrack for load balancing.
 flow="inport == \"lsp1\" && ${flow_eth} && ${flow_ip} && ${flow_tcp}"
 AT_CHECK_UNQUOTED([ovn_trace --ct new --ct new --minimal ls "${flow}"], [0], [dnl
-output("lsp2");
+ct_lb_mark {
+    ct_lb_mark {
+        reg0[[6]] = 0;
+        reg0[[12]] = 0;
+        ct_lb_mark /* default (use --ct to customize) */ {
+            output("lsp2");
+        };
+    };
+};
 ])
 
 # UDP packets still go to conntrack.
@@ -4770,8 +4786,10 @@ check_stateful_flows() {
   table=??(ls_in_pre_stateful ), priority=100  , match=(reg0[[0]] == 1), action=(ct_next;)
   table=??(ls_in_pre_stateful ), priority=110  , match=(reg0[[2]] == 1), action=(ct_lb_mark;)
   table=??(ls_in_pre_stateful ), priority=115  , match=(reg0[[2]] == 1 && ip.is_frag), action=(reg0[[19]] = 1; ct_lb_mark;)
-  table=??(ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(reg4 = 10.0.0.10; reg2[[0..15]] = 80; ct_lb_mark;)
-  table=??(ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip4.dst == 10.0.0.20 && tcp.dst == 80), action=(reg4 = 10.0.0.20; reg2[[0..15]] = 80; ct_lb_mark;)
+  table=??(ls_in_pre_stateful ), priority=115  , match=(tcp && ip4.dst == 10.0.0.10), action=(ct_lb_mark;)
+  table=??(ls_in_pre_stateful ), priority=115  , match=(tcp && ip4.dst == 10.0.0.20), action=(ct_lb_mark;)
+  table=??(ls_in_pre_stateful ), priority=120  , match=(ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(reg4 = 10.0.0.10; reg2[[0..15]] = 80; ct_lb_mark;)
+  table=??(ls_in_pre_stateful ), priority=120  , match=(ip4.dst == 10.0.0.20 && tcp.dst == 80), action=(reg4 = 10.0.0.20; reg2[[0..15]] = 80; ct_lb_mark;)
 ])
 
     AT_CHECK([grep "ls_in_lb " sw0flows | ovn_strip_lflows], [0], [dnl
@@ -14328,7 +14346,7 @@ ovn-sbctl dump-flows s1 > s1flows
 AT_CAPTURE_FILE([s1flows])
 
 AT_CHECK([grep "ls_in_pre_stateful" s1flows | ovn_strip_lflows | grep "30.0.0.1"], [0], [dnl
-  table=??(ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip4.dst == 30.0.0.1), action=(reg4 = 30.0.0.1; ct_lb_mark;)
+  table=??(ls_in_pre_stateful ), priority=120  , match=(ip4.dst == 30.0.0.1), action=(reg4 = 30.0.0.1; ct_lb_mark;)
 ])
 AT_CHECK([grep "ls_in_lb" s1flows | ovn_strip_lflows | grep "30.0.0.1"], [0], [dnl
   table=??(ls_in_lb           ), priority=110  , match=(ct.new && ip4.dst == 30.0.0.1), action=(reg4 = 30.0.0.1; ct_lb_mark(backends=172.16.0.103,172.16.0.102,172.16.0.101);)
@@ -14442,7 +14460,7 @@ ovn-sbctl dump-flows s1 > s1flows
 AT_CAPTURE_FILE([s1flows])
 
 AT_CHECK([grep "ls_in_pre_stateful" s1flows | ovn_strip_lflows | grep "2001:db8:cccc::1"], [0], [dnl
-  table=??(ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip6.dst == 2001:db8:cccc::1), action=(xxreg1 = 2001:db8:cccc::1; ct_lb_mark;)
+  table=??(ls_in_pre_stateful ), priority=120  , match=(ip6.dst == 2001:db8:cccc::1), action=(xxreg1 = 2001:db8:cccc::1; ct_lb_mark;)
 ])
 AT_CHECK([grep "ls_in_lb" s1flows | ovn_strip_lflows | grep "2001:db8:cccc::1"], [0], [dnl
   table=??(ls_in_lb           ), priority=110  , match=(ct.new && ip6.dst == 2001:db8:cccc::1), action=(xxreg1 = 2001:db8:cccc::1; ct_lb_mark(backends=2001:db8:aaaa:3::103,2001:db8:aaaa:3::102,2001:db8:aaaa:3::101);)
@@ -14553,7 +14571,7 @@ ovn-sbctl dump-flows s1 > s1flows
 AT_CAPTURE_FILE([s1flows])
 
 AT_CHECK([grep "ls_in_pre_stateful" s1flows | ovn_strip_lflows | grep "30.0.0.1"], [0], [dnl
-  table=??(ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip4.dst == 30.0.0.1), action=(reg4 = 30.0.0.1; ct_lb_mark;)
+  table=??(ls_in_pre_stateful ), priority=120  , match=(ip4.dst == 30.0.0.1), action=(reg4 = 30.0.0.1; ct_lb_mark;)
 ])
 AT_CHECK([grep "ls_in_lb" s1flows | ovn_strip_lflows | grep "30.0.0.1"], [0], [dnl
   table=??(ls_in_lb           ), priority=110  , match=(ct.new && ip4.dst == 30.0.0.1), action=(reg4 = 30.0.0.1; ct_lb_mark(backends=172.16.0.103,172.16.0.102,172.16.0.101);)
