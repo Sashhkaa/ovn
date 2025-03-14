@@ -5905,6 +5905,12 @@ build_stateless_filter(const struct ovn_datapath *od,
                                 action,
                                 &acl->header_,
                                 lflow_ref);
+    } else {
+        struct ds match = DS_EMPTY_INITIALIZER;
+        ds_put_format(&match, "ct.inv && %s", acl->match);
+        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_OUT_ACL_HINT,
+                                8, ds_cstr(&match), "ct_clear; next;",
+                                &acl->header_, lflow_ref);
     }
 }
 
