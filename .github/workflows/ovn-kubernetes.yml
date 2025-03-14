@@ -1,12 +1,7 @@
 name: ovn-kubernetes
 
 on:
-  push:
-  pull_request:
   workflow_dispatch:
-  schedule:
-  # Run Sunday at midnight
-  - cron: '0 0 * * 0'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}

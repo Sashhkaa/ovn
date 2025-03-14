@@ -9,3 +9,4 @@
 ^debian/rules.modules$
 ^debian/rules$
 ^\.gitmodules$
+openvswitch-.*tar.gz.shadow
