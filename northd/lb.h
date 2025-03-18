@@ -139,6 +139,10 @@ struct ovn_lb_datapaths {
     size_t n_nb_lr;
     unsigned long *nb_lr_map;
 
+    /* Set to true if enable-stateless-acl-lb option is enabled
+       for one of logical switch in this load balancer datapath group. */
+    bool enable_stateless_dp;
+
     /* Reference of lflows generated for this load balancer.
      *
      * This data is initialized and destroyed by the en_northd node, but
