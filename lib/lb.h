@@ -24,6 +24,7 @@
 #include "ovn-util.h"
 #include "sset.h"
 #include "uuid.h"
+#include "hmapx.h"
 
 struct uuid;
 

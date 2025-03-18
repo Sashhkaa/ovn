@@ -256,6 +256,14 @@ ovn_lb_get_health_check(const struct nbrec_load_balancer *nbrec_lb,
     return NULL;
 }
 
+static bool
+validate_snap_ip_address(const char *snat_ip)
+{
+    ovs_be32 ip;
+
+    return ip_parse(snat_ip, &ip);
+}
+
 static void
 ovn_northd_lb_init(struct ovn_northd_lb *lb,
                    const struct nbrec_load_balancer *nbrec_lb)
@@ -295,6 +303,12 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
         affinity_timeout = UINT16_MAX;
     }
     lb->affinity_timeout = affinity_timeout;
+
+    const char *snat_ip = smap_get(&nbrec_lb->options, "hairpin_snat_ip");
+
+    if (snat_ip && validate_snap_ip_address(snat_ip)) {
+        lb->hairpin_snat_ip = xstrdup(snat_ip);
+    }
 
     sset_init(&lb->ips_v4);
     sset_init(&lb->ips_v6);
@@ -338,7 +352,7 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
         if (lb_vip_nb->lb_health_check) {
             ovn_lb_vip_backends_health_check_init(lb, lb_vip, lb_vip_nb);
         }
-    }
+   }
 
     /* It's possible that parsing VIPs fails.  Update the lb->n_vips to the
      * correct value.
@@ -412,6 +426,7 @@ ovn_northd_lb_cleanup(struct ovn_northd_lb *lb)
     sset_destroy(&lb->ips_v4);
     sset_destroy(&lb->ips_v6);
     free(lb->selection_fields);
+    free(lb->hairpin_snat_ip);
     lb->selection_fields = NULL;
     lb->health_checks = false;
 }
@@ -565,7 +580,7 @@ ovn_lb_datapaths_create(const struct ovn_northd_lb *lb, size_t n_ls_datapaths,
     lb_dps->nb_ls_map = bitmap_allocate(n_ls_datapaths);
     lb_dps->nb_lr_map = bitmap_allocate(n_lr_datapaths);
     lb_dps->lflow_ref = lflow_ref_create();
-
+    hmapx_init(&lb_dps->ls_lb_with_stateless_mode);
     return lb_dps;
 }
 
@@ -575,6 +590,7 @@ ovn_lb_datapaths_destroy(struct ovn_lb_datapaths *lb_dps)
     bitmap_free(lb_dps->nb_lr_map);
     bitmap_free(lb_dps->nb_ls_map);
     lflow_ref_destroy(lb_dps->lflow_ref);
+    hmapx_destroy(&lb_dps->ls_lb_with_stateless_mode);
     free(lb_dps);
 }
 

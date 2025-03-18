@@ -72,6 +72,8 @@ struct ovn_northd_lb {
 
     /* Indicates if the load balancer has health checks configured. */
     bool health_checks;
+
+    char *hairpin_snat_ip;
 };
 
 /* ovn-northd specific backend information. */
@@ -138,6 +140,8 @@ struct ovn_lb_datapaths {
 
     size_t n_nb_lr;
     unsigned long *nb_lr_map;
+
+    struct hmapx ls_lb_with_stateless_mode;
 
     /* Reference of lflows generated for this load balancer.
      *
