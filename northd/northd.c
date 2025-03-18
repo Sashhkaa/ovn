@@ -5882,7 +5882,11 @@ build_stateless_filter(const struct ovn_datapath *od,
                                 action,
                                 &acl->header_,
                                 lflow_ref);
-    } else {
+    } else if (!od->nbs->n_load_balancer){
+        /* For cases when we have statefull ACLs but no load
+           balancer configured on logical switch - we should
+           completely bypass conntrack on egress, otherwise
+           it is necessary to check the balanced traffic. */
         ovn_lflow_add_with_hint(lflows, od, S_SWITCH_OUT_PRE_ACL,
                                 acl->priority + OVN_ACL_PRI_OFFSET,
                                 acl->match,
@@ -6809,6 +6813,23 @@ build_acl_log_related_flows(const struct ovn_datapath *od,
                             &acl->header_, lflow_ref);
 }
 
+/* In the case of stateless ACLs and load balancers, all traffic
+ * is passed to conntrack during egress pipeline. Conntrack will
+ * mark the packets as 'invalid,' but since stateless systems do
+ * not rely on conntrack state, these invalid packets will be
+ * discarded during processing on the hypervisor level.
+ */
+static bool
+stateless_inv_match(const struct ls_stateful_record *ls_stateful_rec)
+{
+    if (ls_stateful_rec->has_lb_vip
+            && ls_stateful_rec->has_stateless_acl) {
+        return false;
+    }
+
+    return true;
+}
+
 static void
 build_acls(const struct ls_stateful_record *ls_stateful_rec,
            const struct ovn_datapath *od,
@@ -6912,9 +6933,14 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
          *
          * This is enforced at a higher priority than ACLs can be defined. */
         ds_clear(&match);
-        ds_put_format(&match, "%s(ct.est && ct.rpl && %s == 1)",
-                      use_ct_inv_match ? "ct.inv || " : "",
-                      ct_blocked_match);
+
+        if (use_ct_inv_match && stateless_inv_match(ls_stateful_rec)) {
+            ds_put_cstr(&match, "ct.inv || (ct.est && ct.rpl && "
+                                "ct_mark.blocked == 1)");
+        } else {
+            ds_put_cstr(&match, "ct.est && ct.rpl && ct_mark.blocked == 1");
+        }
+
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_EVAL, UINT16_MAX - 3,
                       ds_cstr(&match), REGBIT_ACL_VERDICT_DROP " = 1; next;",
                       lflow_ref);
@@ -7207,8 +7233,7 @@ build_lb_rules_pre_stateful(struct lflow_table *lflows,
         }
         ds_put_format(action, "%s;", ct_lb_mark ? "ct_lb_mark" : "ct_lb");
 
-        ds_put_format(match, REGBIT_CONNTRACK_NAT" == 1 && %s.dst == %s",
-                      ip_match, lb_vip->vip_str);
+        ds_put_format(match, "%s.dst == %s", ip_match, lb_vip->vip_str);
         if (lb_vip->port_str) {
             ds_put_format(match, " && %s.dst == %s", proto, lb_vip->port_str);
         }
@@ -7217,6 +7242,30 @@ build_lb_rules_pre_stateful(struct lflow_table *lflows,
             lflows, lb_dps->nb_ls_map, ods_size(ls_datapaths),
             S_SWITCH_IN_PRE_STATEFUL, 120, ds_cstr(match), ds_cstr(action),
             &lb->nlb->header_, lb_dps->lflow_ref);
+
+        /* Pass all VIP traffic to the conntrack to support load balancers
+           in the case of stateless acl. */
+        const char *hairpin_snat_ip = smap_get(&lb->nlb->options,
+                                               "hairpin_snat_ip");
+        bool valid_snat_ip = false;
+        if (hairpin_snat_ip) {
+            ovs_be32 ip;
+            valid_snat_ip = ip_parse(hairpin_snat_ip, &ip);
+        }
+
+        if ((!lb_vip->port_str && valid_snat_ip) || lb_vip->port_str) {
+            ds_clear(action);
+            ds_clear(match);
+
+            ds_put_format(match, "%s && %s.dst == %s", lb->proto, ip_match,
+                          valid_snat_ip ? hairpin_snat_ip : lb_vip->vip_str);
+            ds_put_cstr(action, "ct_lb_mark;");
+
+            ovn_lflow_add_with_dp_group(
+                lflows, lb_dps->nb_ls_map, ods_size(ls_datapaths),
+                S_SWITCH_IN_PRE_STATEFUL, 105, ds_cstr(match), ds_cstr(action),
+                &lb->nlb->header_, lb_dps->lflow_ref);
+        }
     }
 }
 
