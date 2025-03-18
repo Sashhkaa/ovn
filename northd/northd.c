@@ -5894,7 +5894,11 @@ build_stateless_filter(const struct ovn_datapath *od,
                                 action,
                                 &acl->header_,
                                 lflow_ref);
-    } else {
+    } else if (!od->nbs->n_load_balancer){
+        /* For cases when we have statefull ACLs but no load
+           balancer configured on logical switch - we should
+           completely bypass conntrack on egress, otherwise
+           it is necessary to check the balanced traffic. */
         ovn_lflow_add_with_hint(lflows, od, S_SWITCH_OUT_PRE_ACL,
                                 acl->priority + OVN_ACL_PRI_OFFSET,
                                 acl->match,
@@ -7355,6 +7359,49 @@ choose_max_acl_tier(const struct ls_stateful_record *ls_stateful_rec,
     }
 }
 
+/* In the case of stateless ACLs and load balancers, all traffic
+ * is passed to conntrack during egress pipeline. Conntrack will
+ * mark the packets as 'invalid,' but since stateless systems do
+ * not rely on conntrack state, these invalid packets will be
+ * discarded during processing on the hypervisor level.
+ */
+static bool
+stateless_inv_match(const struct ls_stateful_record *ls_stateful_rec,
+                    const struct ovn_datapath *od,
+                    const struct ls_port_group_table *ls_port_groups)
+{
+    bool inv_match = true;
+
+    if (ls_stateful_rec->has_lb_vip) {
+        for (size_t i = 0; i < od->nbs->n_acls; i++) {
+            const struct nbrec_acl *acl = od->nbs->acls[i];
+            if (!strcmp(acl->action, "allow-stateless")) {
+                inv_match = false;
+                return inv_match;
+            }
+        }
+
+        const struct ls_port_group *ls_pg =
+            ls_port_group_table_find(ls_port_groups, od->nbs);
+        if (!ls_pg) {
+            return inv_match;
+        }
+
+        const struct ls_port_group_record *ls_pg_rec;
+            HMAP_FOR_EACH (ls_pg_rec, key_node, &ls_pg->nb_pgs) {
+            for (size_t i = 0; i < ls_pg_rec->nb_pg->n_acls; i++) {
+                const struct nbrec_acl *acl = ls_pg_rec->nb_pg->acls[i];
+                if (!strcmp(acl->action, "allow-stateless")) {
+                    inv_match = false;
+                    return inv_match;
+                }
+            }
+        }
+    }
+
+    return inv_match;
+}
+
 static void
 build_acls(const struct ls_stateful_record *ls_stateful_rec,
            const struct ovn_datapath *od,
@@ -7457,8 +7504,15 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
          *
          * This is enforced at a higher priority than ACLs can be defined. */
         ds_clear(&match);
-        ds_put_format(&match, "%s(ct.est && ct.rpl && ct_mark.blocked == 1)",
-                      use_ct_inv_match ? "ct.inv || " : "");
+
+        if (use_ct_inv_match && stateless_inv_match(ls_stateful_rec,
+                                                    od, ls_port_groups)) {
+            ds_put_cstr(&match, "ct.inv || (ct.est && ct.rpl && "
+                                "ct_mark.blocked == 1)");
+        } else {
+            ds_put_cstr(&match, "ct.est && ct.rpl && ct_mark.blocked == 1");
+        }
+
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_EVAL, UINT16_MAX - 3,
                       ds_cstr(&match), REGBIT_ACL_VERDICT_DROP " = 1; next;",
                       lflow_ref);
@@ -7752,8 +7806,7 @@ build_lb_rules_pre_stateful(struct lflow_table *lflows,
         }
         ds_put_cstr(action, "ct_lb_mark;");
 
-        ds_put_format(match, REGBIT_CONNTRACK_NAT" == 1 && %s.dst == %s",
-                      ip_match, lb_vip->vip_str);
+        ds_put_format(match, "%s.dst == %s", ip_match, lb_vip->vip_str);
         if (lb_vip->port_str) {
             ds_put_format(match, " && %s.dst == %s", lb->proto,
                           lb_vip->port_str);
@@ -7763,6 +7816,22 @@ build_lb_rules_pre_stateful(struct lflow_table *lflows,
             lflows, lb_dps->nb_ls_map, ods_size(ls_datapaths),
             S_SWITCH_IN_PRE_STATEFUL, 120, ds_cstr(match), ds_cstr(action),
             &lb->nlb->header_, lb_dps->lflow_ref);
+
+        /* Pass all VIP traffic to the conntrack to support
+           load balancers in the case of stateless acl. */
+        if (lb_vip->port_str && lb->proto) {
+            ds_clear(action);
+            ds_clear(match);
+
+            ds_put_cstr(action, "ct_lb_mark;");
+            ds_put_format(match, "%s && %s.dst == %s",
+                          lb->proto, ip_match, lb_vip->vip_str);
+
+            ovn_lflow_add_with_dp_group(
+                lflows, lb_dps->nb_ls_map, ods_size(ls_datapaths),
+                S_SWITCH_IN_PRE_STATEFUL, 115, ds_cstr(match), ds_cstr(action),
+                &lb->nlb->header_, lb_dps->lflow_ref);
+        }
     }
 }
 
