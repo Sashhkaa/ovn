@@ -496,7 +496,7 @@
       <ref table="Logical_Switch_Port" db="OVN_Northbound"/>.  Multicast, IPv6
       Neighbor Discovery and MLD traffic also skips stateful ACLs. For
       "allow-stateless" ACLs, a flow is added to bypass setting the hint for
-      connection tracker processing when there are stateful ACLs or LB rules;
+      connection tracker processing when there are stateful ACLs without LB;
       <code>REGBIT_ACL_STATELESS</code> is set for traffic matching stateless
       ACL flows.
     </p>
@@ -611,6 +611,14 @@
          to connection tracker based on a hint provided by the previous tables
          (with a match for <code>reg0[2] == 1</code>) by using the
          <code>ct_lb_mark;</code> action.
+      </li>
+
+      <li>
+         A priority-115 flow sends all packet directed to VIP to connection
+         tracker. Packets that match this rule would still be subject to
+         connection tracking via lower-priority rules in the absence of
+         stateless ACLs. However, with stateless ACLs in place, this rule
+         enables load balancing when the client balances traffic to itself.
       </li>
 
       <li>
@@ -759,7 +767,8 @@
       </li>
       <li>
         <code>allow-stateless</code> ACLs translate into logical flows that set
-        the allow bit and advance to the next table.
+        the allow bit and advance to the next table. In case of load balancers
+        with stateless ACLs in this table we allow ct.inv packets go further.
       </li>
       <li>
         <code>reject</code> ACLs translate into logical flows with that set the

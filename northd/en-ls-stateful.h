@@ -44,6 +44,7 @@ struct ls_stateful_record {
     size_t ls_index;
 
     bool has_stateful_acl;
+    bool has_stateless_acl;
     bool has_lb_vip;
     bool has_acls;
     uint64_t max_acl_tier;
