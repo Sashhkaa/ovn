@@ -42,6 +42,8 @@ struct ovn_lb_vip {
 
     bool empty_backend_rej;
     int address_family;
+
+    char *hairpin_snat_ip;
 };
 
 struct ovn_lb_backend {

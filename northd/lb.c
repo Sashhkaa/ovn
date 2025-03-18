@@ -256,6 +256,14 @@ ovn_lb_get_health_check(const struct nbrec_load_balancer *nbrec_lb,
     return NULL;
 }
 
+static bool
+validate_snap_ip_address(const char *snat_ip)
+{
+    ovs_be32 ip;
+
+    return ip_parse(snat_ip, &ip);
+}
+
 static void
 ovn_northd_lb_init(struct ovn_northd_lb *lb,
                    const struct nbrec_load_balancer *nbrec_lb)
@@ -338,7 +346,14 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
         if (lb_vip_nb->lb_health_check) {
             ovn_lb_vip_backends_health_check_init(lb, lb_vip, lb_vip_nb);
         }
-    }
+
+        const char *snat_ip = smap_get(&lb->nlb->options,
+                                       "hairpin_snat_ip");
+
+        if (snat_ip && validate_snap_ip_address(snat_ip)) {
+            lb_vip->hairpin_snat_ip = xstrdup(snat_ip);
+        }
+   }
 
     /* It's possible that parsing VIPs fails.  Update the lb->n_vips to the
      * correct value.

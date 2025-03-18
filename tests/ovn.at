@@ -26388,7 +26388,7 @@ OVS_WAIT_FOR_OUTPUT(
   [ovn-sbctl dump-flows > sbflows
    ovn-sbctl dump-flows sw0 | grep ct_lb_mark | grep priority=120 | sed 's/table=..//'], 0,
   [dnl
-  (ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(reg4 = 10.0.0.10; reg2[[0..15]] = 80; ct_lb_mark;)
+  (ls_in_pre_stateful ), priority=120  , match=(ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(reg4 = 10.0.0.10; reg2[[0..15]] = 80; ct_lb_mark;)
   (ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(reg4 = 10.0.0.10; reg2[[0..15]] = 80; ct_lb_mark(backends=10.0.0.3:80,20.0.0.3:80; hash_fields="ip_dst,ip_src,tcp_dst,tcp_src");)
 ])
 
@@ -26433,7 +26433,7 @@ AT_CHECK(
   [grep "ip4.dst == 10.0.0.10 && tcp.dst == 80" sbflows3 | grep priority=120 |\
    ovn_strip_lflows], [0], [dnl
   table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(drop;)
-  table=??(ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(reg4 = 10.0.0.10; reg2[[0..15]] = 80; ct_lb_mark;)
+  table=??(ls_in_pre_stateful ), priority=120  , match=(ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(reg4 = 10.0.0.10; reg2[[0..15]] = 80; ct_lb_mark;)
 ])
 
 AT_CAPTURE_FILE([sbflows4])
@@ -26594,7 +26594,7 @@ OVS_WAIT_FOR_OUTPUT(
   [ovn-sbctl dump-flows > sbflows
    ovn-sbctl dump-flows sw0 | grep ct_lb_mark | grep priority=120 | sed 's/table=..//'], 0,
   [dnl
-  (ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip6.dst == 2002::a && tcp.dst == 80), action=(xxreg1 = 2002::a; reg2[[0..15]] = 80; ct_lb_mark;)
+  (ls_in_pre_stateful ), priority=120  , match=(ip6.dst == 2002::a && tcp.dst == 80), action=(xxreg1 = 2002::a; reg2[[0..15]] = 80; ct_lb_mark;)
   (ls_in_lb           ), priority=120  , match=(ct.new && ip6.dst == 2002::a && tcp.dst == 80), action=(xxreg1 = 2002::a; reg2[[0..15]] = 80; ct_lb_mark(backends=[[2001::3]]:80,[[2002::3]]:80; hash_fields="ipv6_dst,ipv6_src,tcp_dst,tcp_src");)
 ])
 
@@ -26638,7 +26638,7 @@ AT_CHECK(
   [grep "ip6.dst == 2002::a && tcp.dst == 80" sbflows3 | grep priority=120 |\
    ovn_strip_lflows], [0], [dnl
   table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip6.dst == 2002::a && tcp.dst == 80), action=(drop;)
-  table=??(ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip6.dst == 2002::a && tcp.dst == 80), action=(xxreg1 = 2002::a; reg2[[0..15]] = 80; ct_lb_mark;)
+  table=??(ls_in_pre_stateful ), priority=120  , match=(ip6.dst == 2002::a && tcp.dst == 80), action=(xxreg1 = 2002::a; reg2[[0..15]] = 80; ct_lb_mark;)
 ])
 
 AT_CAPTURE_FILE([sbflows4])

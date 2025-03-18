@@ -304,6 +304,7 @@ ovn_lb_vip_destroy(struct ovn_lb_vip *vip)
 {
     free(vip->vip_str);
     free(vip->port_str);
+    free(vip->hairpin_snat_ip);
     ovn_lb_backends_destroy(vip);
 }
 
