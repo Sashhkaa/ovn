@@ -36,6 +36,15 @@ Provides: openvswitch-ovn-common = %{?epoch:%{epoch}:}%{version}-%{release}
 %define ovsver @OVSVERSION@
 %define ovsdir openvswitch-%{ovsver}
 
+%global c2_dist_raw %(%{__grep} -oP "release \\K[0-9]+\\.[0-9]+" /etc/system-release)
+%global c2_dist %(eval echo %c2_dist_raw | tr -d ".")
+
+%if 0%{?c2_dist} == 75
+%bcond_with jemalloc
+%else
+%bcond_without jemalloc
+%endif
+
 # to skip running checks, pass --without check
 %bcond_without check
 
@@ -63,6 +72,9 @@ BuildRequires: libcap-ng libcap-ng-devel
 BuildRequires: tcpdump
 %endif
 BuildRequires: unbound unbound-devel
+%if %{with jemalloc}
+BuildRequires: jemalloc-devel
+%endif
 
 Requires: openssl hostname iproute module-init-tools openvswitch
 Requires: python3-openvswitch
@@ -138,6 +150,9 @@ cd openvswitch-%{ovsver}
 %endif
         --enable-ssl \
         --with-pkidir=%{_sharedstatedir}/openvswitch/pki \
+%if %{with jemalloc}
+        LIBS=-ljemalloc \
+%endif
         PYTHON3=%{__python3}
 
 make %{?_smp_mflags}
