@@ -69,6 +69,13 @@ struct chassis_features {
     bool mac_binding_timestamp;
 };
 
+/* List of routing and routing-related protocols which
+ * OVN is capable of redirecting from LRP to specific LSP. */
+enum redirected_routing_protcol_flag_type {
+    REDIRECT_BGP = (1 << 0),
+    REDIRECT_BFD = (1 << 1),
+};
+
 struct northd_data {
     /* Global state for 'en-northd'. */
     struct hmap datapaths;
