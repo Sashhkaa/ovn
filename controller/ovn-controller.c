@@ -4300,7 +4300,9 @@ main(int argc, char *argv[])
                                    sbrec_meter_table_get(ovnsb_idl_loop.idl),
                                    ofctrl_seqno_get_req_cfg(),
                                    engine_node_changed(&en_lflow_output),
-                                   engine_node_changed(&en_pflow_output));
+                                   engine_node_changed(&en_pflow_output),
+                                   ovnsb_cond_seqno
+                                   == ovnsb_expected_cond_seqno);
                         stopwatch_stop(OFCTRL_PUT_STOPWATCH_NAME, time_msec());
                     }
                     stopwatch_start(OFCTRL_SEQNO_RUN_STOPWATCH_NAME,

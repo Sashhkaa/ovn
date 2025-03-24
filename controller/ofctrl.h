@@ -60,7 +60,8 @@ void ofctrl_put(struct ovn_desired_flow_table *lflow_table,
                 const struct sbrec_meter_table *,
                 uint64_t nb_cfg,
                 bool lflow_changed,
-                bool pflow_changed);
+                bool pflow_changed,
+                bool monitor_cond_complete);
 bool ofctrl_has_backlog(void);
 void ofctrl_wait(void);
 void ofctrl_destroy(void);
