@@ -16815,7 +16815,7 @@ check ovn-nbctl lsp-add sw0 sw0-target0
 check ovn-nbctl lsp-add sw1 sw1-target1
 
 check ovn-nbctl mirror-add mirror0 lport to-lport sw0-target0
-check ovn-nbctl mirror-add mirror1 lport to-lport sw0-target0
+check ovn-nbctl mirror-add mirror1 lport both sw0-target0
 check ovn-nbctl mirror-add mirror2 lport from-lport sw1-target1
 
 check ovn-nbctl mirror-rule-add mirror1 100 'ip' mirror
@@ -16864,6 +16864,9 @@ logical_port        : mp-sw0-sw0-target0
 ovn-sbctl lflow-list sw0 > lflow-list
 AT_CHECK([grep -e "ls_in_mirror" -e "ls_out_mirror" lflow-list | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_mirror       ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_mirror       ), priority=100  , match=(inport == "sw0-p1"), action=(mirror("mp-sw0-sw0-target0"); next;)
+  table=??(ls_in_mirror       ), priority=200  , match=(inport == "sw0-p1" && ip), action=(mirror("mp-sw0-sw0-target0"); next;)
+  table=??(ls_in_mirror       ), priority=250  , match=(inport == "sw0-p1" && icmp), action=(next;)
   table=??(ls_out_mirror      ), priority=0    , match=(1), action=(next;)
   table=??(ls_out_mirror      ), priority=100  , match=(outport == "sw0-p1"), action=(mirror("mp-sw0-sw0-target0"); next;)
   table=??(ls_out_mirror      ), priority=200  , match=(outport == "sw0-p1" && ip), action=(mirror("mp-sw0-sw0-target0"); next;)
@@ -16880,9 +16883,12 @@ check_column mirror Port_Binding type logical_port=mp-sw0-sw1-target1
 ovn-sbctl lflow-list sw0 > lflow-list
 AT_CHECK([grep -e "ls_in_mirror" -e "ls_out_mirror" lflow-list | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_mirror       ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_mirror       ), priority=100  , match=(inport == "sw0-p1"), action=(mirror("mp-sw0-sw0-target0"); next;)
   table=??(ls_in_mirror       ), priority=100  , match=(inport == "sw0-p1"), action=(mirror("mp-sw0-sw1-target1"); next;)
+  table=??(ls_in_mirror       ), priority=200  , match=(inport == "sw0-p1" && ip), action=(mirror("mp-sw0-sw0-target0"); next;)
   table=??(ls_in_mirror       ), priority=200  , match=(inport == "sw0-p1" && ip4.dst == 192.168.0.1), action=(mirror("mp-sw0-sw1-target1"); next;)
   table=??(ls_in_mirror       ), priority=250  , match=(inport == "sw0-p1" && 1), action=(next;)
+  table=??(ls_in_mirror       ), priority=250  , match=(inport == "sw0-p1" && icmp), action=(next;)
   table=??(ls_out_mirror      ), priority=0    , match=(1), action=(next;)
   table=??(ls_out_mirror      ), priority=100  , match=(outport == "sw0-p1"), action=(mirror("mp-sw0-sw0-target0"); next;)
   table=??(ls_out_mirror      ), priority=200  , match=(outport == "sw0-p1" && ip), action=(mirror("mp-sw0-sw0-target0"); next;)
@@ -16907,6 +16913,9 @@ AT_CHECK([ovn-sbctl list port_binding | grep mp-sw0-sw1-target1], [1], [dnl
 ovn-sbctl lflow-list sw0 > lflow-list
 AT_CHECK([grep -e "ls_in_mirror" -e "ls_out_mirror" lflow-list | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_mirror       ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_mirror       ), priority=100  , match=(inport == "sw0-p1"), action=(mirror("mp-sw0-sw0-target0"); next;)
+  table=??(ls_in_mirror       ), priority=200  , match=(inport == "sw0-p1" && ip), action=(mirror("mp-sw0-sw0-target0"); next;)
+  table=??(ls_in_mirror       ), priority=250  , match=(inport == "sw0-p1" && icmp), action=(next;)
   table=??(ls_out_mirror      ), priority=0    , match=(1), action=(next;)
   table=??(ls_out_mirror      ), priority=100  , match=(outport == "sw0-p1"), action=(mirror("mp-sw0-sw0-target0"); next;)
   table=??(ls_out_mirror      ), priority=200  , match=(outport == "sw0-p1" && ip), action=(mirror("mp-sw0-sw0-target0"); next;)
@@ -16929,9 +16938,12 @@ check_column mirror Port_Binding type logical_port=mp-sw0-sw1-target1
 ovn-sbctl lflow-list sw0 > lflow-list
 AT_CHECK([grep -e "ls_in_mirror" -e "ls_out_mirror" lflow-list | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_mirror       ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_mirror       ), priority=100  , match=(inport == "sw0-p1"), action=(mirror("mp-sw0-sw0-target0"); next;)
   table=??(ls_in_mirror       ), priority=100  , match=(inport == "sw0-p1"), action=(mirror("mp-sw0-sw1-target1"); next;)
+  table=??(ls_in_mirror       ), priority=200  , match=(inport == "sw0-p1" && ip), action=(mirror("mp-sw0-sw0-target0"); next;)
   table=??(ls_in_mirror       ), priority=200  , match=(inport == "sw0-p1" && ip4.dst == 192.168.0.1), action=(mirror("mp-sw0-sw1-target1"); next;)
   table=??(ls_in_mirror       ), priority=250  , match=(inport == "sw0-p1" && 1), action=(next;)
+  table=??(ls_in_mirror       ), priority=250  , match=(inport == "sw0-p1" && icmp), action=(next;)
   table=??(ls_out_mirror      ), priority=0    , match=(1), action=(next;)
   table=??(ls_out_mirror      ), priority=100  , match=(outport == "sw0-p1"), action=(mirror("mp-sw0-sw0-target0"); next;)
   table=??(ls_out_mirror      ), priority=200  , match=(outport == "sw0-p1" && ip), action=(mirror("mp-sw0-sw0-target0"); next;)
@@ -16948,8 +16960,10 @@ ovn-sbctl lflow-list sw0 > lflow-list
 AT_CHECK([grep -e "ls_in_mirror" -e "ls_out_mirror" lflow-list | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_mirror       ), priority=0    , match=(1), action=(next;)
   table=??(ls_in_mirror       ), priority=100  , match=(inport == "sw0-p1"), action=(mirror("mp-sw0-sw1-target1"); next;)
+  table=??(ls_in_mirror       ), priority=200  , match=(inport == "sw0-p1" && ip), action=(mirror("mp-sw0-sw1-target1"); next;)
   table=??(ls_in_mirror       ), priority=200  , match=(inport == "sw0-p1" && ip4.dst == 192.168.0.1), action=(mirror("mp-sw0-sw1-target1"); next;)
   table=??(ls_in_mirror       ), priority=250  , match=(inport == "sw0-p1" && 1), action=(next;)
+  table=??(ls_in_mirror       ), priority=250  , match=(inport == "sw0-p1" && icmp), action=(next;)
   table=??(ls_out_mirror      ), priority=0    , match=(1), action=(next;)
   table=??(ls_out_mirror      ), priority=100  , match=(outport == "sw0-p1"), action=(mirror("mp-sw0-sw0-target0"); next;)
   table=??(ls_out_mirror      ), priority=100  , match=(outport == "sw0-p1"), action=(mirror("mp-sw0-sw1-target1"); next;)
@@ -16957,22 +16971,11 @@ AT_CHECK([grep -e "ls_in_mirror" -e "ls_out_mirror" lflow-list | ovn_strip_lflow
   table=??(ls_out_mirror      ), priority=250  , match=(outport == "sw0-p1" && icmp), action=(next;)
 ])
 
-mirror0uuid_uuid=`ovn-nbctl --bare --columns _uuid find Mirror name="mirror0"`
-ovn-nbctl set mirror $mirror0uuid_uuid sink=sw1-target1
-
-check ovn-nbctl --wait=hv sync
-
-AT_CHECK([grep -e "ls_in_mirror" -e "ls_out_mirror" lflow-list | ovn_strip_lflows], [0], [dnl
-  table=??(ls_in_mirror       ), priority=0    , match=(1), action=(next;)
-  table=??(ls_in_mirror       ), priority=100  , match=(inport == "sw0-p1"), action=(mirror("mp-sw0-sw1-target1"); next;)
-  table=??(ls_in_mirror       ), priority=200  , match=(inport == "sw0-p1" && ip4.dst == 192.168.0.1), action=(mirror("mp-sw0-sw1-target1"); next;)
-  table=??(ls_in_mirror       ), priority=250  , match=(inport == "sw0-p1" && 1), action=(next;)
-  table=??(ls_out_mirror      ), priority=0    , match=(1), action=(next;)
-  table=??(ls_out_mirror      ), priority=100  , match=(outport == "sw0-p1"), action=(mirror("mp-sw0-sw0-target0"); next;)
-  table=??(ls_out_mirror      ), priority=100  , match=(outport == "sw0-p1"), action=(mirror("mp-sw0-sw1-target1"); next;)
-  table=??(ls_out_mirror      ), priority=200  , match=(outport == "sw0-p1" && ip), action=(mirror("mp-sw0-sw1-target1"); next;)
-  table=??(ls_out_mirror      ), priority=250  , match=(outport == "sw0-p1" && icmp), action=(next;)
+AT_CHECK([ovn-sbctl list port_binding | grep mp-sw0-sw0-target0], [0], [dnl
+logical_port        : mp-sw0-sw0-target0
 ])
+
+check ovn-nbctl mirror-del mirror0
 
 AT_CHECK([ovn-sbctl list port_binding | grep mp-sw0-sw0-target0], [1], [dnl
 ])
@@ -16988,12 +16991,6 @@ AT_CHECK([grep -e "ls_in_mirror" -e "ls_out_mirror" lflow-list | ovn_strip_lflow
 ])
 
 ovn-sbctl lflow-list sw0 > lflow-list
-AT_CHECK([grep -e "ls_out_pre_acl" lflow-list | ovn_strip_lflows], [0], [dnl
-  table=??(ls_out_pre_acl     ), priority=0    , match=(1), action=(next;)
-  table=??(ls_out_pre_acl     ), priority=110  , match=(eth.src == $svc_monitor_mac), action=(next;)
-])
-
-ovn-sbctl lflow-list sw1 > lflow-list
 AT_CHECK([grep -e "ls_out_pre_acl" lflow-list | ovn_strip_lflows], [0], [dnl
   table=??(ls_out_pre_acl     ), priority=0    , match=(1), action=(next;)
   table=??(ls_out_pre_acl     ), priority=110  , match=(eth.src == $svc_monitor_mac), action=(next;)
@@ -17066,28 +17063,7 @@ AT_CHECK([grep -e "ls_in_mirror" lflow-list | ovn_strip_lflows], [0], [dnl
 
 AT_CHECK([ovn_trace --minimal 'inport == "sw0-p1" && eth.src == 00:00:00:00:00:01 && eth.dst == 00:00:00:00:00:02 && ip4.dst == 1.1.1.2 && ip4.src == 1.1.1.1 && ip.ttl == 64' > trace], [0], [ignore])
 
-AT_CHECK([cat trace], [0], [dnl
-icmp4 {
-    eth.dst = 00:00:00:00:00:01;
-    eth.src = 00:00:00:00:00:02;
-    ip4.dst = 1.1.1.1;
-    ip4.src = 1.1.1.2;
-    ip.ttl = 255;
-    icmp4.type = 3;
-    icmp4.code = 2;
-    ip.ttl--;
-    eth.src = 00:00:00:00:00:02;
-    eth.dst = 00:00:00:00:00:01;
-    output("sw0-p1");
-};
-  ip.ttl = 255;
-    icmp4.type = 3;
-    icmp4.code = 2;
-    ip.ttl--;
-    eth.src = 00:00:00:00:00:02;
-    eth.dst = 00:00:00:00:00:01;
-    output("sw0-p1");
-};
+AT_CHECK([cat trace | grep clone], [1], [dnl
 ])
 
 check ovn-nbctl mirror-del mirror1

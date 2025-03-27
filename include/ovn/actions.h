@@ -543,7 +543,8 @@ struct ovnact_mirror {
     struct ovnact ovnact;
 
     /* Argument. */
-    char *port; /* Mirror serving port for output action. */
+    char *port;     /* Mirror serving port for output
+                       action. */
 };
 
 #define OVN_FIELD_NOTE_MAGIC "ovn"

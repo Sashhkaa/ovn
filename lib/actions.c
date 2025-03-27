@@ -5600,7 +5600,7 @@ encode_MIRROR(const struct ovnact_mirror *mirror,
        traffic will not be mirrored.
 
        We have no problem with zeroing in_port: it will be no recirculations
-       in packets proccesing on hostA, because we skip conntrack for traffic
+       for packet proccesing on hostA, because we skip conntrack for traffic
        directed to the target port.
     */
     put_load(ofp_to_u16(OFPP_NONE), MFF_IN_PORT, 0, 16, ofpacts);

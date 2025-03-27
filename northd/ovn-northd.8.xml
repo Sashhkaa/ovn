@@ -2308,8 +2308,25 @@ output;
       </li>
     </ul>
 
+    <h3>Egress Table 0: Lookup MAC address learning table</h3>
+    <p>
+      This is similar to ingress table <code>Lookup MAC address learning table
+      </code> with the difference that MAC address learning lookup is only
+      happening for ports with type <code>remote</code> whose port security is
+      disabled and 'unknown' address set.  This stage facilitates MAC learning
+      on a transit switch connecting multiple availability zones.
+    </p>
 
-    <h3>Egress Table 0: <code>to-lport</code> Pre-ACLs</h3>
+    <h3>Egress Table 1: Learn MAC of 'unknown' ports.</h3>
+    <p>
+      This is similar to ingress table <code>Learn MAC of 'unknown' ports
+      </code> with the difference that MAC address learning is only happening
+      for ports with type <code>remote</code> whose port security is disabled
+      and 'unknown' address set.  This stage facilitates MAC learning on a
+      transit switch connecting multiple availability zones.
+    </p>
+
+    <h3>Egress Table 2: <code>to-lport</code> Pre-ACLs</h3>
 
     <p>
       This is similar to ingress table <code>Pre-ACLs</code> except for
@@ -2474,14 +2491,7 @@ output;
       This is similar to ingress table <code>ACL action</code>.
     </p>
 
-    <h3>Egress Table 9: <code>to-lport</code> QoS</h3>
-
-    <p>
-      This is similar to ingress table <code>QoS</code> except
-      they apply to <code>to-lport</code> QoS rules.
-    </p>
-
-    <h3>Egress Table 10: Mirror </h3>
+    <h3>Egress Table 9: Mirror </h3>
 
     <p>
       Overlay remote mirror table contains the following
@@ -2491,7 +2501,7 @@ output;
     <ul>
       <li>
         For each logical switch port with an attached mirror, a logical flow
-        with a priority of 100 is added. This flow matches all incoming packets
+        with a priority of 100 is added. This flow matches all outcoming packets
         to the attached port, clones them, and forwards the cloned packets to
         the mirror target port.
       </li>
@@ -2508,6 +2518,13 @@ output;
         target port.
       </li>
     </ul>
+
+    <h3>Egress Table 10: <code>to-lport</code> QoS</h3>
+
+    <p>
+      This is similar to ingress table <code>QoS</code> except
+      they apply to <code>to-lport</code> QoS rules.
+    </p>
 
     <h3>Egress Table 11: Stateful</h3>
 
