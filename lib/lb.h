@@ -54,6 +54,7 @@ struct ovn_lb_backend {
     char *port_str;      /* Actual port string representation. To be used
                           * in ovn-northd.
                           */
+    bool local_backend;  /* Set to true if port locates in our ovn instalation. */
 };
 
 char *ovn_lb_vip_init(struct ovn_lb_vip *lb_vip, const char *lb_key,

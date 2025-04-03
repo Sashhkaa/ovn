@@ -54,6 +54,13 @@ static unixctl_cb_func ovn_ic_resume;
 static unixctl_cb_func ovn_ic_is_paused;
 static unixctl_cb_func ovn_ic_status;
 
+/*
+
+    че нужно сделать при синхронизации сервис мониторов:
+        в новой базе (где порты реально находятся) выставлять
+                      им lockal_backand = true
+    нужно выставлть chassis_name
+*/
 struct ic_context {
     struct ovsdb_idl *ovnnb_idl;
     struct ovsdb_idl *ovnsb_idl;
@@ -68,6 +75,7 @@ struct ic_context {
     struct ovsdb_idl_index *nbrec_port_by_name;
     struct ovsdb_idl_index *sbrec_chassis_by_name;
     struct ovsdb_idl_index *sbrec_port_binding_by_name;
+    /* TODO: add service monitor. */
     struct ovsdb_idl_index *icnbrec_transit_switch_by_name;
     struct ovsdb_idl_index *icsbrec_port_binding_by_az;
     struct ovsdb_idl_index *icsbrec_port_binding_by_ts;
@@ -404,6 +412,10 @@ sync_sb_gw_to_isb(struct ic_context *ctx,
     free(isb_encaps);
 }
 
+/* сделать вероятно че то похожее:
+    типа у нас в южною базу отдельной инсталяции попадют чезисы
+    другой инсталяции, но им выставляется other_config: {is-remote="true"}.
+*/
 static void
 gateway_run(struct ic_context *ctx, const struct icsbrec_availability_zone *az)
 {
