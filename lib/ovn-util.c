@@ -1399,3 +1399,10 @@ lport_lookup_by_name(struct ovsdb_idl_index *sbrec_port_binding_by_name,
 
     return retval;
 }
+
+char *
+ovn_mirror_port_name(const char *datapath_name,
+                     const char *port_name)
+{
+    return xasprintf("mp-%s-%s", datapath_name, port_name);
+}
