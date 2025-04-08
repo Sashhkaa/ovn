@@ -4293,7 +4293,7 @@ echo $response >> 3.expected
 wait_row_count MAC_Binding 0 ip="192.168.1.200" mac='"f0:00:00:00:00:12"'
 
 sha=0200000000ff
-tha=ffffffffffff
+tha=0200000000ff
 spa=`ip_to_hex 192 168 1 200`
 tpa=$spa
 garp=ffffffffffff${sha}08060001080006040002${sha}${spa}${tha}${tpa}
@@ -4305,12 +4305,24 @@ wait_row_count MAC_Binding 2 ip="192.168.1.200" mac='"02:00:00:00:00:ff"'
 
 # Send same GARP with changed SHA and ensure MAC_Binding was updated.
 sha=0200000000ee
+tha=0200000000ee
 garp=ffffffffffff${sha}08060001080006040002${sha}${spa}${tha}${tpa}
 as hv3 ovs-appctl netdev-dummy/receive vif3 $garp
 echo $garp >> 1.expected
 echo $garp >> 2.expected
 
 wait_row_count MAC_Binding 2 ip="192.168.1.200" mac='"02:00:00:00:00:ee"'
+
+# Send GARP in request form with changed SHA and ensure MAC_Binding was updated.
+sha=0200000000cc
+tha=000000000000
+garp=ffffffffffff${sha}08060001080006040001${sha}${spa}${tha}${tpa}
+as hv3 ovs-appctl netdev-dummy/receive vif3 $garp
+echo $garp >> 1.expected
+echo $garp >> 2.expected
+
+wait_row_count MAC_Binding 2 ip="192.168.1.200" mac='"02:00:00:00:00:cc"'
+
 
 # Remove local ports on hv1 and check that ARP logic is stil working. -->
 check as hv1 ovs-vsctl remove interface vif1 external_ids iface-id
@@ -33299,3 +33311,151 @@ AT_CHECK([test -z "`grep disconnecting hv1/ovs-vswitchd.log`"])
 OVN_CLEANUP([hv1])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([GARP delivery: gw and extenal ports])
+#AT_KEYWORDS([vtep])
+ovn_start
+#
+# Configure initial environment
+# LR1: down_link <-> LS1: up_link
+# set lr_down: gateway port (chassis redirect) bound to hv1
+# LS1: down_vif1 - vif port bound to hv1
+#      down_vif2 - vif port bound to hv2
+#      down_ext - outher port will be iteratred as localnet, l2gateway
+#
+# Test: throw ARP annonce request from vitrual ports (down_vif1, down_vif2)
+#       ensure mac_binding is always updated.
+#       (Fixing the issue: mac_binding is only updated for packets came from
+#        down_link's resident chassis)
+#       throw ARP annonce request from from localnet.
+#       ensure mac_binding is updated only if localnet bound to same hv as l3dgw
+#
+
+ovn-nbctl lr-add lr1
+ovn-nbctl lrp-add lr1 down_link f0:00:00:00:00:f1 192.168.1.1/24
+
+ovn-nbctl ls-add ls1
+ovn-nbctl lsp-add ls1 up_link
+ovn-nbctl lsp-add ls1 down_vif1
+ovn-nbctl lsp-add ls1 down_vif2
+ovn-nbctl lsp-add ls1 down_ext
+
+ovn-nbctl set Logical_Switch_Port up_link \
+    type=router \
+    options:router-port=down_link \
+    addresses=router
+
+ovn-nbctl lsp-set-addresses down_vif1 'f0:00:00:00:00:01 192.168.1.101'
+ovn-nbctl lsp-set-addresses down_vif2 'f0:00:00:00:00:02 192.168.1.102'
+
+ovn-nbctl lsp-set-type down_ext localnet
+ovn-nbctl lsp-set-options down_ext network_name=physnet1
+ovn-nbctl lrp-set-gateway-chassis down_link hv1
+
+net_add n1               # Network to connect hv1, hv2
+
+# Create hypervisor hv1 connected to n1
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+ovs-vsctl add-port br-int vif1 -- set Interface vif1 external-ids:iface-id=down_vif1 options:tx_pcap=hv1/vif1-tx.pcap options:rxq_pcap=hv1/vif1-rx.pcap ofport-request=1
+
+# Create hypervisor hv2 connected to n1, add localnet here
+sim_add hv2
+as hv2
+ovs-vsctl add-br br-phys
+ovs-vsctl add-br br-eth0
+ovn_attach n1 br-phys 192.168.0.2
+ovs-vsctl add-port br-int vif2 -- set Interface vif2 external-ids:iface-id=down_vif2 options:tx_pcap=hv2/vif2-tx.pcap options:rxq_pcap=hv2/vif2-rx.pcap ofport-request=1
+ovs-vsctl set Open_vSwitch . external_ids:ovn-bridge-mappings="physnet1:br-eth0"
+ovs-vsctl add-port br-eth0 vif_ext -- set Interface vif_ext options:tx_pcap=hv2/vif_ext-tx.pcap options:rxq_pcap=hv2/vif_ext-rx.pcap
+
+# Pre-populate the hypervisors' ARP tables so that we don't lose any
+# packets for ARP resolution (native tunneling doesn't queue packets
+# for ARP resolution).
+OVN_POPULATE_ARP
+
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+
+#
+# Annonce 192.168.1.222 from localnet in hv2
+# result: drop, hv2 is not gateway chassis for down_link
+#
+sha=0200000000ee
+tha=000000000000
+spa=`ip_to_hex 192 168 1 222`
+tpa=$spa
+garp=ffffffffffff${sha}08060001080006040001${sha}${spa}${tha}${tpa}
+as hv2 ovs-appctl netdev-dummy/receive vif_ext $garp
+
+#
+# Make hv2 gateway chassis
+# Annonce 192.168.1.223 from localnet in hv2
+# result: ok, hv2 is gateway chassis for down_link
+#
+ovn-nbctl lrp-set-gateway-chassis down_link hv2
+sleep 2
+
+sha=0200000000ee
+tha=000000000000
+spa=`ip_to_hex 192 168 1 223`
+tpa=$spa
+garp=ffffffffffff${sha}08060001080006040001${sha}${spa}${tha}${tpa}
+as hv2 ovs-appctl netdev-dummy/receive vif_ext $garp
+
+#
+# Annonce 192.168.1.111, 112 from vif1, vif2 in hv1, hv2
+# result: ok, vif1, vif2 are virtual ports, restrictions are not applied.
+#
+sha=f00000000001
+tha=ffffffffffff
+spa=`ip_to_hex 192 168 1 111`
+tpa=000000000000
+garp=ffffffffffff${sha}08060001080006040001${sha}${spa}${tha}${tpa}
+as hv1 ovs-appctl netdev-dummy/receive vif1 $garp
+
+sha=f00000000002
+tha=ffffffffffff
+spa=`ip_to_hex 192 168 1 112`
+tpa=000000000000
+garp=ffffffffffff${sha}08060001080006040001${sha}${spa}${tha}${tpa}
+as hv2 ovs-appctl netdev-dummy/receive vif2 $garp
+
+#
+# Set down_ext type to l2gateway
+# Annonce 192.168.1.113, 114 from vif1, vif2 in hv1, hv2
+# result: ok, vif1, vif2 are virtual ports, restrictions are not applied.
+#
+ovn-nbctl lsp-set-type down_ext l2gateway
+sleep 2
+
+sha=f00000000001
+tha=ffffffffffff
+spa=`ip_to_hex 192 168 1 113`
+tpa=000000000000
+garp=ffffffffffff${sha}08060001080006040001${sha}${spa}${tha}${tpa}
+as hv1 ovs-appctl netdev-dummy/receive vif1 $garp
+
+sha=f00000000002
+tha=ffffffffffff
+spa=`ip_to_hex 192 168 1 114`
+tpa=000000000000
+garp=ffffffffffff${sha}08060001080006040001${sha}${spa}${tha}${tpa}
+as hv2 ovs-appctl netdev-dummy/receive vif2 $garp
+
+wait_row_count MAC_Binding 1 ip="192.168.1.111" mac='"f0:00:00:00:00:01"'
+wait_row_count MAC_Binding 1 ip="192.168.1.113" mac='"f0:00:00:00:00:01"'
+wait_row_count MAC_Binding 1 ip="192.168.1.112" mac='"f0:00:00:00:00:02"'
+wait_row_count MAC_Binding 1 ip="192.168.1.114" mac='"f0:00:00:00:00:02"'
+wait_row_count MAC_Binding 1 ip="192.168.1.223" mac='"02:00:00:00:00:ee"'
+wait_row_count MAC_Binding 0 ip="192.168.1.222" mac='"02:00:00:00:00:ee"'
+
+# Gracefully terminate daemons
+OVN_CLEANUP([hv1],[hv2])
+
+AT_CLEANUP
+])
+

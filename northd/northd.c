@@ -215,6 +215,7 @@ enum ovn_stage {
 #define REGBIT_ACL_LABEL          "reg0[13]"
 #define REGBIT_FROM_RAMP          "reg0[14]"
 #define REGBIT_PORT_SEC_DROP      "reg0[15]"
+#define REGBIT_EXT_ARP            "reg0[16]"
 
 #define REG_ORIG_DIP_IPV4         "reg1"
 #define REG_ORIG_DIP_IPV6         "xxreg1"
@@ -1730,6 +1731,12 @@ static bool
 lsp_is_vtep(const struct nbrec_logical_switch_port *nbsp)
 {
     return !strcmp(nbsp->type, "vtep");
+}
+
+static bool
+lsp_is_l2gw(const struct nbrec_logical_switch_port *nbsp)
+{
+    return !strcmp(nbsp->type, "l2gateway");
 }
 
 static bool
@@ -7823,6 +7830,118 @@ build_drop_arp_nd_flows_for_unbound_router_ports(struct ovn_port *op,
     ds_destroy(&match);
 }
 
+
+/*
+ * Check od, assumed lswitch, for router connections that
+ * requires chassis residence.
+ */
+static bool
+has_residents(struct ovn_datapath *od)
+{
+    for (int rpi = 0; rpi < od->n_router_ports; rpi++) {
+        struct ovn_port *op_r = od->router_ports[rpi]->peer;
+
+        if (is_l3dgw_port(op_r)) {
+            return true;
+        }
+
+        for (int ni = 0; ni < op_r->od->nbr->n_nat; ni++) {
+            struct nbrec_nat *nat = op_r->od->nbr->nat[ni];
+
+            /* Determine whether this NAT rule satisfies the
+             * conditions for distributed NAT processing.
+             */
+            if (is_nat_gateway_port(nat, op_r)
+                && op_r->od->n_l3dgw_ports
+                && strcmp(nat->type, "dnat_and_snat") == 0
+                && nat->logical_port
+                && nat->external_mac) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+
+/*
+ * Create ARP filtering flow for od, assumed logical switch,
+ * for the following condition:
+ * Given lswitch has both localnet/l2gateway ports and
+ * router connection ports that requires chassis residence.
+ * ARP requests coming from localnet/l2gateway ports
+ * allowed for processing on resident chassis only.
+ */
+static void
+build_lswitch_arp_chassis_resident(struct hmap *lflows,
+                                   struct ovn_datapath *od)
+{
+    if (!has_residents(od)) {
+        return;
+    }
+
+    struct ds match;
+    ds_init(&match);
+
+    bool has_outher_ports = false;
+
+    for (int i = 0; i < od->nbs->n_ports; i++) {
+        struct nbrec_logical_switch_port *nbsp = od->nbs->ports[i];
+
+        if (lsp_is_localnet(nbsp) || lsp_is_l2gw(nbsp)) {
+            ds_clear(&match);
+            ds_put_format(&match, "arp && inport == \"%s\"", nbsp->name);
+            ovn_lflow_add(lflows, od, S_SWITCH_IN_CHECK_PORT_SEC, 75,
+                          ds_cstr(&match), REGBIT_EXT_ARP" = 1; next;");
+            has_outher_ports = true;
+        }
+    }
+
+    if (!has_outher_ports) {
+        return;
+    }
+
+    for (int rpi = 0; rpi < od->n_router_ports; rpi++) {
+        struct ovn_port *op_r = od->router_ports[rpi]->peer;
+
+        if (is_l3dgw_port(op_r)) {
+            ds_clear(&match);
+            ds_put_format(&match,
+                          REGBIT_EXT_ARP" == 1 && is_chassis_resident(%s)",
+                          op_r->cr_port->json_key);
+            ovn_lflow_add(lflows, od, S_SWITCH_IN_APPLY_PORT_SEC, 75,
+                          ds_cstr(&match), "next;");
+        }
+
+        for (int ni = 0; ni < op_r->od->nbr->n_nat; ni++) {
+            struct nbrec_nat *nat = op_r->od->nbr->nat[ni];
+
+            /* Determine whether this NAT rule satisfies the
+             * conditions for distributed NAT processing.
+             */
+            if (is_nat_gateway_port(nat, op_r)
+                && op_r->od->n_l3dgw_ports
+                && strcmp(nat->type, "dnat_and_snat") == 0
+                && nat->logical_port
+                && nat->external_mac) {
+                ds_clear(&match);
+                ds_put_format(&match,
+                              REGBIT_EXT_ARP
+                              " == 1 && is_chassis_resident(\"%s\")",
+                              nat->logical_port);
+                ovn_lflow_add(lflows, od, S_SWITCH_IN_APPLY_PORT_SEC, 75,
+                              ds_cstr(&match), "next;");
+            }
+        }
+    }
+
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_APPLY_PORT_SEC, 70,
+                  REGBIT_EXT_ARP" == 1", "drop;");
+    ds_destroy(&match);
+}
+
+
 static bool
 is_vlan_transparent(const struct ovn_datapath *od)
 {
@@ -7910,6 +8029,8 @@ build_lswitch_lflows_admission_control(struct ovn_datapath *od,
                       REGBIT_PORT_SEC_DROP" == 1", "drop;");
 
         ovn_lflow_add(lflows, od, S_SWITCH_IN_APPLY_PORT_SEC, 0, "1", "next;");
+
+        build_lswitch_arp_chassis_resident(lflows, od);
     }
 }
 
@@ -11310,10 +11431,7 @@ build_neigh_learning_flows_for_lrouter_port(
                               op->lrp_networks.ipv4_addrs[i].network_s,
                               op->lrp_networks.ipv4_addrs[i].plen,
                               op->lrp_networks.ipv4_addrs[i].addr_s);
-                if (is_l3dgw_port(op)) {
-                    ds_put_format(match, " && is_chassis_resident(%s)",
-                                  op->cr_port->json_key);
-                }
+
                 const char *actions_s = REGBIT_LOOKUP_NEIGHBOR_RESULT
                                   " = lookup_arp(inport, arp.spa, arp.sha); "
                                   REGBIT_LOOKUP_NEIGHBOR_IP_RESULT" = 1;"
@@ -11329,10 +11447,6 @@ build_neigh_learning_flows_for_lrouter_port(
                           op->json_key,
                           op->lrp_networks.ipv4_addrs[i].network_s,
                           op->lrp_networks.ipv4_addrs[i].plen);
-            if (is_l3dgw_port(op)) {
-                ds_put_format(match, " && is_chassis_resident(%s)",
-                              op->cr_port->json_key);
-            }
             ds_clear(actions);
             ds_put_format(actions, REGBIT_LOOKUP_NEIGHBOR_RESULT
                           " = lookup_arp(inport, arp.spa, arp.sha); %snext;",

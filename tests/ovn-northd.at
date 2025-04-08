@@ -5969,12 +5969,6 @@ AT_CHECK([grep lr_in_admission lrflows | grep cr-DR | sort], [0], [dnl
   table=0 (lr_in_admission    ), priority=50   , match=(eth.dst == 03:ac:10:01:00:01 && inport == "DR-S2" && is_chassis_resident("cr-DR-S2")), action=(xreg0[[0..47]] = 03:ac:10:01:00:01; next;)
   table=0 (lr_in_admission    ), priority=50   , match=(eth.dst == 04:ac:10:01:00:01 && inport == "DR-S3" && is_chassis_resident("cr-DR-S3")), action=(xreg0[[0..47]] = 04:ac:10:01:00:01; next;)
 ])
-# Check the flows in lr_in_lookup_neighbor stage
-AT_CHECK([grep lr_in_lookup_neighbor lrflows | grep cr-DR | sort], [0], [dnl
-  table=1 (lr_in_lookup_neighbor), priority=100  , match=(inport == "DR-S1" && arp.spa == 172.16.1.0/24 && arp.op == 1 && is_chassis_resident("cr-DR-S1")), action=(reg9[[2]] = lookup_arp(inport, arp.spa, arp.sha); next;)
-  table=1 (lr_in_lookup_neighbor), priority=100  , match=(inport == "DR-S2" && arp.spa == 172.16.2.0/24 && arp.op == 1 && is_chassis_resident("cr-DR-S2")), action=(reg9[[2]] = lookup_arp(inport, arp.spa, arp.sha); next;)
-  table=1 (lr_in_lookup_neighbor), priority=100  , match=(inport == "DR-S3" && arp.spa == 172.16.3.0/24 && arp.op == 1 && is_chassis_resident("cr-DR-S3")), action=(reg9[[2]] = lookup_arp(inport, arp.spa, arp.sha); next;)
-])
 # Check the flows in lr_in_gw_redirect stage
 AT_CHECK([grep lr_in_gw_redirect lrflows | grep cr-DR | sed 's/table=../table=??/' | sort], [0], [dnl
   table=??(lr_in_gw_redirect  ), priority=50   , match=(outport == "DR-S1"), action=(outport = "cr-DR-S1"; next;)
