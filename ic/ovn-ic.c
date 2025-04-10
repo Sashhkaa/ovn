@@ -370,6 +370,107 @@ sync_sb_gw_to_isb(struct ic_context *ctx,
     free(isb_encaps);
 }
 
+static const struct icsbrec_service_monitor *
+icsbrec_find_svc_monitor(struct ic_context *ctx,
+                         const char *ip, uint32_t port,
+                         const char *src_ip, const char *protocol,
+                         const char *logical_port)
+{
+    const struct icsbrec_service_monitor *ic_svc_rec;
+    ICSBREC_SERVICE_MONITOR_FOR_EACH (ic_svc_rec, ctx->ovnisb_idl) {
+        if (ic_svc_rec->port == port &&
+            !strcmp(ic_svc_rec->ip, ip) &&
+            !strcmp(ic_svc_rec->src_ip, src_ip) &&
+            !strcmp(ic_svc_rec->protocol, protocol) &&
+            !strcmp(ic_svc_rec->logical_port, logical_port)) {
+            return ic_svc_rec;
+        }
+    }
+    return NULL;
+}
+
+static const struct sbrec_service_monitor *
+sbrec_find_svc_monitor(struct ic_context *ctx,
+                       const char *ip, uint32_t port,
+                       const char *src_ip, const char *protocol,
+                       const char *logical_port)
+{
+    const struct sbrec_service_monitor *sb_svc_rec;
+    SBREC_SERVICE_MONITOR_FOR_EACH (sb_svc_rec, ctx->ovnisb_idl) {
+        if (sb_svc_rec->port == port &&
+            !strcmp(sb_svc_rec->ip, ip) &&
+            !strcmp(sb_svc_rec->src_ip, src_ip) &&
+            !strcmp(sb_svc_rec->protocol, protocol) &&
+            !strcmp(sb_svc_rec->logical_port, logical_port)) {
+            return sb_svc_rec;
+        }
+    }
+    return NULL;
+}
+
+static void
+sync_service_monitor(struct ic_context *ctx,
+                     const struct icsbrec_availability_zone *az)
+{
+    if (!ctx->ovnisb_idl || !ctx->ovnsb_txn) {
+        return;
+    }
+
+    const struct sbrec_service_monitor *svc_rec;
+    SBREC_SERVICE_MONITOR_FOR_EACH (svc_rec, ctx->ovnsb_idl) {
+        if (svc_rec->local_backend) {
+
+            const char *az_name = smap_get_def(&svc_rec->options, "az-name", "");
+            const struct icsbrec_service_monitor *ic_svc;
+            ic_svc = icsbrec_service_monitor_insert(ctx->ovnisb_txn);
+            icsbrec_service_monitor_set_ip(ic_svc, svc_rec->ip);
+            icsbrec_service_monitor_set_port(ic_svc, svc_rec->port);
+            icsbrec_service_monitor_set_src_ip(ic_svc, svc_rec->src_ip);
+            icsbrec_service_monitor_set_protocol(ic_svc, svc_rec->protocol);
+            icsbrec_service_monitor_set_dst_availability_zone(ic_svc, az_name);
+            icsbrec_service_monitor_set_src_availability_zone(ic_svc, az->name);
+            icsbrec_service_monitor_set_logical_port(ic_svc, svc_rec->logical_port);
+        } else if (svc_rec->propogated) {
+            const struct icsbrec_service_monitor *ic_svc =
+                icsbrec_find_svc_monitor(ctx, svc_rec->ip, svc_rec->port, svc_rec->src_ip,
+                                         svc_rec->protocol, svc_rec->logical_port);
+
+            if (ic_svc) {
+                icsbrec_service_monitor_set_status(ic_svc, svc_rec->status);
+            } else {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+                VLOG_WARN_RL(&rl, "beda");
+            }
+        }
+    }
+
+    const struct icsbrec_service_monitor *ic_svc_rec;
+    ICSBREC_SERVICE_MONITOR_FOR_EACH (ic_svc_rec, ctx->ovnisb_idl) {
+
+        if (!strcmp(ic_svc_rec->dst_availability_zone, az->name)) {
+
+            const struct sbrec_service_monitor *svc;
+            svc = sbrec_service_monitor_insert(ctx->ovnsb_txn);
+            sbrec_service_monitor_set_propogated(svc, true);
+            sbrec_service_monitor_set_ip(svc, ic_svc_rec->ip);
+            sbrec_service_monitor_set_local_backend(svc, true);
+            sbrec_service_monitor_set_port(svc, ic_svc_rec->port);
+            sbrec_service_monitor_set_protocol(svc, ic_svc_rec->protocol);
+            sbrec_service_monitor_set_logical_port(svc, ic_svc_rec->logical_port);
+        } else if (!strcmp(ic_svc_rec->src_availability_zone, az->name)) {
+            const struct sbrec_service_monitor *sb_svc =
+                sbrec_find_svc_monitor(ctx, ic_svc_rec->ip, ic_svc_rec->port, ic_svc_rec->src_ip,
+                                       ic_svc_rec->protocol, ic_svc_rec->logical_port);
+            if (sb_svc) {
+                sbrec_service_monitor_set_status(sb_svc, ic_svc_rec->status);
+            } else {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+                VLOG_WARN_RL(&rl, "beda");
+            }
+        }
+    }
+}
+
 static void
 gateway_run(struct ic_context *ctx, const struct icsbrec_availability_zone *az)
 {
@@ -1882,6 +1983,7 @@ ovn_db_run(struct ic_context *ctx,
     gateway_run(ctx, az);
     port_binding_run(ctx, az);
     route_run(ctx, az);
+    sync_service_monitor(ctx, az);
 }
 
 static void

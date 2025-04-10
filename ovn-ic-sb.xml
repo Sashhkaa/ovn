@@ -662,4 +662,34 @@
     </group>
   </table>
 
+  <table name="Service_Monitor">
+
+    <column name="src_availability_zone">
+    </column>
+
+    <column name="dst_availability_zone">
+    </column>
+
+    <column name="ip">
+    </column>
+
+    <column name="protocol">
+    </column>
+
+    <column name="port">
+    </column>
+
+    <column name="logical_port">
+    </column>
+
+    <column name="src_ip">
+    </column>
+
+    <column name="status">
+    </column>
+
+    <column name="external_ids">
+    </column>
+
+  </table>
 </database>
