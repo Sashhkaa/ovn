@@ -4973,6 +4973,15 @@ tcp.flags = RST;
         The name of the chassis where the logical port is bound.
       </column>
 
+      <column name="local_backend">
+        Set to true if backend locates on local ovn deployment.
+      </column>
+
+      <column name="propagated">
+        Set to true if service monitor was propagated from another ovn
+        deployment.
+      </column>
+
       <column name="options" key="interval" type='{"type": "integer"}'>
         The interval, in seconds, between service monitor checks.
       </column>

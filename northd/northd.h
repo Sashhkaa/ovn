@@ -169,6 +169,7 @@ struct northd_data {
     struct ovs_list lr_list;
     struct sset svc_monitor_lsps;
     struct hmap svc_monitor_map;
+    struct hmap prpg_svc_map;
 
     /* Change tracking data. */
     struct northd_tracked_data trk_data;
@@ -242,6 +243,7 @@ struct lflow_input {
     struct simap *route_tables;
     struct hmap *igmp_groups;
     struct lflow_ref *igmp_lflow_ref;
+    struct hmap *prpg_svc_map;
 };
 
 extern int parallelization_state;
@@ -1039,4 +1041,9 @@ struct ovn_port_routable_addresses get_op_addresses(
 
 void destroy_routable_addresses(struct ovn_port_routable_addresses *ra);
 
+void
+build_svc_prpg(struct hmap *prpg_svc_map,
+               const struct hmap *ls_ports,
+               const char *svc_monitor_mac,
+               struct lflow_table *lflows);
 #endif /* NORTHD_H */

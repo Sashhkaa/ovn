@@ -3600,7 +3600,8 @@ create_or_get_service_mon(struct ovsdb_idl_txn *ovnsb_txn,
                           struct hmap *monitor_map,
                           const char *ip, const char *logical_port,
                           uint16_t service_port, const char *protocol,
-                          const char *chassis_name)
+                          const char *chassis_name, bool local_backend,
+                          const char *az_name)
 {
     struct service_monitor_info *mon_info =
         get_service_mon(monitor_map, ip, logical_port, service_port,
@@ -3626,9 +3627,19 @@ create_or_get_service_mon(struct ovsdb_idl_txn *ovnsb_txn,
     sbrec_service_monitor_set_port(sbrec_mon, service_port);
     sbrec_service_monitor_set_logical_port(sbrec_mon, logical_port);
     sbrec_service_monitor_set_protocol(sbrec_mon, protocol);
+    sbrec_service_monitor_set_local_backend(sbrec_mon, local_backend);
     if (chassis_name) {
         sbrec_service_monitor_set_chassis_name(sbrec_mon, chassis_name);
     }
+
+    /*to do: validate az name. */
+    if (az_name) {
+        struct smap options = SMAP_INITIALIZER(&options);
+        smap_add(&options, "az-name", az_name);
+        sbrec_service_monitor_set_external_ids(sbrec_mon, &options);
+        smap_destroy(&options);
+    }
+
     mon_info = xzalloc(sizeof *mon_info);
     mon_info->sbrec_mon = sbrec_mon;
     hmap_insert(monitor_map, &mon_info->hmap_node, hash);
@@ -3636,12 +3647,12 @@ create_or_get_service_mon(struct ovsdb_idl_txn *ovnsb_txn,
 }
 
 static void
-ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
-                  const struct ovn_northd_lb *lb,
-                  const char *svc_monitor_mac,
-                  const struct eth_addr *svc_monitor_mac_ea,
-                  struct hmap *monitor_map, struct hmap *ls_ports,
-                  struct sset *svc_monitor_lsps)
+ovn_lb_svc_create_local(struct ovsdb_idl_txn *ovnsb_txn,
+                        const struct ovn_northd_lb *lb,
+                        const char *svc_monitor_mac,
+                        const struct eth_addr *svc_monitor_mac_ea,
+                        struct hmap *monitor_map, struct hmap *ls_ports,
+                        struct sset *svc_monitor_lsps)
 {
     if (lb->template) {
         return;
@@ -3664,7 +3675,8 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
             struct ovn_port *op = ovn_port_find(ls_ports,
                                                 backend_nb->logical_port);
 
-            if (!op || !lsp_is_enabled(op->nbsp)) {
+            if (backend_nb->local_backend &&
+                (!op || !lsp_is_enabled(op->nbsp))) {
                 continue;
             }
 
@@ -3674,7 +3686,7 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
             }
 
             const char *chassis_name = NULL;
-            if (op->sb->chassis) {
+            if (backend_nb->local_backend && op->sb->chassis) {
                 chassis_name = op->sb->chassis->name;
             }
 
@@ -3682,9 +3694,10 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                 create_or_get_service_mon(ovnsb_txn, monitor_map,
                                           backend->ip_str,
                                           backend_nb->logical_port,
-                                          backend->port,
-                                          protocol,
-                                          chassis_name);
+                                          backend->port, protocol,
+                                          chassis_name,
+                                          backend_nb->local_backend,
+                                          backend_nb->az_name);
             ovs_assert(mon_info);
             sbrec_service_monitor_set_options(
                 mon_info->sbrec_mon, &lb_vip_nb->lb_health_check->options);
@@ -3704,13 +3717,14 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                     backend_nb->svc_mon_src_ip);
             }
 
-            if ((!op->sb->n_up || !op->sb->up[0])
-                && mon_info->sbrec_mon->status
-                && !strcmp(mon_info->sbrec_mon->status, "online")) {
-                sbrec_service_monitor_set_status(mon_info->sbrec_mon,
-                                                 "offline");
+            if (backend_nb->local_backend) {
+                if ((!op->sb->n_up || !op->sb->up[0])
+                    && mon_info->sbrec_mon->status
+                    && !strcmp(mon_info->sbrec_mon->status, "online")) {
+                    sbrec_service_monitor_set_status(mon_info->sbrec_mon,
+                                                     "offline");
+                }
             }
-
             mon_info->required = true;
         }
     }
@@ -3912,6 +3926,26 @@ build_lb_datapaths(const struct hmap *lbs, const struct hmap *lb_groups,
 }
 
 static void
+ovn_lb_svc_create_prpg(struct service_monitor_info *mon_info,
+                       const struct eth_addr *svc_monitor_mac_ea,
+                       const char *svc_monitor_mac,
+                       struct sset *svc_monitor_lsps)
+{
+    struct eth_addr ea;
+    if (!mon_info->sbrec_mon->src_mac ||
+        !eth_addr_from_string(mon_info->sbrec_mon->src_mac, &ea) ||
+        !eth_addr_equals(ea, *svc_monitor_mac_ea)) {
+        sbrec_service_monitor_set_src_mac(mon_info->sbrec_mon,
+                                          svc_monitor_mac);
+    }
+
+    mon_info->required = true;
+
+    sset_add(svc_monitor_lsps, mon_info->sbrec_mon->logical_port);
+}
+
+
+static void
 build_lb_svcs(
     struct ovsdb_idl_txn *ovnsb_txn,
     const struct sbrec_service_monitor_table *sbrec_service_monitor_table,
@@ -3919,7 +3953,8 @@ build_lb_svcs(
     const struct eth_addr *svc_monitor_mac_ea,
     struct hmap *ls_ports, struct hmap *lb_dps_map,
     struct sset *svc_monitor_lsps,
-    struct hmap *svc_monitor_map)
+    struct hmap *svc_monitor_map,
+    struct hmap *prpg_svc_map)
 {
     const struct sbrec_service_monitor *sbrec_mon;
     SBREC_SERVICE_MONITOR_TABLE_FOR_EACH (sbrec_mon,
@@ -3930,17 +3965,23 @@ build_lb_svcs(
         struct service_monitor_info *mon_info = xzalloc(sizeof *mon_info);
         mon_info->sbrec_mon = sbrec_mon;
         mon_info->required = false;
-        hmap_insert(svc_monitor_map, &mon_info->hmap_node, hash);
+        hmap_insert(sbrec_mon->propagated ? prpg_svc_map : svc_monitor_map,
+                    &mon_info->hmap_node, hash);
     }
 
     struct ovn_lb_datapaths *lb_dps;
     HMAP_FOR_EACH (lb_dps, hmap_node, lb_dps_map) {
-        ovn_lb_svc_create(ovnsb_txn, lb_dps->lb, svc_monitor_mac,
-                          svc_monitor_mac_ea, svc_monitor_map, ls_ports,
-                          svc_monitor_lsps);
+        ovn_lb_svc_create_local(ovnsb_txn, lb_dps->lb, svc_monitor_mac,
+                                svc_monitor_mac_ea, svc_monitor_map, ls_ports,
+                                svc_monitor_lsps);
     }
 
     struct service_monitor_info *mon_info;
+    HMAP_FOR_EACH (mon_info, hmap_node, prpg_svc_map) {
+        ovn_lb_svc_create_prpg(mon_info, svc_monitor_mac_ea,
+                               svc_monitor_mac, svc_monitor_lsps);
+    }
+
     HMAP_FOR_EACH_SAFE (mon_info, hmap_node, svc_monitor_map) {
         if (!mon_info->required) {
             sbrec_service_monitor_delete(mon_info->sbrec_mon);
@@ -4012,11 +4053,12 @@ build_lb_port_related_data(
     struct ovn_datapaths *lr_datapaths, struct hmap *ls_ports,
     struct hmap *lb_dps_map, struct hmap *lb_group_dps_map,
     struct sset *svc_monitor_lsps,
-    struct hmap *svc_monitor_map)
+    struct hmap *svc_monitor_map,
+    struct hmap *prpg_svc_map)
 {
     build_lb_svcs(ovnsb_txn, sbrec_service_monitor_table, svc_monitor_mac,
                   svc_monitor_mac_ea, ls_ports, lb_dps_map,
-                  svc_monitor_lsps, svc_monitor_map);
+                  svc_monitor_lsps, svc_monitor_map, prpg_svc_map);
     build_lswitch_lbs_from_lrouter(lr_datapaths, lb_dps_map, lb_group_dps_map);
 }
 
@@ -9742,6 +9784,47 @@ build_lswitch_arp_nd_responder_default(struct ovn_datapath *od,
                   lflow_ref);
 }
 
+static void
+build_arp_nd_service_monitor_lflow(const char *svc_monitor_mac,
+                                   const char *svc_src_ip,
+                                   struct ds *action,
+                                   struct ds *match,
+                                   bool is_ipv4)
+{
+    if (is_ipv4) {
+        ds_put_format(match, "arp.tpa == %s && arp.op == 1",
+                      svc_src_ip);
+        ds_put_format(action,
+            "eth.dst = eth.src; "
+            "eth.src = %s; "
+            "arp.op = 2; /* ARP reply */ "
+            "arp.tha = arp.sha; "
+            "arp.sha = %s; "
+            "arp.tpa = arp.spa; "
+            "arp.spa = %s; "
+            "outport = inport; "
+            "flags.loopback = 1; "
+            "output;",
+            svc_monitor_mac, svc_monitor_mac,
+            svc_src_ip);
+    } else {
+        ds_put_format(match, "nd_ns && nd.target == %s",
+                      svc_src_ip);
+        ds_put_format(action,
+            "nd_na { "
+            "eth.dst = eth.src; "
+            "eth.src = %s; "
+            "ip6.src = %s; "
+            "nd.target = %s; "
+            "nd.tll = %s; "
+            "outport = inport; "
+            "flags.loopback = 1; "
+            "output; "
+            "};",
+            svc_monitor_mac, svc_src_ip,
+            svc_src_ip, svc_monitor_mac);
+    }
+}
 /* Ingress table 19: ARP/ND responder for service monitor source ip.
  * (priority 110)*/
 static void
@@ -9776,41 +9859,13 @@ build_lswitch_arp_nd_service_monitor(const struct ovn_lb_datapaths *lb_dps,
 
             ds_clear(match);
             ds_clear(actions);
-            if (IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)) {
-                ds_put_format(match, "arp.tpa == %s && arp.op == 1",
-                              backend_nb->svc_mon_src_ip);
-                ds_put_format(actions,
-                    "eth.dst = eth.src; "
-                    "eth.src = %s; "
-                    "arp.op = 2; /* ARP reply */ "
-                    "arp.tha = arp.sha; "
-                    "arp.sha = %s; "
-                    "arp.tpa = arp.spa; "
-                    "arp.spa = %s; "
-                    "outport = inport; "
-                    "flags.loopback = 1; "
-                    "output;",
-                    svc_monitor_mac, svc_monitor_mac,
-                    backend_nb->svc_mon_src_ip);
-            } else {
-                ds_put_format(match, "nd_ns && nd.target == %s",
-                              backend_nb->svc_mon_src_ip);
-                ds_put_format(actions,
-                        "nd_na { "
-                        "eth.dst = eth.src; "
-                        "eth.src = %s; "
-                        "ip6.src = %s; "
-                        "nd.target = %s; "
-                        "nd.tll = %s; "
-                        "outport = inport; "
-                        "flags.loopback = 1; "
-                        "output; "
-                        "};",
-                        svc_monitor_mac,
-                        backend_nb->svc_mon_src_ip,
-                        backend_nb->svc_mon_src_ip,
-                        svc_monitor_mac);
-            }
+
+            build_arp_nd_service_monitor_lflow(svc_monitor_mac,
+                                               backend_nb->svc_mon_src_ip,
+                                               actions, match,
+                                               IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)
+                                               ? true : false);
+
             ovn_lflow_add_with_hint(lflows,
                                     op->od,
                                     S_SWITCH_IN_ARP_ND_RSP, 110,
@@ -17962,6 +18017,37 @@ build_lswitch_and_lrouter_flows(
     free(svc_check_match);
 }
 
+void
+build_svc_prpg(struct hmap *prpg_svc_map,
+               const struct hmap *ls_ports,
+               const char *svc_monitor_mac,
+               struct lflow_table *lflows)
+{
+    struct ds action = DS_EMPTY_INITIALIZER;
+    struct ds match = DS_EMPTY_INITIALIZER;
+    struct service_monitor_info *mon_info;
+
+    HMAP_FOR_EACH (mon_info, hmap_node, prpg_svc_map) {
+        struct ovn_port *op = ovn_port_find(ls_ports,
+                                            mon_info->sbrec_mon->logical_port);
+
+        bool is_ipv4 = strchr(mon_info->sbrec_mon->ip, '.') ? true : false;
+
+        build_arp_nd_service_monitor_lflow(svc_monitor_mac,
+                                           mon_info->sbrec_mon->src_ip,
+                                           &action, &match, is_ipv4);
+
+        ovn_lflow_add(lflows, op->od, S_SWITCH_IN_ARP_ND_RSP,
+                      110, ds_cstr(&match), ds_cstr(&action), NULL);
+
+        ds_clear(&match);
+        ds_clear(&action);
+    }
+
+    ds_destroy(&match);
+    ds_destroy(&action);
+}
+
 /* The IGMP flows have to be built in main thread because there is
  * single lflow_ref for all of them which isn't thread safe.
  * This shouldn't affect performance as there is a limited how many
@@ -18047,6 +18133,11 @@ void build_lflows(struct ovsdb_idl_txn *ovnsb_txn,
     build_igmp_lflows(input_data->igmp_groups,
                       &input_data->ls_datapaths->datapaths,
                       lflows, input_data->igmp_lflow_ref);
+
+    build_svc_prpg(input_data->prpg_svc_map,
+                   input_data->ls_ports,
+                   input_data->svc_monitor_mac,
+                   lflows);
 
     if (parallelization_state == STATE_INIT_HASH_SIZES) {
         parallelization_state = STATE_USE_PARALLELIZATION;
@@ -18833,6 +18924,7 @@ northd_init(struct northd_data *data)
     ovs_list_init(&data->lr_list);
     sset_init(&data->svc_monitor_lsps);
     hmap_init(&data->svc_monitor_map);
+    hmap_init(&data->prpg_svc_map);
     init_northd_tracked_data(data);
 }
 
@@ -18885,6 +18977,11 @@ northd_destroy(struct northd_data *data)
         free(mon_info);
     }
     hmap_destroy(&data->svc_monitor_map);
+
+    HMAP_FOR_EACH_POP (mon_info, hmap_node, &data->prpg_svc_map) {
+        free(mon_info);
+    }
+    hmap_destroy(&data->prpg_svc_map);
 
     /* XXX Having to explicitly clean up macam here
      * is a bit strange. We don't explicitly initialize
@@ -19010,7 +19107,8 @@ ovnnb_db_run(struct northd_input *input_data,
                                &data->lb_datapaths_map,
                                &data->lb_group_datapaths_map,
                                &data->svc_monitor_lsps,
-                               &data->svc_monitor_map);
+                               &data->svc_monitor_map,
+                               &data->prpg_svc_map);
     build_lb_count_dps(&data->lb_datapaths_map,
                        ods_size(&data->ls_datapaths),
                        ods_size(&data->lr_datapaths));

@@ -689,4 +689,50 @@
     </group>
   </table>
 
+  <table name="Service_Monitor">
+
+    <column name="src_availability_zone">
+       Availability zone in which a balancer with a backend and a service
+       monitor for a port in another ovn deployment is created.
+    </column>
+
+    <column name="dst_availability_zone">
+      Availability zone in which the port, for which the propogated record
+      was created in the Southbound Database is located.
+    </column>
+
+    <column name="ip">
+      IP of the service to be monitored.
+    </column>
+
+    <column name="protocol">
+      The protocol of the service.
+    </column>
+
+    <column name="port">
+       The TCP or UDP port of the service.
+    </column>
+
+    <column name="logical_port">
+      The VIF of the logical port on which the service is running. The
+      <code>ovn-controller</code> that binds this <code>logical_port</code>
+      monitors the service by sending periodic monitor packets.
+    </column>
+
+    <column name="src_ip">
+      Source Ethernet address to use in the service monitor packet.
+    </column>
+
+    <column name="status">
+      Same as in Table Service_Monitor in SBDB.
+    </column>
+
+    <column name="options">
+      Same as in Table Service_Monitor in SBDB.
+    </column>
+
+    <column name="external_ids">
+    </column>
+
+  </table>
 </database>

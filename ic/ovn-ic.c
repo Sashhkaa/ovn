@@ -93,6 +93,9 @@ static const char *ssl_private_key_file;
 static const char *ssl_certificate_file;
 static const char *ssl_ca_cert_file;
 
+static const struct sbrec_port_binding *
+find_sb_pb_by_name(struct ovsdb_idl_index *sbrec_port_binding_by_name,
+                   const char *name);
 
 static void
 usage(void)
@@ -402,6 +405,294 @@ sync_sb_gw_to_isb(struct ic_context *ctx,
     icsbrec_gateway_set_encaps(gw, isb_encaps,
                               chassis->n_encaps);
     free(isb_encaps);
+}
+
+struct ic_service_monitor_info {
+    struct hmap_node hmap_node;
+    const struct icsbrec_service_monitor *rec;
+    bool required;
+};
+
+struct sb_service_monitor_info {
+    struct hmap_node hmap_node;
+    const struct sbrec_service_monitor *rec;
+    bool required;
+};
+
+static void
+init_svc_hashmap(struct hmap *svc_map, uint32_t port,
+                 const char *ip, const char *logical_port,
+                 void **mon_info_p, const void *rec,
+                 bool is_ic)
+{
+    uint32_t hash = port;
+    hash = hash_string(ip, hash);
+    hash = hash_string(logical_port, hash);
+
+    if (is_ic) {
+        struct ic_service_monitor_info *mon_info = xzalloc(sizeof(*mon_info));
+        mon_info->rec = (const struct icsbrec_service_monitor *) rec;
+        mon_info->required = false;
+        hmap_insert(svc_map, &mon_info->hmap_node, hash);
+        *mon_info_p = mon_info;
+    } else {
+        struct sb_service_monitor_info *mon_info = xzalloc(sizeof(*mon_info));
+        mon_info->rec = (const struct sbrec_service_monitor *) rec;
+        mon_info->required = false;
+        hmap_insert(svc_map, &mon_info->hmap_node, hash);
+        *mon_info_p = mon_info;
+    }
+}
+
+static struct sb_service_monitor_info *
+sb_find_svc_monitor(struct hmap *svc_table, const char *ip, uint32_t port,
+                    const char *src_ip, const char *protocol,
+                    const char *logical_port)
+{
+    uint32_t hash = port;
+    hash = hash_string(ip, hash);
+    hash = hash_string(logical_port, hash);
+
+    struct sb_service_monitor_info *mon_info;
+    HMAP_FOR_EACH_WITH_HASH (mon_info, hmap_node, hash, svc_table) {
+        if (mon_info->rec->port == port &&
+            !strcmp(mon_info->rec->ip, ip) &&
+            !strcmp(mon_info->rec->src_ip, src_ip) &&
+            !strcmp(mon_info->rec->protocol, protocol) &&
+            !strcmp(mon_info->rec->logical_port, logical_port)) {
+            return mon_info;
+        }
+    }
+
+    return NULL;
+}
+
+static struct ic_service_monitor_info *
+ic_find_svc_monitor(struct hmap *svc_table, const char *ip, uint32_t port,
+                    const char *src_ip, const char *protocol,
+                    const char *logical_port)
+{
+    uint32_t hash = port;
+    hash = hash_string(ip, hash);
+    hash = hash_string(logical_port, hash);
+    struct ic_service_monitor_info *mon_info;
+    HMAP_FOR_EACH_WITH_HASH (mon_info, hmap_node, hash, svc_table) {
+        if (mon_info->rec->port == port &&
+            !strcmp(mon_info->rec->ip, ip) &&
+            !strcmp(mon_info->rec->src_ip, src_ip) &&
+            !strcmp(mon_info->rec->protocol, protocol) &&
+            !strcmp(mon_info->rec->logical_port, logical_port)) {
+            return mon_info;
+        }
+    }
+
+    return NULL;
+}
+
+static bool
+validate_propagated_svc(struct ic_context *ctx,
+                        const struct icsbrec_service_monitor *ic_rec)
+{
+    const struct sbrec_port_binding *pb =
+            find_sb_pb_by_name(ctx->sbrec_port_binding_by_name,
+                               ic_rec->logical_port);
+    if (!pb || !pb->up) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_WARN_RL(&rl, "Didn't find logical port with name %s"
+                          "for propagated service monitor from az %s",
+                          ic_rec->logical_port, ic_rec->src_availability_zone);
+       return false;
+    }
+
+    return true;
+}
+
+static void
+sync_sb_to_ic_base(struct ic_context *ctx,
+                   const struct sbrec_service_monitor *svc_rec,
+                   const struct icsbrec_availability_zone *az,
+                   struct hmap *ic_svc_local,
+                   struct hmap *ic_svc_remote)
+{
+    const char *az_name = smap_get_def(&svc_rec->external_ids,
+                                       "az-name", "");
+
+    if (!svc_rec->local_backend && strcmp(az_name, az->name)) {
+        struct ic_service_monitor_info *ic_mon_info =
+                ic_find_svc_monitor(ic_svc_local,
+                                    svc_rec->ip,
+                                    svc_rec->port,
+                                    svc_rec->src_ip,
+                                    svc_rec->protocol,
+                                    svc_rec->logical_port);
+        if (!ic_mon_info) {
+            const struct icsbrec_service_monitor *ic_svc =
+            icsbrec_service_monitor_insert(ctx->ovnisb_txn);
+            icsbrec_service_monitor_set_ip(ic_svc, svc_rec->ip);
+            icsbrec_service_monitor_set_port(ic_svc, svc_rec->port);
+            icsbrec_service_monitor_set_src_ip(ic_svc, svc_rec->src_ip);
+            icsbrec_service_monitor_set_protocol(ic_svc, svc_rec->protocol);
+            icsbrec_service_monitor_set_dst_availability_zone(ic_svc,
+                                                              az_name);
+            icsbrec_service_monitor_set_src_availability_zone(ic_svc,
+                                                              az->name);
+            icsbrec_service_monitor_set_logical_port(ic_svc,
+                                                     svc_rec->logical_port);
+            icsbrec_service_monitor_set_options(ic_svc, &svc_rec->options);
+            init_svc_hashmap(ic_svc_local, svc_rec->port,
+                             svc_rec->ip, svc_rec->logical_port,
+                             (void **)&ic_mon_info,
+                             ic_svc, true);
+        }
+        ic_mon_info->required = true;
+    }
+
+    if (svc_rec->propagated) {
+        struct ic_service_monitor_info *ic_mon_info =
+            ic_find_svc_monitor(ic_svc_remote,
+                                svc_rec->ip,
+                                svc_rec->port,
+                                svc_rec->src_ip,
+                                svc_rec->protocol,
+                                svc_rec->logical_port);
+        if (ic_mon_info) {
+            icsbrec_service_monitor_set_status(ic_mon_info->rec,
+                                               svc_rec->status);
+        } else {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+            VLOG_WARN_RL(&rl, "Didn't find original service monitor recording "
+                              "in SBIC DB for recording in SBDB ");
+        }
+    }
+}
+
+static void
+sync_ic_to_sb_base(struct ic_context *ctx,
+                   const struct icsbrec_service_monitor *ic_svc_rec,
+                   const struct icsbrec_availability_zone *az,
+                   struct hmap *sb_svc_propagated,
+                   struct hmap *sb_svc_non_local)
+{
+    struct sb_service_monitor_info *sb_svc_mon;
+    if (!strcmp(ic_svc_rec->dst_availability_zone, az->name) &&
+        validate_propagated_svc(ctx, ic_svc_rec)) {
+        sb_svc_mon = sb_find_svc_monitor(sb_svc_propagated,
+                                         ic_svc_rec->ip,
+                                         ic_svc_rec->port,
+                                         ic_svc_rec->src_ip,
+                                         ic_svc_rec->protocol,
+                                         ic_svc_rec->logical_port);
+        if (!sb_svc_mon) {
+            const struct sbrec_service_monitor *sb_svc =
+            sbrec_service_monitor_insert(ctx->ovnsb_txn);
+            sbrec_service_monitor_set_propagated(sb_svc, true);
+            sbrec_service_monitor_set_ip(sb_svc, ic_svc_rec->ip);
+            sbrec_service_monitor_set_src_ip(sb_svc, ic_svc_rec->src_ip);
+            sbrec_service_monitor_set_local_backend(sb_svc, true);
+            sbrec_service_monitor_set_port(sb_svc, ic_svc_rec->port);
+            sbrec_service_monitor_set_protocol(sb_svc, ic_svc_rec->protocol);
+            sbrec_service_monitor_set_options(sb_svc, &ic_svc_rec->options);
+            sbrec_service_monitor_set_logical_port(sb_svc,
+                                            ic_svc_rec->logical_port);
+            init_svc_hashmap(sb_svc_propagated, ic_svc_rec->port,
+                             ic_svc_rec->ip, ic_svc_rec->logical_port,
+                             (void **)&sb_svc_mon,
+                             sb_svc, true);
+        }
+        sb_svc_mon->required = true;
+    } else if (!strcmp(ic_svc_rec->src_availability_zone, az->name)) {
+        sb_svc_mon = sb_find_svc_monitor(sb_svc_non_local,
+                                         ic_svc_rec->ip,
+                                         ic_svc_rec->port,
+                                         ic_svc_rec->src_ip,
+                                         ic_svc_rec->protocol,
+                                         ic_svc_rec->logical_port);
+        if (sb_svc_mon) {
+            sbrec_service_monitor_set_status(sb_svc_mon->rec,
+                                             ic_svc_rec->status);
+        } else {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+            VLOG_WARN_RL(&rl, "Didn't find original service monitor recording "
+                              "in SBIC DB for recording in SBDB ");
+        }
+    }
+}
+
+static void
+sync_service_monitor(struct ic_context *ctx,
+                     const struct icsbrec_availability_zone *az)
+{
+    if (!ctx->ovnisb_txn || !ctx->ovnsb_txn) {
+        return;
+    }
+
+    struct hmap ic_svc_local  = HMAP_INITIALIZER(&ic_svc_local);
+    struct hmap ic_svc_remote = HMAP_INITIALIZER(&ic_svc_remote);
+    struct hmap sb_svc_non_local  = HMAP_INITIALIZER(&sb_svc_non_local);
+    struct hmap sb_svc_propagated = HMAP_INITIALIZER(&sb_svc_propagated);
+
+    const struct icsbrec_service_monitor *ic_svc_rec;
+    ICSBREC_SERVICE_MONITOR_FOR_EACH (ic_svc_rec, ctx->ovnisb_idl) {
+        struct ic_service_monitor_info *ic_mon_info;
+        bool is_local = !strcmp(ic_svc_rec->src_availability_zone, az->name);
+        init_svc_hashmap(is_local ? &ic_svc_local : &ic_svc_remote,
+                         ic_svc_rec->port, ic_svc_rec->ip,
+                         ic_svc_rec->logical_port,
+                         (void **)&ic_mon_info,
+                         ic_svc_rec, true);
+    }
+
+    const struct sbrec_service_monitor *sb_svc_rec;
+    SBREC_SERVICE_MONITOR_FOR_EACH (sb_svc_rec, ctx->ovnsb_idl) {
+        struct sb_service_monitor_info *sb_mon_info;
+
+        if (sb_svc_rec->propagated) {
+            init_svc_hashmap(&sb_svc_propagated, sb_svc_rec->port,
+                             sb_svc_rec->ip, sb_svc_rec->logical_port,
+                             (void **)&sb_mon_info,
+                             sb_svc_rec, false);
+        } else if (!sb_svc_rec->local_backend) {
+            init_svc_hashmap(&sb_svc_non_local, sb_svc_rec->port,
+                             sb_svc_rec->ip, sb_svc_rec->logical_port,
+                             (void **)&sb_mon_info,
+                             sb_svc_rec, false);
+        }
+    }
+
+    SBREC_SERVICE_MONITOR_FOR_EACH (sb_svc_rec, ctx->ovnsb_idl) {
+        sync_sb_to_ic_base(ctx, sb_svc_rec, az,
+                           &ic_svc_local,
+                           &ic_svc_remote);
+    }
+
+    ICSBREC_SERVICE_MONITOR_FOR_EACH (ic_svc_rec, ctx->ovnisb_idl) {
+        sync_ic_to_sb_base(ctx, ic_svc_rec, az,
+                           &sb_svc_propagated,
+                           &sb_svc_non_local);
+    }
+
+    struct ic_service_monitor_info *ic_mon_info;
+    HMAP_FOR_EACH_SAFE (ic_mon_info, hmap_node, &ic_svc_local) {
+        if (!ic_mon_info->required) {
+            icsbrec_service_monitor_delete(ic_mon_info->rec);
+            hmap_remove(&ic_svc_local, &ic_mon_info->hmap_node);
+            free(ic_mon_info);
+        }
+    }
+
+    struct sb_service_monitor_info *sb_mon_info;
+    HMAP_FOR_EACH_SAFE (sb_mon_info, hmap_node, &sb_svc_propagated) {
+        if (!sb_mon_info->required) {
+            sbrec_service_monitor_delete(sb_mon_info->rec);
+            hmap_remove(&sb_svc_propagated, &sb_mon_info->hmap_node);
+            free(sb_mon_info);
+        }
+    }
+
+    hmap_destroy(&ic_svc_local);
+    hmap_destroy(&ic_svc_remote);
+    hmap_destroy(&sb_svc_non_local);
+    hmap_destroy(&sb_svc_propagated);
 }
 
 static void
@@ -1976,6 +2267,7 @@ ovn_db_run(struct ic_context *ctx,
     ts_run(ctx);
     port_binding_run(ctx, az);
     route_run(ctx, az);
+    sync_service_monitor(ctx, az);
 }
 
 static void
@@ -2285,6 +2577,31 @@ main(int argc, char *argv[])
                          &sbrec_port_binding_col_external_ids);
     ovsdb_idl_add_column(ovnsb_idl_loop.idl,
                          &sbrec_port_binding_col_chassis);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
+                         &sbrec_port_binding_col_up);
+
+    ovsdb_idl_add_table(ovnsb_idl_loop.idl,
+                        &sbrec_table_service_monitor);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
+                        &sbrec_service_monitor_col_chassis_name);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
+                        &sbrec_service_monitor_col_external_ids);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
+                        &sbrec_service_monitor_col_ip);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
+                        &sbrec_service_monitor_col_local_backend);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
+                        &sbrec_service_monitor_col_logical_port);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
+                        &sbrec_service_monitor_col_port);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
+                        &sbrec_service_monitor_col_protocol);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
+                        &sbrec_service_monitor_col_propagated);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
+                        &sbrec_service_monitor_col_src_ip);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
+                        &sbrec_service_monitor_col_status);
 
     /* Create IDL indexes */
     struct ovsdb_idl_index *nbrec_ls_by_name

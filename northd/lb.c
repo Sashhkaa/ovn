@@ -119,7 +119,14 @@ ovn_lb_vip_backends_health_check_init(const struct ovn_northd_lb *lb,
         }
 
         char *svc_mon_src_ip = NULL;
+        char *az_name = NULL;
         char *port_name = xstrdup(s);
+        char *remote = strstr(port_name, "remote");
+
+        if (remote) {
+            *(remote - 1) = 0;
+            az_name = remote + 7;
+        }
         char *p = strstr(port_name, ":");
         if (p) {
             *p = 0;
@@ -143,6 +150,10 @@ ovn_lb_vip_backends_health_check_init(const struct ovn_northd_lb *lb,
             backend_nb->health_check = true;
             backend_nb->logical_port = xstrdup(port_name);
             backend_nb->svc_mon_src_ip = svc_mon_src_ip;
+            backend_nb->local_backend = remote ? false : true;
+            if (remote) {
+                backend_nb->az_name = xstrdup(az_name);
+            }
         }
         free(port_name);
     }
