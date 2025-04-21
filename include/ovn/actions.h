@@ -131,7 +131,8 @@ struct collector_set_ids;
     OVNACT(CT_ORIG_NW_DST,    ovnact_result)          \
     OVNACT(CT_ORIG_IP6_DST,   ovnact_result)          \
     OVNACT(CT_ORIG_TP_DST,    ovnact_result)          \
-    OVNACT(CT_STATE_SAVE,     ovnact_result)
+    OVNACT(CT_STATE_SAVE,     ovnact_result)          \
+    OVNACT(MIRROR,            ovnact_mirror)          \
 
 /* enum ovnact_type, with a member OVNACT_<ENUM> for each action. */
 enum OVS_PACKED_ENUM ovnact_type {
@@ -528,6 +529,15 @@ struct ovnact_commit_lb_aff {
     uint16_t backend_port;
 
     uint16_t timeout;
+};
+
+/* OVNACT_MIRROR. */
+struct ovnact_mirror {
+    struct ovnact ovnact;
+
+    /* Argument. */
+    char *port;     /* Mirror serving port for output
+                       action. */
 };
 
 /* Internal use by the helpers below. */

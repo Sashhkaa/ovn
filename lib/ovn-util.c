@@ -869,7 +869,7 @@ ip_address_and_port_from_lb_key(const char *key, char **ip_address,
  *
  * NOTE: If OVN_NORTHD_PIPELINE_CSUM is updated make sure to double check
  * whether an update of OVN_INTERNAL_MINOR_VER is required. */
-#define OVN_NORTHD_PIPELINE_CSUM "2842860340 9708"
+#define OVN_NORTHD_PIPELINE_CSUM "2839329900 9927"
 #define OVN_INTERNAL_MINOR_VER 8
 
 /* Returns the OVN version. The caller must free the returned value. */
@@ -1324,4 +1324,11 @@ ovn_debug_commands_register(void)
 {
     unixctl_command_register("debug/enable-timewarp", "", 0, 0,
                              ovn_enable_timewarp, NULL);
+}
+
+char *
+ovn_mirror_port_name(const char *datapath_name,
+                     const char *port_name)
+{
+    return xasprintf("mp-%s-%s", datapath_name, port_name);
 }
