@@ -2410,6 +2410,13 @@ ct_state_save;
 ct_state_save();
     Syntax error at `ct_state_save' expecting action.
 
+#mirror
+mirror("lsp1");
+    encodes as clone(set_field:ANY->in_port,set_field:0x11->reg15,resubmit(,40))
+
+mirror(lsp1);
+    Syntax error at `lsp1' expecting port name string.
+
 # Miscellaneous negative tests.
 ;
     Syntax error at `;'.

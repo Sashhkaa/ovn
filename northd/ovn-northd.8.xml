@@ -390,7 +390,35 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 2: Lookup MAC address learning table</h3>
+    <h3>Ingress Table 2: Mirror </h3>
+
+    <p>
+      Overlay remote mirror table contains the following
+      logical flows:
+    </p>
+
+    <ul>
+      <li>
+        For each logical switch port with an attached mirror, a logical flow
+        with a priority of 100 is added. This flow matches all incoming packets
+        to the attached port, clones them, and forwards the cloned packets to
+        the mirror target port.
+      </li>
+
+      <li>
+        A priority 0 flow is added which matches on all packets and applies
+        the action <code>next;</code>.
+      </li>
+
+      <li>
+        A logical flow added for each Mirror Rule in Mirror table attached
+        to logical switch ports, matches all incoming packets that match
+        rules and clones the packet and sends cloned packet to mirror
+        target port.
+      </li>
+    </ul>
+
+    <h3>Ingress Table 3: Lookup MAC address learning table</h3>
 
     <p>
       This table looks up the MAC learning table of the logical switch
@@ -440,7 +468,7 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 3: Learn MAC of 'unknown' ports.</h3>
+    <h3>Ingress Table 4: Learn MAC of 'unknown' ports.</h3>
 
     <p>
       This table learns the MAC addresses seen on the VIF logical ports
@@ -477,7 +505,7 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 4: <code>from-lport</code> Pre-ACLs</h3>
+    <h3>Ingress Table 5: <code>from-lport</code> Pre-ACLs</h3>
 
     <p>
       This table prepares flows for possible stateful ACL processing in
@@ -511,7 +539,7 @@
       db="OVN_Northbound"/> table.
     </p>
 
-    <h3>Ingress Table 5: Pre-LB</h3>
+    <h3>Ingress Table 6: Pre-LB</h3>
 
     <p>
       This table prepares flows for possible stateful load balancing processing
@@ -587,7 +615,7 @@
       logical router datapath to logical switch datapath.
     </p>
 
-    <h3>Ingress Table 6: Pre-stateful</h3>
+    <h3>Ingress Table 7: Pre-stateful</h3>
 
     <p>
       This table prepares flows for all possible stateful processing
@@ -629,7 +657,7 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 7: <code>from-lport</code> ACL hints</h3>
+    <h3>Ingress Table 8: <code>from-lport</code> ACL hints</h3>
 
     <p>
       This table consists of logical flows that set hints
@@ -714,7 +742,7 @@
       </li>
     </ul>
 
-    <h3>Ingress table 8: <code>from-lport</code> ACL evaluation before LB</h3>
+    <h3>Ingress table 9: <code>from-lport</code> ACL evaluation before LB</h3>
 
     <p>
       Logical flows in this table closely reproduce those in the
@@ -894,7 +922,7 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 9: <code>from-lport</code> ACL action</h3>
+    <h3>Ingress Table 10: <code>from-lport</code> ACL action</h3>
 
     <p>
       Logical flows in this table decide how to proceed based on the values of
@@ -934,7 +962,7 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 10: <code>from-lport</code> QoS Marking</h3>
+    <h3>Ingress Table 11: <code>from-lport</code> QoS Marking</h3>
 
     <p>
       Logical flows in this table closely reproduce those in the
@@ -962,7 +990,7 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 11: <code>from-lport</code> QoS Meter</h3>
+    <h3>Ingress Table 12: <code>from-lport</code> QoS Meter</h3>
 
     <p>
       Logical flows in this table closely reproduce those in the
@@ -984,7 +1012,7 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 12: Load balancing affinity check</h3>
+    <h3>Ingress Table 13: Load balancing affinity check</h3>
 
     <p>
       Load balancing affinity check table contains the following
@@ -1012,7 +1040,7 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 13: LB</h3>
+    <h3>Ingress Table 14: LB</h3>
 
     <ul>
       <li>
@@ -1092,7 +1120,7 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 14: Load balancing affinity learn</h3>
+    <h3>Ingress Table 15: Load balancing affinity learn</h3>
 
     <p>
       Load balancing affinity learn table contains the following
@@ -1123,7 +1151,7 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 15: Pre-Hairpin</h3>
+    <h3>Ingress Table 16: Pre-Hairpin</h3>
     <ul>
       <li>
         If the logical switch has load balancer(s) configured, then a
@@ -1141,7 +1169,7 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 16: Nat-Hairpin</h3>
+    <h3>Ingress Table 17: Nat-Hairpin</h3>
     <ul>
       <li>
          If the logical switch has load balancer(s) configured, then a
@@ -1176,7 +1204,7 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 17: Hairpin</h3>
+    <h3>Ingress Table 18: Hairpin</h3>
     <ul>
       <li>
         <p>
@@ -1214,7 +1242,7 @@
       </li>
     </ul>
 
-    <h3>Ingress table 18: <code>from-lport</code> ACL evaluation after LB</h3>
+    <h3>Ingress table 19: <code>from-lport</code> ACL evaluation after LB</h3>
 
     <p>
       Logical flows in this table closely reproduce those in the
@@ -1298,7 +1326,7 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 19: <code>from-lport</code> ACL action after LB</h3>
+    <h3>Ingress Table 20: <code>from-lport</code> ACL action after LB</h3>
 
     <p>
       Logical flows in this table decide how to proceed based on the values of
@@ -1338,7 +1366,7 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 20: Stateful</h3>
+    <h3>Ingress Table 21: Stateful</h3>
 
     <ul>
       <li>
@@ -1361,7 +1389,7 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 21: ARP/ND responder</h3>
+    <h3>Ingress Table 22: ARP/ND responder</h3>
 
     <p>
       This table implements ARP/ND responder in a logical switch for known
@@ -1694,7 +1722,7 @@ output;
       </li>
     </ul>
 
-    <h3>Ingress Table 22: DHCP option processing</h3>
+    <h3>Ingress Table 23: DHCP option processing</h3>
 
     <p>
       This table adds the DHCPv4 options to a DHCPv4 packet from the
@@ -1755,7 +1783,7 @@ next;
       </li>
     </ul>
 
-    <h3>Ingress Table 23: DHCP responses</h3>
+    <h3>Ingress Table 24: DHCP responses</h3>
 
     <p>
       This table implements DHCP responder for the DHCP replies generated by
@@ -1836,7 +1864,7 @@ output;
       </li>
     </ul>
 
-    <h3>Ingress Table 24 DNS Lookup</h3>
+    <h3>Ingress Table 25 DNS Lookup</h3>
 
     <p>
       This table looks up and resolves the DNS names to the corresponding
@@ -1865,7 +1893,7 @@ reg0[4] = dns_lookup(); next;
       </li>
     </ul>
 
-    <h3>Ingress Table 25 DNS Responses</h3>
+    <h3>Ingress Table 26 DNS Responses</h3>
 
     <p>
       This table implements DNS responder for the DNS replies generated by
@@ -1900,7 +1928,7 @@ output;
       </li>
     </ul>
 
-    <h3>Ingress table 26 External ports</h3>
+    <h3>Ingress table 27 External ports</h3>
 
     <p>
       Traffic from the <code>external</code> logical ports enter the ingress
@@ -1943,7 +1971,7 @@ output;
       </li>
     </ul>
 
-    <h3>Ingress Table 27 Destination Lookup</h3>
+    <h3>Ingress Table 28 Destination Lookup</h3>
 
     <p>
       This table implements switching behavior.  It contains these logical
@@ -2154,7 +2182,7 @@ output;
       </li>
     </ul>
 
-    <h3>Ingress Table 28 Destination unknown</h3>
+    <h3>Ingress Table 29 Destination unknown</h3>
 
     <p>
       This table handles the packets whose destination was not found or
@@ -2367,28 +2395,56 @@ output;
       This is similar to ingress table <code>ACL action</code>.
     </p>
 
-    <h3>Egress Table 6: <code>to-lport</code> QoS Marking</h3>
+    <h3>Egress Table 6: Mirror </h3>
+
+    <p>
+      Overlay remote mirror table contains the following
+      logical flows:
+    </p>
+
+    <ul>
+      <li>
+        For each logical switch port with an attached mirror, a logical flow
+        with a priority of 100 is added. This flow matches all outcoming
+        packets to the attached port, clones them, and forwards the cloned
+        packets to the mirror target port.
+      </li>
+
+      <li>
+        A priority 0 flow is added which matches on all packets and applies
+        the action <code>next;</code>.
+      </li>
+
+      <li>
+        A logical flow added for each Mirror Rule in Mirror table attached
+        to logical switch ports, matches all outcoming packets that match
+        rules and clones the packet and sends cloned packet to mirror
+        target port.
+      </li>
+    </ul>
+
+    <h3>Egress Table 7: <code>to-lport</code> QoS Marking</h3>
 
     <p>
       This is similar to ingress table <code>QoS marking</code> except
       they apply to <code>to-lport</code> QoS rules.
     </p>
 
-    <h3>Egress Table 7: <code>to-lport</code> QoS Meter</h3>
+    <h3>Egress Table 8: <code>to-lport</code> QoS Meter</h3>
 
     <p>
       This is similar to ingress table <code>QoS meter</code> except
       they apply to <code>to-lport</code> QoS rules.
     </p>
 
-    <h3>Egress Table 8: Stateful</h3>
+    <h3>Egress Table 9: Stateful</h3>
 
     <p>
       This is similar to ingress table <code>Stateful</code> except that
       there are no rules added for load balancing new connections.
     </p>
 
-    <h3>Egress Table 9: Egress Port Security - check</h3>
+    <h3>Egress Table 10: Egress Port Security - check</h3>
 
     <p>
       This is similar to the port security logic in table
@@ -2417,7 +2473,7 @@ output;
       </li>
     </ul>
 
-    <h3>Egress Table 10: Egress Port Security - Apply</h3>
+    <h3>Egress Table 11: Egress Port Security - Apply</h3>
 
     <p>
       This is similar to the ingress port security logic in ingress table
