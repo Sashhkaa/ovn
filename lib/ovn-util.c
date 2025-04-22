@@ -1180,6 +1180,8 @@ get_lport_type(const struct sbrec_port_binding *pb)
         return LP_REMOTE;
     } else if (!strcmp(pb->type, "vtep")) {
         return LP_VTEP;
+    } else if (!strcmp(pb->type, "mirror")) {
+        return LP_MIRROR;
     }
 
     return LP_UNKNOWN;
@@ -1193,6 +1195,8 @@ get_lport_type_str(enum en_lport_type lport_type)
         return "VIF";
     case LP_CONTAINER:
         return "CONTAINER";
+    case LP_MIRROR:
+        return "MIRROR";
     case LP_VIRTUAL:
         return "VIRTUAL";
     case LP_PATCH:
@@ -1234,6 +1238,7 @@ is_pb_router_type(const struct sbrec_port_binding *pb)
 
     case LP_VIF:
     case LP_CONTAINER:
+    case LP_MIRROR:
     case LP_VIRTUAL:
     case LP_LOCALNET:
     case LP_LOCALPORT:
