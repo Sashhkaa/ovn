@@ -85,8 +85,10 @@ struct ovn_northd_lb_vip {
 
 struct ovn_northd_lb_backend {
     bool health_check;
+    bool local_backend; /* Set to true if port locates in our ovn cluster. */
     char *logical_port; /* Logical port to which the ip belong to. */
     char *svc_mon_src_ip; /* Source IP to use for monitoring. */
+    char *az_name;
 };
 
 struct ovn_northd_lb *ovn_northd_lb_create(const struct nbrec_load_balancer *);

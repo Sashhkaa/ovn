@@ -155,6 +155,7 @@ struct northd_data {
     struct ovs_list lr_list;
     struct sset svc_monitor_lsps;
     struct hmap svc_monitor_map;
+    struct hmap prpg_svc_map;
 
     /* Change tracking data. */
     struct northd_tracked_data trk_data;
@@ -190,6 +191,7 @@ struct lflow_input {
     const struct hmap *svc_monitor_map;
     bool ovn_internal_version_changed;
     const char *svc_monitor_mac;
+    struct hmap *prpg_svc_map;
 };
 
 extern int parallelization_state;
@@ -784,4 +786,10 @@ lr_has_multiple_gw_ports(const struct ovn_datapath *od)
 
 uint32_t get_ovn_max_dp_key_local(const struct sbrec_chassis_table *);
 
+
+void
+build_svc_prpg(struct hmap *prpg_svc_map,
+               const struct hmap *ls_ports,
+               const char *svc_monitor_mac,
+               struct lflow_table *lflows);
 #endif /* NORTHD_H */
