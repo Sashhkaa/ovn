@@ -868,6 +868,7 @@ ovn_datapath_create(struct hmap *datapaths, const struct uuid *key,
     od->nbr = nbr;
     hmap_init(&od->port_tnlids);
     hmap_init(&od->nb_pgs);
+    hmapx_init(&od->ph_ports);
     od->port_key_hint = 0;
     hmap_insert(datapaths, &od->key_node, uuid_hash(&od->key));
     od->lr_group = NULL;
@@ -896,6 +897,7 @@ ovn_datapath_destroy(struct hmap *datapaths, struct ovn_datapath *od)
         free(od->localnet_ports);
         free(od->l3dgw_ports);
         ovn_ls_port_group_destroy(&od->nb_pgs);
+        hmapx_destroy(&od->ph_ports);
         destroy_mcast_info_for_datapath(od);
 
         free(od);
@@ -2549,6 +2551,10 @@ join_logical_ports(struct northd_input *input_data,
 
                 if (lsp_is_vtep(nbsp)) {
                     od->has_vtep_lports = true;
+                }
+
+                if (lsp_is_localnet(nbsp) || lsp_is_l2gw(nbsp)) {
+                    hmapx_add(&od->ph_ports, op);
                 }
 
                 op->lsp_addrs
@@ -7830,13 +7836,21 @@ build_drop_arp_nd_flows_for_unbound_router_ports(struct ovn_port *op,
     ds_destroy(&match);
 }
 
+static bool
+is_nat_distributed(const struct nbrec_nat *nat,
+                   struct ovn_datapath *od)
+{
+    return od->n_l3dgw_ports
+           && !strcmp(nat->type, "dnat_and_snat")
+           && nat->logical_port && nat->external_mac;
+}
 
 /*
  * Check od, assumed lswitch, for router connections that
  * requires chassis residence.
  */
 static bool
-has_residents(struct ovn_datapath *od)
+od_has_chassis_bound_lrps(struct ovn_datapath *od)
 {
     for (int rpi = 0; rpi < od->n_router_ports; rpi++) {
         struct ovn_port *op_r = od->router_ports[rpi]->peer;
@@ -7846,16 +7860,12 @@ has_residents(struct ovn_datapath *od)
         }
 
         for (int ni = 0; ni < op_r->od->nbr->n_nat; ni++) {
-            struct nbrec_nat *nat = op_r->od->nbr->nat[ni];
+            const struct nbrec_nat *nat = op_r->od->nbr->nat[ni];
 
             /* Determine whether this NAT rule satisfies the
-             * conditions for distributed NAT processing.
-             */
+             * conditions for distributed NAT processing. */
             if (is_nat_gateway_port(nat, op_r)
-                && op_r->od->n_l3dgw_ports
-                && strcmp(nat->type, "dnat_and_snat") == 0
-                && nat->logical_port
-                && nat->external_mac) {
+                && is_nat_distributed(nat, od)) {
                 return true;
             }
         }
@@ -7864,42 +7874,33 @@ has_residents(struct ovn_datapath *od)
     return false;
 }
 
-
 /*
  * Create ARP filtering flow for od, assumed logical switch,
  * for the following condition:
- * Given lswitch has both localnet/l2gateway ports and
+ * Given lswitch has either localnet or l2gateway ports and
  * router connection ports that requires chassis residence.
  * ARP requests coming from localnet/l2gateway ports
  * allowed for processing on resident chassis only.
  */
 static void
-build_lswitch_arp_chassis_resident(struct hmap *lflows,
-                                   struct ovn_datapath *od)
+build_lswitch_arp_chassis_resident(struct ovn_datapath *od,
+                                   struct hmap *lflows)
 {
-    if (!has_residents(od)) {
+    if (hmapx_is_empty(&od->ph_ports) ||
+        !od_has_chassis_bound_lrps(od)) {
         return;
     }
 
-    struct ds match;
-    ds_init(&match);
+    struct ds match = DS_EMPTY_INITIALIZER;
+    struct hmapx_node *node;
 
-    bool has_outher_ports = false;
+    HMAPX_FOR_EACH (node, &od->ph_ports) {
+        struct ovn_port *op = node->data;
 
-    for (int i = 0; i < od->nbs->n_ports; i++) {
-        struct nbrec_logical_switch_port *nbsp = od->nbs->ports[i];
-
-        if (lsp_is_localnet(nbsp) || lsp_is_l2gw(nbsp)) {
-            ds_clear(&match);
-            ds_put_format(&match, "arp && inport == \"%s\"", nbsp->name);
-            ovn_lflow_add(lflows, od, S_SWITCH_IN_CHECK_PORT_SEC, 75,
-                          ds_cstr(&match), REGBIT_EXT_ARP" = 1; next;");
-            has_outher_ports = true;
-        }
-    }
-
-    if (!has_outher_ports) {
-        return;
+        ds_clear(&match);
+        ds_put_format(&match, "arp && inport == %s", op->json_key);
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_CHECK_PORT_SEC, 75,
+                      ds_cstr(&match), REGBIT_EXT_ARP" = 1; next;");
     }
 
     for (int rpi = 0; rpi < od->n_router_ports; rpi++) {
@@ -7918,13 +7919,9 @@ build_lswitch_arp_chassis_resident(struct hmap *lflows,
             struct nbrec_nat *nat = op_r->od->nbr->nat[ni];
 
             /* Determine whether this NAT rule satisfies the
-             * conditions for distributed NAT processing.
-             */
+             * conditions for distributed NAT processing. */
             if (is_nat_gateway_port(nat, op_r)
-                && op_r->od->n_l3dgw_ports
-                && strcmp(nat->type, "dnat_and_snat") == 0
-                && nat->logical_port
-                && nat->external_mac) {
+                && is_nat_distributed(nat, od)) {
                 ds_clear(&match);
                 ds_put_format(&match,
                               REGBIT_EXT_ARP
@@ -7938,6 +7935,7 @@ build_lswitch_arp_chassis_resident(struct hmap *lflows,
 
     ovn_lflow_add(lflows, od, S_SWITCH_IN_APPLY_PORT_SEC, 70,
                   REGBIT_EXT_ARP" == 1", "drop;");
+
     ds_destroy(&match);
 }
 
@@ -8030,7 +8028,7 @@ build_lswitch_lflows_admission_control(struct ovn_datapath *od,
 
         ovn_lflow_add(lflows, od, S_SWITCH_IN_APPLY_PORT_SEC, 0, "1", "next;");
 
-        build_lswitch_arp_chassis_resident(lflows, od);
+        build_lswitch_arp_chassis_resident(od, lflows);
     }
 }
 
@@ -14081,8 +14079,7 @@ lrouter_check_nat_entry(struct ovn_datapath *od, const struct nbrec_nat *nat,
     /* For distributed router NAT, determine whether this NAT rule
      * satisfies the conditions for distributed NAT processing. */
     *distributed = false;
-    if (od->n_l3dgw_ports && !strcmp(nat->type, "dnat_and_snat") &&
-        nat->logical_port && nat->external_mac) {
+    if (is_nat_distributed(nat, od)) {
         if (eth_addr_from_string(nat->external_mac, mac)) {
             *distributed = true;
         } else {

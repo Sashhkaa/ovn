@@ -19,6 +19,7 @@
 #include "lib/ovn-util.h"
 #include "lib/ovs-atomic.h"
 #include "lib/sset.h"
+#include "lib/hmapx.h"
 #include "northd/ipam.h"
 #include "openvswitch/hmap.h"
 
@@ -260,6 +261,9 @@ struct ovn_datapath {
 
     /* Port groups related to the datapath, used only when nbs is NOT NULL. */
     struct hmap nb_pgs;
+
+    /* Set of localnet or l2gw ports. */
+    struct hmapx ph_ports;
 
     struct ovs_list port_list;
 };
