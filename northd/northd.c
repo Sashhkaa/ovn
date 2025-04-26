@@ -7841,8 +7841,8 @@ is_nat_distributed(const struct nbrec_nat *nat,
                    struct ovn_datapath *od)
 {
     return od->n_l3dgw_ports
-           && !strcmp(nat->type, "dnat_and_snat")
-           && nat->logical_port && nat->external_mac;
+           && nat->logical_port && nat->external_mac
+           && !strcmp(nat->type, "dnat_and_snat");
 }
 
 /*
@@ -7916,12 +7916,12 @@ build_lswitch_arp_chassis_resident(struct ovn_datapath *od,
         }
 
         for (int ni = 0; ni < op_r->od->nbr->n_nat; ni++) {
-            struct nbrec_nat *nat = op_r->od->nbr->nat[ni];
+            const struct nbrec_nat *nat = op_r->od->nbr->nat[ni];
 
             /* Determine whether this NAT rule satisfies the
              * conditions for distributed NAT processing. */
             if (is_nat_gateway_port(nat, op_r)
-                && is_nat_distributed(nat, od)) {
+                && is_nat_distributed(nat, op_r->od)) {
                 ds_clear(&match);
                 ds_put_format(&match,
                               REGBIT_EXT_ARP
