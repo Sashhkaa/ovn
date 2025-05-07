@@ -1288,6 +1288,7 @@ ovn_port_create(struct hmap *ports, const char *key,
     ovn_port_set_nb(op, nbsp, nbrp);
     op->primary_port = op->cr_port = NULL;
     hmap_insert(ports, &op->key_node, hash_string(op->key, 0));
+    op->has_attached_lport_mirror = false;
 
     op->lflow_ref = lflow_ref_create();
     op->stateful_lflow_ref = lflow_ref_create();
@@ -2212,6 +2213,7 @@ create_mirror_port(struct ovn_port *op, struct hmap *ports,
     mp->mirror_target_port = target_port;
     mp->od = op->od;
 
+    op->has_attached_lport_mirror = true;
 clear:
     free(mp_name);
 }
@@ -5078,10 +5080,11 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
             sbrec_port_binding_delete(op->sb);
             delete_fdb_entries(ni->sbrec_fdb_by_dp_and_port, od->tunnel_key,
                                 op->tunnel_key);
-            if (is_lsp_mirror_target_port(ni->nbrec_mirror_by_type_and_sink,
+            if (op->has_attached_lport_mirror ||
+                is_lsp_mirror_target_port(ni->nbrec_mirror_by_type_and_sink,
                                           op)) {
-            /* This port was used as target mirror port, fallback
-             * to recompute. */
+                /* This port was used as target mirror port, fallback
+                * to recompute. */
                 goto fail;
             }
         }

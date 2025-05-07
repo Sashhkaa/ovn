@@ -19071,6 +19071,8 @@ OVS_WAIT_UNTIL([as hv1 ovs-appctl -t ovn-controller inject-pkt "$packet"])
 
 OVN_CHECK_PACKETS([hv3/vif1-tx.pcap], [packet])
 
+check ovn-nbctl lsp-del ls1-lp1
+
 check ovn-nbctl mirror-del
 
 OVN_CLEANUP([hv1],[hv2],[hv3])
