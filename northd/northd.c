@@ -1163,7 +1163,8 @@ build_datapaths(struct ovsdb_idl_txn *ovnsb_txn,
     ods_build_array_index(lr_datapaths);
 }
 
-static bool lsp_can_be_inc_processed(const struct nbrec_logical_switch_port *);
+static bool lsp_can_be_inc_processed(const struct nbrec_logical_switch_port *,
+                                     struct ovn_port *op);
 
 /* This function returns true if 'op' is a chassis resident
  * derived port. False otherwise.
@@ -1265,7 +1266,7 @@ ovn_port_set_nb(struct ovn_port *op,
 {
     op->nbsp = nbsp;
     if (nbsp) {
-        op->lsp_can_be_inc_processed = lsp_can_be_inc_processed(nbsp);
+        op->lsp_can_be_inc_processed = lsp_can_be_inc_processed(nbsp, op);
     }
     op->nbrp = nbrp;
     init_mcast_port_info(&op->mcast_info, op->nbsp, op->nbrp);
@@ -4699,7 +4700,8 @@ destroy_northd_tracked_data(struct northd_data *nd)
  * node en_northd.
  */
 static bool
-lsp_can_be_inc_processed(const struct nbrec_logical_switch_port *nbsp)
+lsp_can_be_inc_processed(const struct nbrec_logical_switch_port *nbsp,
+                         struct ovn_port *op)
 {
     /* Support only normal VIF for now. */
     if (nbsp->type[0]) {
@@ -4727,6 +4729,18 @@ lsp_can_be_inc_processed(const struct nbrec_logical_switch_port *nbsp)
          * handle od->has_unknown change and track it when the first LSP with
          * 'unknown' is added or when the last one is removed. */
         if (!strcmp(nbsp->addresses[j], "unknown")) {
+            return false;
+        }
+    }
+
+    /* Attaching lport mirror is not supported for now. */
+    for (size_t i = 0; i < nbsp->n_mirror_rules; i++) {
+        if (!strcmp("lport", nbsp->mirror_rules[i]->type)) {
+            if (op) {
+                /* Set to true to don't trigger full recompute for
+                  * changes other mirror types. */
+                op->has_attached_lport_mirror = true;
+            }
             return false;
         }
     }
@@ -4947,12 +4961,17 @@ is_lsp_mirror_target_port(
 }
 
 static bool
-lsp_handle_mirror_rules_changes(const struct nbrec_logical_switch_port *nbsp)
+lsp_handle_mirror_rules_changes(const struct ovn_port *op)
 {
-    if (nbrec_logical_switch_port_is_updated(nbsp,
+    if (!op->has_attached_lport_mirror) {
+        return true;
+    }
+
+    if (nbrec_logical_switch_port_is_updated(op->nbsp,
         NBREC_LOGICAL_SWITCH_PORT_COL_MIRROR_RULES)) {
         return false;
     }
+
     return true;
 }
 
@@ -5000,7 +5019,7 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
         op = ovn_port_find_in_datapath(od, new_nbsp);
 
         if (!op) {
-            if (!lsp_can_be_inc_processed(new_nbsp)) {
+            if (!lsp_can_be_inc_processed(new_nbsp, op)) {
                 goto fail;
             }
             op = ls_port_create(ovnsb_idl_txn, &nd->ls_ports,
@@ -5017,7 +5036,7 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
             bool temp = false;
             if (lsp_is_type_changed(op->sb, new_nbsp, &temp) ||
                 !op->lsp_can_be_inc_processed ||
-                !lsp_can_be_inc_processed(new_nbsp)) {
+                !lsp_can_be_inc_processed(new_nbsp, op)) {
                 goto fail;
             }
             const struct sbrec_port_binding *sb = op->sb;
@@ -5026,7 +5045,7 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                  * by this change. Fallback to recompute. */
                 goto fail;
             }
-            if (!lsp_handle_mirror_rules_changes(new_nbsp) ||
+            if (!lsp_handle_mirror_rules_changes(op) ||
                  is_lsp_mirror_target_port(ni->nbrec_mirror_by_type_and_sink,
                                            op)) {
                 /* Fallback to recompute. */
