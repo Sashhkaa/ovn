@@ -6321,10 +6321,10 @@ tcp,orig=(src=172.16.0.1,dst=10.0.0.2,sport=<cleared>,dport=<cleared>),reply=(sr
 ])
 # Check entries in table 76 and 77 expires w/o traffic
 OVS_WAIT_UNTIL([
-test $(ovs-ofctl dump-flows br-int | grep -c 'table=76, n_packets') -eq 0
+test $(ovs-ofctl dump-flows br-int | grep -c 'table=77, n_packets') -eq 0
 ])
 OVS_WAIT_UNTIL([
-test $(ovs-ofctl dump-flows br-int | grep -c 'table=77, n_packets') -eq 0
+test $(ovs-ofctl dump-flows br-int | grep -c 'table=78, n_packets') -eq 0
 ])
 
 ovs-ofctl dump-flows br-int
