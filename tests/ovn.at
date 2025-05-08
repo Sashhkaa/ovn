@@ -43070,3 +43070,46 @@ echo $expected > expected
 OVN_CHECK_PACKETS([hv1/server-tx.pcap], [expected])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([controller pupupupu])
+ovn_start
+
+# Create one hypervisor and create OVS ports corresponding to logical ports.
+net_add n1
+
+sim_add hv1
+as hv1
+
+ovs-vsctl add-br br-phys -- set bridge br-phys other-config:hwaddr=\"00:00:00:01:02:00\"
+ovn_attach n1 br-phys 192.168.1.11
+
+ovs-vsctl -- add-port br-int vif1 -- \
+    set interface vif1 external-ids:iface-id=ls1-lp1 \
+    options:tx_pcap=hv1/vif1-tx.pcap \
+    options:rxq_pcap=hv1/vif1-rx.pcap \
+    ofport-request=1
+
+
+ovn-sbctl list SB_G
+
+ovn-sbctl set SB_G . supported_actions='"ARP, BFD_MSG, BIND_VPORT, CHECK_IN_PORT_SEC, CHECK_OUT_PORT_SEC, CHECK_PKT_LARGER, CHK_ECMP_NH, CHK_ECMP_NH_MAC, CHK_LB_AFF, CHK_LB_HAIRPIN, CHK_LB_HAIRPIN_REPLY, CLONE, COMMIT_ECMP_NH, COMMIT_LB_AFF, CT_CLEAR, CT_COMMIT_NAT, CT_COMMIT_TO_ZONE, CT_COMMIT_V2, CT_DNAT, CT_DNAT_IN_CZONE, CT_LB, CT_LB_MARK, CT_NEXT, CT_ORIG_IP6_DST, CT_ORIG_NW_DST, CT_ORIG_TP_DST, CT_SNAT, CT_SNAT_IN_CZONE, CT_SNAT_TO_VIP, CT_STATE_SAVE, DEC_TTL, DHCP6_REPLY, DHCPV4_RELAY_REQ_CHK, DHCPV4_RELAY_RESP_CHK, DNS_LOOKUP, EXCHANGE, FLOOD_REMOTE, FWD_GROUP, GET_ARP, GET_FDB, GET_ND, HANDLE_SVC_CHECK, ICMP4, ICMP4_ERROR, ICMP6, ICMP6_ERROR, IGMP, LOAD, LOG, LOOKUP_ARP, LOOKUP_ARP_IP, LOOKUP_FDB, LOOKUP_ND, LOOKUP_ND_IP, MAC_CACHE_USE, MOVE, ND_NA, ND_NA_ROUTER, ND_NS, NEXT, OUTPUT, OVNFIELD_LOAD, POP, PUSH, PUT_ARP, PUT_DHCPV4_OPTS, PUT_DHCPV6_OPTS"'
+
+ovn-sbctl list SB_G
+
+sim_add hv2
+as hv2
+
+ovs-vsctl add-br br-phys -- set bridge br-phys other-config:hwaddr=\"00:00:00:01:02:00\"
+ovn_attach n1 br-phys 192.168.1.11
+
+ovs-vsctl -- add-port br-int vif1 -- \
+    set interface vif1 external-ids:iface-id=ls1-lp1 \
+    options:tx_pcap=hv2/vif1-tx.pcap \
+    options:rxq_pcap=hv2/vif1-rx.pcap \
+    ofport-request=1
+
+
+check lsdjskjdls
+AT_CLEANUP
+])

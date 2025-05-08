@@ -16962,3 +16962,14 @@ AT_CHECK([ovn_strip_lflows < lrflows | grep priority=105 | grep -c "flags.force_
 
 AT_CLEANUP
 ])
+
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([pupupupu])
+ovn_start
+
+ovn-sbctl list SB_G
+
+check lsjdlsjdlsdjs
+AT_CLEANUP
+])

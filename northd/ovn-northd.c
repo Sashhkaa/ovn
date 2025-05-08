@@ -44,6 +44,7 @@
 #include "util.h"
 #include "openvswitch/vlog.h"
 #include "lib/ovn-parallel-hmap.h"
+#include "include/ovn/actions.h"
 
 VLOG_DEFINE_THIS_MODULE(ovn_northd);
 
@@ -769,6 +770,26 @@ run_idl_loop(struct ovsdb_idl_loop *idl_loop, const char *name,
     return txn;
 }
 
+/* to do: add option in northd ? */
+static void
+ovn_save_supported_actions(struct ovsdb_idl *ovnsb_idl,
+                           struct ovsdb_idl_txn *ovnsb_idl_txn)
+{
+    int n_actions = ovn_action_get_count();
+    char **ovnacts = xmalloc(sizeof *ovnacts * n_actions);
+
+    ovn_action_get_names(ovnacts);
+
+    const struct sbrec_sb_global *sb =
+            sbrec_sb_global_first(ovnsb_idl);
+
+    /* сейчас это выставляется в лупе, это вероятно не очень хорошо. */
+    /* подумать нужна ли копия массива для того чтобы вставлять его в sb. */
+    if (sb) {
+        sbrec_sb_global_set_supported_actions(sb, ovnacts, n_actions);
+    }
+}
+
 #define DEFAULT_NORTHD_TRIM_TO_MS 30000
 
 static void
@@ -1078,6 +1099,7 @@ main(int argc, char *argv[])
                                             ovnsb_idl_loop.idl,
                                             ovnnb_txn, ovnsb_txn,
                                             &ovnsb_idl_loop);
+                    ovn_save_supported_actions(ovnsb_idl_loop.idl, ovnsb_txn);
                 } else if (!inc_proc_northd_get_force_recompute()) {
                     clear_idl_track = false;
                 }

@@ -5361,6 +5361,66 @@ check_northd_version(struct ovsdb_idl *ovs_idl, struct ovsdb_idl *ovnsb_idl,
     return true;
 }
 
+struct action_info {
+    struct hmap_node hmap_node;
+    char *action_str;
+};
+
+static void
+validate_compatibility_with_northd(struct ovsdb_idl *ovnsb_idl)
+{
+    const struct sbrec_sb_global *sb = sbrec_sb_global_first(ovnsb_idl);
+    struct hmap northd_actions_map = HMAP_INITIALIZER(&northd_actions_map);
+    struct hmap controller_actions_map = HMAP_INITIALIZER(&controller_actions_map);
+
+    int n_actions = ovn_action_get_count();
+    char **controller_actions = xmalloc(sizeof *controller_actions * n_actions);
+    ovn_action_get_names(controller_actions);
+
+    for (size_t i = 0; i < n_actions; i++) {
+        struct action_info *action = xzalloc(sizeof *action);
+        action->action_str = xstrdup(controller_actions[i]);
+        uint32_t hash = hash_string(action->action_str, 0);
+        hmap_insert(&controller_actions_map, &action->hmap_node, hash);
+    }
+    free(controller_actions);
+    
+    if (!sb) {
+        VLOG_WARN("Validate actions: No SB Global record found");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < sb->n_supported_actions; i++) {
+        struct action_info *action = xzalloc(sizeof *action);
+        action->action_str = xstrdup(sb->supported_actions[i]);
+        uint32_t hash = hash_string(action->action_str, 0);
+        hmap_insert(&northd_actions_map, &action->hmap_node, hash);
+    }
+
+    struct hmap *map_ptr_1 = (sb->n_supported_actions > n_actions) ? &northd_actions_map
+                             :  &controller_actions_map;
+    struct hmap *map_ptr_2 = (sb->n_supported_actions > n_actions) ? &controller_actions_map
+                        :    : &northd_actions_map;
+    /*to do: print all unsuppotred actions in one string. */
+    struct action_info *action_ptr; 
+    HMAP_FOR_EACH (action, hmap_node, map_ptr_2) {
+        uint32_t hash = hash_string(action->action_str, 0); 
+        HMAP_FOR_EACH_WITH_HASH (action_ptr, hmap_node, hash, map_ptr_2)
+
+    }
+
+cleanup:
+    struct hmap *maps[] = {&northd_actions_map, &controller_actions_map};
+    for (size_t i = 0; i < ARRAY_SIZE(maps); i++) {
+        HMAP_FOR_EACH_POP (action, hmap_node, maps[i]) {
+            free(action->action_str);
+            free(action);
+        }
+        hmap_destroy(maps[i]);
+    }
+}
+
+
 static void
 br_int_remote_update(struct br_int_remote *remote,
                      const struct ovsrec_bridge *br_int,
@@ -6079,6 +6139,8 @@ main(int argc, char *argv[])
         bool northd_version_match =
             check_northd_version(ovs_idl_loop.idl, ovnsb_idl_loop.idl,
                                  ovn_version);
+
+        validate_compatibility_with_northd(ovnsb_idl_loop.idl);
 
         const struct ovsrec_bridge_table *bridge_table =
             ovsrec_bridge_table_get(ovs_idl_loop.idl);
