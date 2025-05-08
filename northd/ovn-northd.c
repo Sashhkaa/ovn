@@ -44,6 +44,7 @@
 #include "util.h"
 #include "openvswitch/vlog.h"
 #include "lib/ovn-parallel-hmap.h"
+#include "include/ovn/actions.h"
 
 VLOG_DEFINE_THIS_MODULE(ovn_northd);
 
@@ -769,7 +770,25 @@ run_idl_loop(struct ovsdb_idl_loop *idl_loop, const char *name,
     return txn;
 }
 
+/* to do: add option in northd ? */
+static void
+ovn_save_supported_actions(struct ovsdb_idl *ovnsb_idl)
+{
+    size_t n = ovn_action_get_count();
+    const char **actions = xmalloc(sizeof *actions * n);
+    const struct sbrec_sb_global *sb =
+            sbrec_sb_global_first(ovnsb_idl);
+
+    ovn_action_get_names(actions);
+
+    if (sb) {
+        sbrec_sb_global_set_supported_actions(sb, actions, n);
+    }
+}
+
+
 #define DEFAULT_NORTHD_TRIM_TO_MS 30000
+
 
 static void
 run_memory_trimmer(struct ovsdb_idl *ovnnb_idl, bool activity)
@@ -992,6 +1011,9 @@ main(int argc, char *argv[])
     unsigned int ovnsb_cond_seqno = UINT_MAX;
 
     run_update_worker_pool(n_threads);
+
+    ovn_save_supported_actions(ovnsb_idl_loop.idl);
+
 
     /* Main loop. */
     struct northd_engine_context eng_ctx = {0};

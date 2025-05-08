@@ -156,6 +156,14 @@
         the southbound database to bring it up to date with these changes, it
         updates this column to the same value.
       </column>
+      <column name="supported_actions">
+        Sequence number for the configuration.  When a CMS or
+        <code>ovn-nbctl</code> updates the northbound database, it increments
+        the <code>nb_cfg</code> column in the <code>NB_Global</code> table in
+        the northbound database.  In turn, when <code>ovn-northd</code> updates
+        the southbound database to bring it up to date with these changes, it
+        updates this column to the same value.
+      </column>
     </group>
 
     <group title="Common Columns">
