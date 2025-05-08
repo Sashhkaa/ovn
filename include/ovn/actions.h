@@ -151,6 +151,20 @@ enum {
 #undef OVNACT
 };
 
+static inline void
+ovn_action_to_string(void) {
+    #define OVNACT(name, func) #name,
+    const char *ovnact_names[] = {
+        OVNACTS
+    };
+    #undef OVNACT
+
+    size_t count = sizeof(ovnact_names) / sizeof(ovnact_names[0]);
+
+    for (size_t i = 0; i < count; i++) {
+        printf("%s\n", ovnact_names[i]);
+    }
+}
 /* Header for an action.
  *
  * Each action is a structure "struct ovnact_*" that begins with "struct

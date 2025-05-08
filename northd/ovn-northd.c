@@ -44,6 +44,7 @@
 #include "util.h"
 #include "openvswitch/vlog.h"
 #include "lib/ovn-parallel-hmap.h"
+#include "include/ovn/actions.h"
 
 VLOG_DEFINE_THIS_MODULE(ovn_northd);
 
@@ -995,6 +996,8 @@ main(int argc, char *argv[])
 
     /* Main loop. */
     struct northd_engine_context eng_ctx = {0};
+
+    ovn_action_to_string();
 
     while (!exit_args.exiting) {
         update_ssl_config();
