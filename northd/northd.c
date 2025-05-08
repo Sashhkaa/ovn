@@ -3875,10 +3875,10 @@ build_lb_datapaths(const struct hmap *lbs, const struct hmap *lb_groups,
                 &od->nbs->load_balancer[i]->header_.uuid;
             lb_dps = ovn_lb_datapaths_find(lb_datapaths_map, lb_uuid);
             ovs_assert(lb_dps);
-            ovn_lb_datapaths_add_ls(lb_dps, 1, &od);
-            
-            if (od->enable_stateless) {
-                lb_dps->is_enable_stateless_acl_lb = true;
+            if (!od->enable_stateless) {
+                ovn_lb_datapaths_add_ls(lb_dps, 1, &od);
+            } else {
+                ovn_lb_datapaths_add_ls_en_stateless(lb_dps, 1, &od);
             }
         }
 
@@ -3889,7 +3889,13 @@ build_lb_datapaths(const struct hmap *lbs, const struct hmap *lb_groups,
                 ovn_lb_group_datapaths_find(lb_group_datapaths_map,
                                             lb_group_uuid);
             ovs_assert(lb_group_dps);
-            ovn_lb_group_datapaths_add_ls(lb_group_dps, 1, &od);
+            if (!od->enable_stateless) {
+                VLOG_WARN("add to ls group");
+                ovn_lb_group_datapaths_add_ls(lb_group_dps, 1, &od);
+            } else {
+                VLOG_WARN("add to en stateless dp");
+                ovn_lb_group_datapaths_add_en_stateless_ls(lb_dps, &od);
+            }
         }
     }
 
@@ -5362,7 +5368,7 @@ northd_handle_lb_data_changes(struct tracked_lb_data *trk_lb_data,
         lb_dps = ovn_lb_datapaths_find(lb_datapaths_map, lb_uuid);
         if (!lb_dps) {
             lb_dps = ovn_lb_datapaths_create(lb, ods_size(ls_datapaths),
-                                             ods_size(lr_datapaths));
+                                             ods_size(lr_datapaths), 0);
             hmap_insert(lb_datapaths_map, &lb_dps->hmap_node,
                         uuid_hash(lb_uuid));
         }

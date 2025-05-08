@@ -573,12 +573,13 @@ remove_ips_from_lb_ip_set(struct ovn_lb_ip_set *lb_ips,
 /* lb datapaths functions */
 struct  ovn_lb_datapaths *
 ovn_lb_datapaths_create(const struct ovn_northd_lb *lb, size_t n_ls_datapaths,
-                        size_t n_lr_datapaths)
+                        size_t n_lr_datapaths, size_t n_nb_en_stateless_ls)
 {
     struct ovn_lb_datapaths *lb_dps = xzalloc(sizeof *lb_dps);
     lb_dps->lb = lb;
     lb_dps->nb_ls_map = bitmap_allocate(n_ls_datapaths);
     lb_dps->nb_lr_map = bitmap_allocate(n_lr_datapaths);
+    lb_dps->en_stateless = bitmap_allocate(n_nb_en_stateless_ls);
     lb_dps->lflow_ref = lflow_ref_create();
 
     return lb_dps;
@@ -589,6 +590,7 @@ ovn_lb_datapaths_destroy(struct ovn_lb_datapaths *lb_dps)
 {
     bitmap_free(lb_dps->nb_lr_map);
     bitmap_free(lb_dps->nb_ls_map);
+    bitmap_free(lb_dps->en_stateless);
     lflow_ref_destroy(lb_dps->lflow_ref);
     free(lb_dps);
 }
@@ -617,6 +619,19 @@ ovn_lb_datapaths_add_ls(struct ovn_lb_datapaths *lb_dps, size_t n,
     }
 }
 
+void
+ovn_lb_datapaths_add_ls_en_stateless(struct ovn_lb_datapaths *lb_dps,
+                                     size_t n,
+                                     struct ovn_datapath **ods)
+{
+    for (size_t i = 0; i < n; i++) {
+        if (!bitmap_is_set(lb_dps->en_stateless, ods[i]->index)) {
+            bitmap_set1(lb_dps->en_stateless, ods[i]->index);
+            lb_dps->n_nb_en_stateless_ls++;
+        }
+    }
+}
+
 struct ovn_lb_datapaths *
 ovn_lb_datapaths_find(const struct hmap *lb_dps_map,
                       const struct uuid *lb_uuid)
@@ -641,6 +656,8 @@ ovn_lb_group_datapaths_create(const struct ovn_lb_group *lb_group,
     lb_group_dps->lb_group = lb_group;
     lb_group_dps->ls = xmalloc(max_ls_datapaths * sizeof *lb_group_dps->ls);
     lb_group_dps->lr = xmalloc(max_lr_datapaths * sizeof *lb_group_dps->lr);
+    lb_group_dsp->en_stateless_ls =
+                xmalloc(max_lr_datapaths * sizeof *lb_group_dps->lr);
 
     return lb_group_dps;
 }
@@ -650,6 +667,7 @@ ovn_lb_group_datapaths_destroy(struct ovn_lb_group_datapaths *lb_group_dps)
 {
     free(lb_group_dps->ls);
     free(lb_group_dps->lr);
+    free(lb_group_dps->en_stateless_ls);
     free(lb_group_dps);
 }
 

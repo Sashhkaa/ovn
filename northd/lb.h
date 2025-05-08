@@ -139,6 +139,9 @@ struct ovn_lb_datapaths {
     size_t n_nb_lr;
     unsigned long *nb_lr_map;
 
+    size_t n_nb_en_stateless_ls;
+    unsigned long *en_stateless;
+
     /* Reference of lflows generated for this load balancer.
      *
      * This data is initialized and destroyed by the en_northd node, but
@@ -178,7 +181,8 @@ void ovn_lb_datapaths_add_lr(struct ovn_lb_datapaths *, size_t n,
                              struct ovn_datapath **);
 void ovn_lb_datapaths_add_ls(struct ovn_lb_datapaths *, size_t n,
                              struct ovn_datapath **);
-
+void ovn_lb_datapaths_add_ls_en_stateless(struct ovn_lb_datapaths *, size_t n,
+                                          struct ovn_datapath **);
 struct ovn_lb_group_datapaths {
     struct hmap_node hmap_node;
 
@@ -189,6 +193,8 @@ struct ovn_lb_group_datapaths {
     struct ovn_datapath **ls;
     size_t n_lr;
     struct ovn_datapath **lr;
+    size_t n_en_stateless_ls;
+    struct ovn_datapath **en_stateless_ls;
 };
 
 struct ovn_lb_group_datapaths *ovn_lb_group_datapaths_create(
@@ -201,7 +207,7 @@ struct ovn_lb_group_datapaths *ovn_lb_group_datapaths_find(
 
 static inline void
 ovn_lb_group_datapaths_add_ls(struct ovn_lb_group_datapaths *lbg_dps, size_t n,
-                               struct ovn_datapath **ods)
+                              struct ovn_datapath **ods)
 {
     memcpy(&lbg_dps->ls[lbg_dps->n_ls], ods, n * sizeof *ods);
     lbg_dps->n_ls += n;
@@ -212,6 +218,15 @@ ovn_lb_group_datapaths_add_lr(struct ovn_lb_group_datapaths *lbg_dps,
                                struct ovn_datapath *lr)
 {
     lbg_dps->lr[lbg_dps->n_lr++] = lr;
+}
+
+static inline void
+ovn_lb_group_datapaths_add_en_stateless_ls(
+    struct ovn_lb_group_datapaths *lbg_dps,
+    struct ovn_datapath *en_stateless_ls)
+{
+    lbg_dps->en_stateless_ls[lbg_dps->n_en_stateless_ls++] =
+        en_stateless_ls;
 }
 
 #endif /* OVN_NORTHD_LB_H */

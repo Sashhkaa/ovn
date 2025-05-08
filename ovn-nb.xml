@@ -827,6 +827,10 @@
         is not set and the zone limit is derived from OvS default datapath
         limit.
       </column>
+
+      <column name="other_config" key="enable-stateless-acl-lb" type='{"type": "boolean"}'>
+      TODO: add doc.
+      </column>
     </group>
 
     <group title="IP Multicast Snooping Options">
