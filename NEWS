@@ -19,7 +19,7 @@ Post v25.03.0
        database connections is now removed.
    - Introduce exclude-router-ips-from-garp in logical_switch_port column
      so that the router port IPs are not advertised in the GARPs.
-  - Add a new logical switch option - enable-stateless-acl-lb with default value
+  - Add a new load balancer option - enable-stateless-acl-lb with default value
     of false. This option should be set to true for logical switch with stateless
     ACL to work with load balancer.
 

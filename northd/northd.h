@@ -379,7 +379,7 @@ struct ovn_datapath {
     bool has_unknown;
     bool has_vtep_lports;
     bool has_arp_proxy_port;
-    bool enable_stateless;
+    bool en_stateless_acl_lb;
 
     /* IPAM data. */
     struct ipam_info ipam_info;

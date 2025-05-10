@@ -472,14 +472,13 @@ struct lrouter_group {
 };
 
 static inline bool
-set_enable_statelless_acl_lb(const struct nbrec_logical_switch *nbs)
+set_enable_statelless_acl_lb_option(const struct nbrec_load_balancer *nlb)
 {
-    if (!nbs) {
+    if (!nlb) {
         return false;
     }
 
-    return smap_get_bool(&nbs->other_config,
-            "enable-stateless-acl-lb", false);
+    return smap_get_bool(&nlb->options, "enable-stateless-acl-lb", false);
 }
 
 static struct ovn_datapath *
@@ -955,7 +954,6 @@ join_datapaths(const struct nbrec_logical_switch_table *nbrec_ls_table,
 
         init_ipam_info_for_datapath(od);
         init_mcast_info_for_datapath(od);
-        od->enable_stateless = set_enable_statelless_acl_lb(nbs);
         if (smap_get_bool(&nbs->other_config, "ic-vxlan_mode", false)) {
             vxlan_ic_mode = true;
         }
@@ -3846,6 +3844,13 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
     return reject;
 }
 
+static inline void
+ovn_lb_datapath_set_options(const struct ovn_northd_lb *lb,
+                            struct ovn_datapath *od)
+{
+    od->en_stateless_acl_lb = lb->en_stateless_acl_lb;
+}
+
 static void
 build_lb_datapaths(const struct hmap *lbs, const struct hmap *lb_groups,
                    struct ovn_datapaths *ls_datapaths,
@@ -3888,10 +3893,7 @@ build_lb_datapaths(const struct hmap *lbs, const struct hmap *lb_groups,
             lb_dps = ovn_lb_datapaths_find(lb_datapaths_map, lb_uuid);
             ovs_assert(lb_dps);
             ovn_lb_datapaths_add_ls(lb_dps, 1, &od);
-
-            if (od->enable_stateless) {
-                lb_dps->enable_stateless_dp = true;
-            }
+            ovn_lb_datapath_set_options(lb_dps->lb, od);
         }
 
         for (size_t i = 0; i < od->nbs->n_load_balancer_group; i++) {
@@ -5411,11 +5413,7 @@ northd_handle_lb_data_changes(struct tracked_lb_data *trk_lb_data,
             lb_dps = ovn_lb_datapaths_find(lb_datapaths_map, &uuidnode->uuid);
             ovs_assert(lb_dps);
             ovn_lb_datapaths_add_ls(lb_dps, 1, &od);
-
-            if (od->enable_stateless) {
-                lb_dps->enable_stateless_dp = true;
-            }
-
+            ovn_lb_datapath_set_options(lb_dps->lb, od);
             /* Add the lb to the northd tracked data. */
             hmapx_add(&nd_changes->trk_lbs.crupdated, lb_dps);
         }
@@ -5958,7 +5956,7 @@ build_stateless_filter(const struct ovn_datapath *od,
                                 action,
                                 &acl->header_,
                                 lflow_ref);
-    } else if (!od->enable_stateless) {
+    } else if (!od->en_stateless_acl_lb) {
         ovn_lflow_add_with_hint(lflows, od, S_SWITCH_OUT_PRE_ACL,
                                 acl->priority + OVN_ACL_PRI_OFFSET,
                                 acl->match,
@@ -7522,7 +7520,7 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
          * This is enforced at a higher priority than ACLs can be defined. */
         ds_clear(&match);
 
-        if (use_ct_inv_match && !od->enable_stateless) {
+        if (use_ct_inv_match && !od->en_stateless_acl_lb) {
             ds_put_cstr(&match, "ct.inv || (ct.est && ct.rpl && "
                                 "ct_mark.blocked == 1)");
         } else {
@@ -7822,7 +7820,7 @@ build_lb_rules_pre_stateful(struct lflow_table *lflows,
         }
         ds_put_cstr(action, "ct_lb_mark;");
 
-        if (!lb_dps->enable_stateless_dp) {
+        if (!lb->en_stateless_acl_lb) {
             ds_put_format(match, REGBIT_CONNTRACK_NAT" == 1 && %s.dst == %s",
                           ip_match, lb_vip->vip_str);
         } else {
@@ -7841,13 +7839,13 @@ build_lb_rules_pre_stateful(struct lflow_table *lflows,
 
         /* Pass all VIP traffic to the conntrack to support load balancers
            in the case of stateless acl. */
-        if (lb_dps->enable_stateless_dp &&
-            (lb_vip->hairpin_snat_ip || lb_vip->port_str)) {
+        if (lb->en_stateless_acl_lb &&
+            (lb->hairpin_snat_ip || lb_vip->port_str)) {
             ds_clear(action);
             ds_clear(match);
 
             ds_put_format(match, "%s && %s.dst == %s", lb->proto, ip_match,
-                          lb_vip->hairpin_snat_ip ? lb_vip->hairpin_snat_ip
+                          lb->hairpin_snat_ip ? lb->hairpin_snat_ip
                           : lb_vip->vip_str);
 
             ds_put_cstr(action, "ct_lb_mark;");

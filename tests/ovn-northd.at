@@ -16964,7 +16964,7 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD_NO_HV([
-AT_SETUP([enable-stateless-acl-lb usage])
+AT_SETUP([enable-stateless-acl-lb option usage])
 ovn_start ovn-northd
 
 AS_BOX([create logical switches and ports])
@@ -17008,7 +17008,7 @@ AT_CHECK(
 ])
 
 AS_BOX([Enable enable-stateless-acl-lb" option])
-check ovn-nbctl --wait=sb set logical_switch sw0 other_config:enable-stateless-acl-lb=true
+check ovn-nbctl --wait=sb set load_Balancer lb1 options:enable-stateless-acl-lb=true
 ovn-sbctl dump-flows sw0 > sw0flows
 AT_CHECK(
   [grep -E 'ls_(in|out)_pre_acl' sw0flows | grep reg0 | ovn_strip_lflows], [0], [dnl
@@ -17039,6 +17039,7 @@ AT_CHECK([grep -E 'ls_in_pre_stateful' sw0flows | ovn_strip_lflows], [0], [dnl
 AS_BOX([create Load Balancer without port])
 check ovn-nbctl --wait=sb ls-lb-del sw0 lb1
 check ovn-nbctl lb-add lb2 10.0.0.5 10.0.0.2,10.0.0.3
+check ovn-nbctl --wait=sb set load_Balancer lb2 options:enable-stateless-acl-lb=true
 check ovn-nbctl --wait=sb ls-lb-add sw0 lb2
 
 ovn-sbctl dump-flows sw0 > sw0flows
