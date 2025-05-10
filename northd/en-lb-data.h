@@ -82,6 +82,10 @@ struct tracked_lb_data {
 
     /* Indicates if any lb (in the tracked data) has 'routable' flag set. */
     bool has_routable_lb;
+
+    /* Indicates if any lb (in the tracked data has enable-stateless-acl-lb
+     * option enabled. */
+    bool has_enabled_stateless_acl_lb;
 };
 
 /* Datapath (logical switch) to lb/lbgrp association data. */

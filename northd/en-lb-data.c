@@ -160,6 +160,7 @@ lb_data_load_balancer_handler(struct engine_node *node, void *data)
             add_crupdated_lb_to_tracked_data(lb, trk_lb_data,
                                              lb->health_checks);
             trk_lb_data->has_routable_lb |= lb->routable;
+            trk_lb_data->has_enabled_stateless_acl_lb |= lb->en_stateless_acl_lb;
             continue;
         }
 
@@ -174,6 +175,7 @@ lb_data_load_balancer_handler(struct engine_node *node, void *data)
             add_deleted_lb_to_tracked_data(lb, trk_lb_data,
                                            lb->health_checks);
             trk_lb_data->has_routable_lb |= lb->routable;
+            trk_lb_data->has_enabled_stateless_acl_lb |= lb->en_stateless_acl_lb;
         } else {
             /* Load balancer updated. */
             bool health_checks = lb->health_checks;
@@ -188,6 +190,7 @@ lb_data_load_balancer_handler(struct engine_node *node, void *data)
             struct crupdated_lb *clb = add_crupdated_lb_to_tracked_data(
                 lb, trk_lb_data, health_checks);
             trk_lb_data->has_routable_lb |= lb->routable;
+            trk_lb_data->has_enabled_stateless_acl_lb |= lb->en_stateless_acl_lb;
 
             /* Determine the inserted and deleted vips and store them in
              * the tracked data. */
@@ -698,6 +701,7 @@ destroy_tracked_data(struct ed_type_lb_data *lb_data)
     lb_data->tracked_lb_data.has_dissassoc_lbs_from_od = false;
     lb_data->tracked_lb_data.has_dissassoc_lbgrps_from_od = false;
     lb_data->tracked_lb_data.has_routable_lb = false;
+    lb_data->tracked_lb_data.has_enabled_stateless_acl_lb = false;
 
     struct hmapx_node *node;
     HMAPX_FOR_EACH_SAFE (node, &lb_data->tracked_lb_data.deleted_lbs) {

@@ -304,6 +304,15 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
     }
     lb->affinity_timeout = affinity_timeout;
 
+    const char *snat_ip = smap_get(&nbrec_lb->options, "hairpin_snat_ip");
+
+    if (snat_ip && validate_snap_ip_address(snat_ip)) {
+        lb->hairpin_snat_ip = xstrdup(snat_ip);
+    }
+
+    lb->en_stateless_acl_lb = smap_get_bool(&nbrec_lb->options,
+        "enable-stateless-acl-lb", false);
+
     sset_init(&lb->ips_v4);
     sset_init(&lb->ips_v6);
     struct smap_node *node;
@@ -347,11 +356,8 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
             ovn_lb_vip_backends_health_check_init(lb, lb_vip, lb_vip_nb);
         }
 
-        const char *snat_ip = smap_get(&lb->nlb->options,
-                                       "hairpin_snat_ip");
-
         if (snat_ip && validate_snap_ip_address(snat_ip)) {
-            lb_vip->hairpin_snat_ip = xstrdup(snat_ip);
+            lb->hairpin_snat_ip = xstrdup(snat_ip);
         }
    }
 
@@ -427,6 +433,7 @@ ovn_northd_lb_cleanup(struct ovn_northd_lb *lb)
     sset_destroy(&lb->ips_v4);
     sset_destroy(&lb->ips_v6);
     free(lb->selection_fields);
+    free(lb->hairpin_snat_ip);
     lb->selection_fields = NULL;
     lb->health_checks = false;
 }
@@ -580,7 +587,6 @@ ovn_lb_datapaths_create(const struct ovn_northd_lb *lb, size_t n_ls_datapaths,
     lb_dps->nb_ls_map = bitmap_allocate(n_ls_datapaths);
     lb_dps->nb_lr_map = bitmap_allocate(n_lr_datapaths);
     lb_dps->lflow_ref = lflow_ref_create();
-    lb_dps->enable_stateless_dp = false;
 
     return lb_dps;
 }

@@ -72,6 +72,10 @@ struct ovn_northd_lb {
 
     /* Indicates if the load balancer has health checks configured. */
     bool health_checks;
+
+    /* Set to true if enable-stateless-acl-lb option is enabled. */
+    bool en_stateless_acl_lb;
+    char *hairpin_snat_ip;
 };
 
 /* ovn-northd specific backend information. */
@@ -138,10 +142,6 @@ struct ovn_lb_datapaths {
 
     size_t n_nb_lr;
     unsigned long *nb_lr_map;
-
-    /* Set to true if enable-stateless-acl-lb option is enabled
-       for one of logical switch in this load balancer datapath group. */
-    bool enable_stateless_dp;
 
     /* Reference of lflows generated for this load balancer.
      *
