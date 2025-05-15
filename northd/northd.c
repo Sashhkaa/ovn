@@ -15919,6 +15919,13 @@ struct lswitch_flow_build_info {
     const char *svc_monitor_mac;
 };
 
+static void
+build_mirror_default_lflow(struct ovn_datapath *od,
+                           struct lflow_table *lflows)
+{
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_MIRROR, 0, "1", "next;", NULL);
+}
+
 /* Helper function to combine all lflow generation which is iterated by
  * logical switch datapath.
  *
@@ -15930,6 +15937,7 @@ build_lswitch_and_lrouter_iterate_by_ls(struct ovn_datapath *od,
                                         struct lswitch_flow_build_info *lsi)
 {
     ovs_assert(od->nbs);
+    build_mirror_default_lflow(od, lsi->lflows);
     build_lswitch_lflows_pre_acl_and_acl(od, lsi->features, lsi->lflows,
                                          lsi->meter_groups, NULL);
 
