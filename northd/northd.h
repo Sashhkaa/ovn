@@ -612,6 +612,9 @@ struct ovn_port {
 
     bool has_bfd;
 
+    /* Set to true if this port is attached to lport mirror. */
+    bool has_attached_lport_mirror;
+
     /* The port's peer:
      *
      *     - A switch port S of type "router" has a router port R as a peer,
