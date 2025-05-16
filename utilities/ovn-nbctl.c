@@ -8022,13 +8022,23 @@ nbctl_mirror_list(struct ctl_context *ctx)
                           mirror->index);
         }
         if (mirror->n_mirror_rules) {
-            ds_put_cstr(&ctx->output, "  Rules    :\n");
+            const struct nbrec_mirror_rule **mirror_rules  = NULL;
+            mirror_rules = xmalloc(sizeof *mirror_rules * mirror->n_mirror_rules);
+
             for (size_t j = 0; j < mirror->n_mirror_rules; j++) {
-                ds_put_format(&ctx->output, "       %5"PRId64" %30s %15s\n",
-                              mirror->mirror_rules[j]->priority,
-                              mirror->mirror_rules[j]->match,
-                              mirror->mirror_rules[j]->action);
+                mirror_rules[j] = mirror->mirror_rules[j];
             }
+
+            qsort(mirror_rules, mirror->n_mirror_rules, sizeof *mirror_rules, rule_cmp);
+
+            ds_put_cstr(&ctx->output, "  Rules    :\n");
+            for (int j = 0; j < mirror->n_mirror_rules; j++) {
+                ds_put_format(&ctx->output, "       %5"PRId64" %30s %15s\n",
+                              mirror_rules[j]->priority,
+                              mirror_rules[j]->match,
+                              mirror_rules[j]->action);
+            }
+            free(mirror_rules);
         }
         ds_put_cstr(&ctx->output, "\n");
     }

@@ -587,6 +587,9 @@ dnl Add same mirror rule for mirror
 AT_CHECK([ovn-nbctl mirror-rule-add mirror2 150 'ip' mirror], [1], [], [stderr])
 AT_CHECK([grep 'exists' stderr], [0], [ignore])
 
+check ovn-nbctl mirror-rule-add mirror2 200 'icmp' skip
+check ovn-nbctl mirror-rule-add mirror2 250 'tcp' mirror
+
 AT_CHECK([ovn-nbctl mirror-list], [0], [dnl
 mirror1:
   Type     :  lport
@@ -601,13 +604,15 @@ mirror2:
   Filter   :  to-lport
   Rules    :
          150                             ip          mirror
+         200                           icmp            skip
+         250                            tcp          mirror
 
 ])
 
-dnl Add one more mirror rule to mirror
-check ovn-nbctl mirror-rule-add mirror2 200 'icmp' mirror
-
+dnl Add one more rule to mirror
+check ovn-nbctl mirror-rule-add mirror2 350 'icmp' mirror
 check ovn-nbctl mirror-rule-add mirror2 250 'icmp' skip
+check ovn-nbctl mirror-rule-add mirror2 300 'icmp' skip
 
 dnl Mirror rule attach mirror
 mirrorrule1uuid=$(fetch_column nb:Mirror_rule _uuid name=mirror1)
@@ -622,9 +627,11 @@ check_column "" nb:Mirror mirror_rule mirror_rule="mirrorr1uuid"
 
 dnl Delete mirror rule by priority
 check ovn-nbctl mirror-rule-del mirror2 200
+check ovn-nbctl mirror-rule-del mirror2 350
 
 dnl Remove the mirror rule by priority and match
 check ovn-nbctl mirror-rule-del mirror2 250 'icmp'
+check ovn-nbctl mirror-rule-del mirror2 300 'icmp'
 
 AT_CHECK([ovn-nbctl mirror-list], [0], [dnl
 mirror1:
@@ -638,6 +645,7 @@ mirror2:
   Filter   :  to-lport
   Rules    :
          150                             ip          mirror
+         250                            tcp          mirror
 
 ])
 
