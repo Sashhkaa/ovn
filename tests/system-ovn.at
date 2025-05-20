@@ -6284,7 +6284,7 @@ tcp,orig=(src=172.16.0.1,dst=10.0.0.2,sport=<cleared>,dport=<cleared>),reply=(sr
 # Like with conntrack entries, we shouldn't try to predict
 # port binding tunnel keys. So omit them from expected labels.
 ovs-appctl dpctl/dump-flows | grep 'ct_state(+new-est-rpl+trk).*ct(.*label=0x401020400000000/.*)'
-AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(+new-est-rpl+trk).*ct(.*label=0x401020400000000/.*)' -c], [0], [dnl
+AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(+new-rpl+trk).*ct(.*label=0x401020400000000/.*)' -c], [0], [dnl
 2
 ])
 AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(-new+est+rpl+trk).*ct_label(0x401020400000000)' -c], [0], [dnl
@@ -6306,7 +6306,7 @@ NS_CHECK_EXEC([bob1], [ping -q -c 3 -i 0.3 -w 2 10.0.0.2 | FORMAT_PING], \
 [0], [dnl
 3 packets transmitted, 3 received, 0% packet loss, time 0ms
 ])
-AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(+new-est-rpl+trk).*ct(.*label=0x1001020400000000/.*)' -c], [0], [dnl
+AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(+new-rpl+trk).*ct(.*label=0x1001020400000000/.*)' -c], [0], [dnl
 2
 ])
 AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(-new+est+rpl+trk).*ct_label(0x1001020400000000)' -c], [0], [dnl
@@ -6339,7 +6339,7 @@ NS_CHECK_EXEC([bob1], [ping -q -c 3 -i 0.3 -w 2 10.0.0.2 | FORMAT_PING], \
 3 packets transmitted, 3 received, 0% packet loss, time 0ms
 ])
 
-AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(+new-est-rpl+trk).*ct(.*label=0x1001020400000000/.*)' -c], [0], [dnl
+AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(+new-rpl+trk).*ct(.*label=0x1001020400000000/.*)' -c], [0], [dnl
 2
 ])
 AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(-new+est+rpl+trk).*ct_label(0x1001020400000000)' -c], [0], [dnl
@@ -6500,7 +6500,7 @@ NS_CHECK_EXEC([bob1], [ping -q -c 3 -i 0.3 -w 2 fd01::2 | FORMAT_PING], \
 # Ensure datapaths show conntrack states as expected
 # Like with conntrack entries, we shouldn't try to predict
 # port binding tunnel keys. So omit them from expected labels.
-AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(+new-est-rpl+trk).*ct(.*label=0x401020400000000/.*)' -c], [0], [dnl
+AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(+new-rpl+trk).*ct(.*label=0x401020400000000/.*)' -c], [0], [dnl
 2
 ])
 
@@ -6532,7 +6532,7 @@ NS_CHECK_EXEC([bob1], [ping -q -c 3 -i 0.3 -w 2 fd01::2 | FORMAT_PING], \
 3 packets transmitted, 3 received, 0% packet loss, time 0ms
 ])
 
-AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(+new-est-rpl+trk).*ct(.*label=0x1001020400000000/.*)' -c], [0], [dnl
+AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(+new-rpl+trk).*ct(.*label=0x1001020400000000/.*)' -c], [0], [dnl
 2
 ])
 AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(-new+est+rpl+trk).*ct_label(0x1001020400000000)' -c], [0], [dnl
@@ -6566,7 +6566,7 @@ NS_CHECK_EXEC([bob1], [ping -q -c 3 -i 0.3 -w 2 fd01::2 | FORMAT_PING], \
 3 packets transmitted, 3 received, 0% packet loss, time 0ms
 ])
 
-AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(+new-est-rpl+trk).*ct(.*label=0x1001020400000000/.*)' -c], [0], [dnl
+AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(+new-rpl+trk).*ct(.*label=0x1001020400000000/.*)' -c], [0], [dnl
 2
 ])
 AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(-new+est+rpl+trk).*ct_label(0x1001020400000000)' -c], [0], [dnl
