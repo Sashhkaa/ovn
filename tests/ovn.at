@@ -38513,6 +38513,7 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([virtual port claim race condition])
 AT_KEYWORDS([virtual ports])
+AT_SKIP_IF([test $HAVE_SCAPY = no])
 ovn_start
 
 net_add n1
