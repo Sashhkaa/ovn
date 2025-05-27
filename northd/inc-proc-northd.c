@@ -226,6 +226,7 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_ls_stateful, &en_northd, ls_stateful_northd_handler);
     engine_add_input(&en_ls_stateful, &en_port_group,
                      ls_stateful_port_group_handler);
+    engine_add_input(&en_ls_stateful, &en_lr_nat, ls_stateful_lr_nat_handler);
 
     engine_add_input(&en_mac_binding_aging, &en_sb_mac_binding, NULL);
     engine_add_input(&en_mac_binding_aging, &en_northd, NULL);

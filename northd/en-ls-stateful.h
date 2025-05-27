@@ -102,6 +102,7 @@ void en_ls_stateful_run(struct engine_node *, void *data);
 
 bool ls_stateful_northd_handler(struct engine_node *, void *data);
 bool ls_stateful_port_group_handler(struct engine_node *, void *data);
+bool ls_stateful_lr_nat_handler(struct engine_node *node, void *data);
 
 const struct ls_stateful_record *ls_stateful_table_find(
     const struct ls_stateful_table *, const struct nbrec_logical_switch *);
