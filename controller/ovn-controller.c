@@ -173,6 +173,16 @@ struct pending_pkt {
 /* Registered ofctrl seqno type for nb_cfg propagation. */
 static size_t ofctrl_seq_type_nb_cfg;
 
+static struct validate_northd_actions {
+    bool controller_validate_actions;
+    bool fail_mode;
+    bool validated;
+} validate_actions = {
+    .controller_validate_actions = false,
+    .fail_mode = false,
+    .validated = true
+};
+
 static void
 remove_newline(char *s)
 {
@@ -203,6 +213,94 @@ static char *get_file_system_id(void)
     free(filename);
     return ret;
 }
+
+static void
+init_validate_actions(struct ovsdb_idl *ovs_idl)
+{
+    const struct ovsrec_open_vswitch *cfg = ovsrec_open_vswitch_first(ovs_idl);
+    if (!cfg) {
+        return;
+    }
+    const struct ovsrec_open_vswitch_table *ovs_table =
+        ovsrec_open_vswitch_table_get(ovs_idl);
+    const char *chassis_id = get_ovs_chassis_id(ovs_table);
+
+    validate_actions.controller_validate_actions =
+        get_chassis_external_id_value_bool(&cfg->external_ids, chassis_id,
+                                           "validate-northd-actions", false);
+    const char *valid_action_fail_mode =
+        get_chassis_external_id_value(&cfg->external_ids, chassis_id,
+                                      "validate-actions-fail-mode", NULL);
+
+    validate_actions.fail_mode = valid_action_fail_mode &&
+                                 !strcmp("fail", valid_action_fail_mode);
+}
+
+static void
+log_actions_diff(const void *arg OVS_UNUSED,
+                 const char *item, bool northd_supported)
+{
+    if (validate_actions.fail_mode) {
+        validate_actions.validated = false;
+    }
+
+    VLOG_WARN("Validate actions: action %s supported by %s "
+              "but not supported by %s.", item,
+              northd_supported ? "northd" : "controller",
+              northd_supported ? "controller" : "northd");
+}
+
+static void
+validate_compatibility_with_northd(const struct sbrec_sb_global *sb,
+                                   bool sb_global_upgraded)
+{
+    static bool executed = false;
+    validate_actions.validated = true;
+
+    if (executed && !validate_actions.fail_mode
+        && !sb_global_upgraded) {
+        return;
+    }
+
+    if (!sb || !sb->n_supported_actions) {
+        VLOG_WARN("Validate actions: %s",
+                  !sb ? "No SB Global record found." :
+                  "No northd actions available in SB Global.");
+        if (validate_actions.fail_mode) {
+            validate_actions.validated = false;
+        }
+        return;
+    }
+
+    struct svec controller_action_entries = SVEC_EMPTY_INITIALIZER;
+    ovn_action_get_names(&controller_action_entries);
+
+    struct sorted_array controller_actions =
+        sorted_array_from_svec(&controller_action_entries);
+
+    struct sorted_array northd_actions =
+        sorted_array_create((const char **) sb->supported_actions,
+                            sb->n_supported_actions,
+                            false);
+
+    sorted_array_apply_diff(&northd_actions,
+                            &controller_actions,
+                            log_actions_diff, NULL);
+
+    VLOG_INFO("Validate actions: All northd actions are validated. ");
+
+    executed = sb_global_upgraded ? false : true;
+
+    if (validate_actions.fail_mode &&
+        !validate_actions.validated) {
+        engine_set_force_recompute();
+    }
+
+    sorted_array_destroy(&northd_actions);
+    sorted_array_destroy(&controller_actions);
+    svec_destroy(&controller_action_entries);
+}
+
 /* Only set monitor conditions on tables that are available in the
  * server schema.
  */
@@ -3619,6 +3717,10 @@ en_northd_options_run(struct engine_node *node, void *data)
                         true)
         : true;
 
+    if (validate_actions.controller_validate_actions) {
+        validate_compatibility_with_northd(sb_global, true);
+    }
+
     return EN_UPDATED;
 }
 
@@ -3674,6 +3776,10 @@ en_northd_options_sb_sb_global_handler(struct engine_node *node, void *data)
     if (enable_ch_nb_cfg_update != n_opts->enable_ch_nb_cfg_update) {
         n_opts->enable_ch_nb_cfg_update = enable_ch_nb_cfg_update;
         result = EN_HANDLED_UPDATED;
+    }
+
+    if (validate_actions.controller_validate_actions) {
+        validate_compatibility_with_northd(sb_global, true);
     }
 
     return result;
@@ -6146,6 +6252,14 @@ main(int argc, char *argv[])
             check_northd_version(ovs_idl_loop.idl, ovnsb_idl_loop.idl,
                                  ovn_version);
 
+        init_validate_actions(ovs_idl_loop.idl);
+
+        if (validate_actions.controller_validate_actions) {
+            const struct sbrec_sb_global *sb =
+                sbrec_sb_global_first(ovnsb_idl_loop.idl);
+            validate_compatibility_with_northd(sb, false);
+        }
+
         const struct ovsrec_bridge_table *bridge_table =
             ovsrec_bridge_table_get(ovs_idl_loop.idl);
         const struct ovsrec_open_vswitch_table *ovs_table =
@@ -6181,8 +6295,8 @@ main(int argc, char *argv[])
         }
 
         if (ovsdb_idl_has_ever_connected(ovnsb_idl_loop.idl) &&
-            northd_version_match && cfg) {
-
+            northd_version_match && cfg &&
+            validate_actions.validated) {
             /* Unconditionally remove all deleted lflows from the lflow
              * cache.
              */

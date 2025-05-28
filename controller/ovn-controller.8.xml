@@ -426,6 +426,23 @@
         exit. In order to keep backward compatibility the
         <code>--restart</code> exit flag has priority over this flag.
       </dd>
+
+      <dt><code>external_ids:validate-northd-actions</code></dt>
+      <dd>
+        The boolean flag indicates whether ovn-controller should validate
+        actions supported by northd. The controller performs this validation
+        once when the option is updated and with every change to the
+        SB_Global database.
+      </dd>
+      <dt><code>external_ids:validate-actions-fail-mode</code></dt>
+      <dd>
+        Specifies the operating mode of the validate-northd-actions option,
+        If set to fail, processing of southbound and local Open vSwitch
+        database changes will stop when action mismatches occur.
+        Default behavior: controller logs unsupported actions without
+        interruption and continues normal operation without support for
+        some actions.
+      </dd>
     </dl>
 
     <p>

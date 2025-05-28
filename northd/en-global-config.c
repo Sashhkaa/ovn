@@ -26,6 +26,7 @@
 #include "en-global-config.h"
 #include "en-sampling-app.h"
 #include "include/ovn/features.h"
+#include "include/ovn/actions.h"
 #include "ipam.h"
 #include "lib/ovn-nb-idl.h"
 #include "lib/ovn-sb-idl.h"
@@ -51,6 +52,7 @@ static void update_sb_config_options_to_sbrec(struct ed_type_global_config *,
                                               const struct sbrec_sb_global *);
 static bool is_vxlan_mode(const struct smap *nb_options,
                           const struct sbrec_chassis_table *);
+static void set_supported_actions_to_sbrec(const struct sbrec_sb_global *sb);
 
 void *
 en_global_config_init(struct engine_node *node OVS_UNUSED,
@@ -178,6 +180,8 @@ en_global_config_run(struct engine_node *node , void *data)
 
     /* Set up SB_Global (depends on chassis features). */
     update_sb_config_options_to_sbrec(config_data, sb);
+
+    set_supported_actions_to_sbrec(sb);
 
     return EN_UPDATED;
 }
@@ -712,4 +716,21 @@ is_vxlan_mode(const struct smap *nb_options,
         }
     }
     return false;
+}
+
+static void
+set_supported_actions_to_sbrec(const struct sbrec_sb_global *sb)
+{
+    struct svec ovnacts = SVEC_EMPTY_INITIALIZER;
+
+    ovn_action_get_names(&ovnacts);
+
+    struct sorted_array ovnacts_sorted =
+        sorted_array_from_svec(&ovnacts);
+
+    sbrec_sb_global_set_supported_actions(sb, ovnacts_sorted.arr,
+                                          ovnacts_sorted.n);
+
+    sorted_array_destroy(&ovnacts_sorted);
+    svec_destroy(&ovnacts);
 }
