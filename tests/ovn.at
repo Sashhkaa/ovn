@@ -43500,3 +43500,61 @@ AT_CHECK([grep -q "Postponing virtual lport sw0-vir" hv3/ovn-controller.log], [1
 OVN_CLEANUP([hv1])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([Controller actions validating])
+ovn_start
+
+net_add n1
+
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+ovs-vsctl \
+    -- add-port br-int vif1 \
+    ofport-request=1
+
+ovs-vsctl \
+    -- add-port br-int vif2 \
+    -- set Interface vif2 external_ids:iface-id=lp2 \
+    ofport-request=2
+
+check ovn-nbctl ls-add ls1
+check ovn-nbctl lsp-add ls1 lp1
+check ovn-nbctl lsp-add ls1 lp2
+check ovn-nbctl lsp-add ls1 lp3
+
+# Wait for port to be bound.
+wait_row_count Chassis 1 name=hv1
+ch=$(fetch_column Chassis _uuid name=hv1)
+wait_row_count Port_Binding 1 logical_port=lp2 chassis=$ch
+
+# Since from the tests we can't check the situation when the controller doesn't support all
+# northd actions - we will check the opposite situation.
+check ovs-vsctl set Open_Vswitch . external_ids:validate-northd-actions=true
+
+check ovn-sbctl remove SB_G . supported_actions MOVE
+
+AT_CHECK([grep -o "action MOVE supported by controller but not supported by northd." hv1/ovn-controller.log], [0], [dnl
+action MOVE supported by controller but not supported by northd.
+])
+
+as hv1 ovs-vsctl \
+    -- add-port br-int vif1 \
+    -- set Interface vif1 external_ids:iface-id=lp1 \
+    ofport-request=1
+
+wait_row_count Port_Binding 1 logical_port=lp1 chassis=$ch
+
+check ovs-vsctl set Open_Vswitch . external_ids:validate-actions-fail-mode=fail
+
+as hv1 ovs-vsctl \
+    -- add-port br-int vif3 \
+    -- set Interface vif3 external_ids:iface-id=lp3 \
+    ofport-request=3
+
+wait_row_count Port_Binding 1 logical_port=lp3 'chassis=[[]]'
+
+AT_CLEANUP
+])

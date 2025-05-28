@@ -23,6 +23,7 @@
 #include "expr.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/hmap.h"
+#include "lib/svec.h"
 #include "openvswitch/ofp-actions.h"
 #include "openvswitch/uuid.h"
 #include "util.h"
@@ -151,6 +152,14 @@ enum {
     N_OVNACTS = OVNACTS
 #undef OVNACT
 };
+
+static inline void
+ovn_action_get_names(struct svec *ovnacts)
+{
+    #define OVNACT(ENUM, STRUCT) svec_add(ovnacts, #ENUM);
+    OVNACTS
+    #undef OVNACT
+}
 
 /* Header for an action.
  *

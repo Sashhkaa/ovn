@@ -165,6 +165,10 @@
 
       <column name="options">
       </column>
+
+    <column name="supported_actions">
+        Logical flow actions supported by northd.
+    </column>
     </group>
 
     <group title="Common options">
