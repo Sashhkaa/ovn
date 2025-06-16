@@ -109,6 +109,11 @@ jobs:
           . .ci/linux-util.sh
           fix_etc_hosts
 
+      - name: Disable apparmor
+        run: |
+          . .ci/linux-util.sh
+          disable_apparmor
+
       - name: Choose image distro
         if: github.event_name == 'push' || github.event_name == 'pull_request'
         run: |
@@ -224,6 +229,11 @@ jobs:
         . .ci/linux-util.sh
         fix_etc_hosts
 
+    - name: Disable apparmor
+      run: |
+        . .ci/linux-util.sh
+        disable_apparmor
+
     - name: image cache
       uses: actions/cache@v4
       with:
@@ -320,7 +330,7 @@ jobs:
   build-linux-rpm:
     name: linux rpm fedora
     runs-on: ubuntu-24.04
-    container: fedora:40
+    container: fedora:42
     timeout-minutes: 30
 
     strategy:
