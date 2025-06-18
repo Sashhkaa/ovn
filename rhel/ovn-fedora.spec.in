@@ -51,7 +51,7 @@ Provides: openvswitch-ovn-common = %{?epoch:%{epoch}:}%{version}-%{release}
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
 License: ASL 2.0 and LGPLv2+ and SISSL
-Release: 1.ROCKIT1%{?dist}
+Release: 1.ROCKIT2%{?dist}
 Source: http://openvswitch.org/releases/ovn-%{version}.tar.gz
 Source10: http://openvswitch.org/releases/openvswitch-%{ovsver}.tar.gz
 
