@@ -31,6 +31,7 @@
 
 /* OVN includes */
 #include "en-lb-data.h"
+#include "en-lr-nat.h"
 #include "en-ls-stateful.h"
 #include "en-port-group.h"
 #include "lib/inc-proc-eng.h"
@@ -226,6 +227,41 @@ ls_stateful_port_group_handler(struct engine_node *node, void *data_)
     if (ls_stateful_has_tracked_data(&data->trk_data)) {
         engine_set_node_state(node, EN_UPDATED);
     }
+    return true;
+}
+
+bool
+ls_stateful_lr_nat_handler(struct engine_node *node, void *data_)
+{
+    struct ed_type_lr_nat_data *lr_nat_data =
+        engine_get_input_data("lr_nat", node);
+
+    if (!lr_nat_has_tracked_data(&lr_nat_data->trk_data)) {
+        return false;
+    }
+
+    struct ls_stateful_input input_data = ls_stateful_get_input_data(node);
+    struct ed_type_ls_stateful *data = data_;
+
+    struct hmapx_node *hmapx_node;
+    HMAPX_FOR_EACH (hmapx_node, &lr_nat_data->trk_data.mod_l3dgw) {
+        const struct ovn_datapath *od = hmapx_node->data;
+
+        struct ls_stateful_record *ls_stateful_rec = ls_stateful_table_find_(
+            &data->table, od->nbs);
+        ovs_assert(ls_stateful_rec);
+
+        ls_stateful_record_reinit(ls_stateful_rec, od, NULL,
+                                  input_data.ls_port_groups);
+
+        /* Add the ls_stateful_rec to the tracking data. */
+        hmapx_add(&data->trk_data.crupdated, ls_stateful_rec);
+    }
+
+    if (ls_stateful_has_tracked_data(&data->trk_data)) {
+        engine_set_node_state(node, EN_UPDATED);
+    }
+
     return true;
 }
 

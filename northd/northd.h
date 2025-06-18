@@ -20,6 +20,7 @@
 #include "lib/ovn-util.h"
 #include "lib/ovs-atomic.h"
 #include "lib/sset.h"
+#include "lib/hmapx.h"
 #include "northd/en-port-group.h"
 #include "northd/ipam.h"
 #include "openvswitch/hmap.h"
@@ -346,6 +347,9 @@ struct ovn_datapath {
     /* The logical router group to which this datapath belongs.
      * Valid only if it is logical router datapath. NULL otherwise. */
     struct lrouter_group *lr_group;
+
+    /* Set of localnet or l2gw ports. */
+    struct hmapx ph_ports;
 
     /* Map of ovn_port objects belonging to this datapath.
      * This map doesn't include derived ports. */
@@ -741,6 +745,10 @@ void run_update_worker_pool(int n_threads);
 
 const struct ovn_datapath *northd_get_datapath_for_port(
     const struct hmap *ls_ports, const char *port_name);
+
+struct ovn_port *get_nat_gateway(const struct ovn_datapath *od,
+                                 const struct nbrec_nat *nat,
+                                 const struct hmap *lr_ports);
 
 struct lr_stateful_table;
 void sync_pbs(struct ovsdb_idl_txn *, struct hmap *ls_ports,

@@ -78,6 +78,9 @@ struct lr_nat_record {
 struct lr_nat_tracked_data {
     /* Created or updated logical router with NAT data. */
     struct hmapx crupdated;
+
+    /* Modified l3dgw_port values. */
+    struct hmapx mod_l3dgw;
 };
 
 struct lr_nat_table {
