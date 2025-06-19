@@ -74,6 +74,7 @@ ct_zones_restore(struct ct_zone_ctx *ctx,
 
     struct shash_node *pending_node;
     SHASH_FOR_EACH (pending_node, &ctx->pending) {
+        VLOG_WARN("ct-zone-name = %s", pending_node->name);
         struct ct_zone_pending_entry *ctpe = pending_node->data;
 
         if (ctpe->add) {
@@ -88,6 +89,7 @@ ct_zones_restore(struct ct_zone_ctx *ctx,
         return;
     }
 
+    /* не нужно ли в этот момент тут как-то их почистить ? */
     if (!br_int) {
         /* If the integration bridge hasn't been defined, assume that
          * any existing ct-zone definitions aren't valid. */
@@ -305,6 +307,7 @@ ct_zones_commit(const struct ovsrec_bridge *br_int,
 
     struct shash_node *iter;
     SHASH_FOR_EACH (iter, &ctx->pending) {
+        VLOG_WARN("in ct commit iter->name = %s", iter->name);
         struct ct_zone_pending_entry *ctzpe = iter->data;
         struct ct_zone *ct_zone = &ctzpe->ct_zone;
 
@@ -413,6 +416,7 @@ ct_zone_handle_port_update(struct ct_zone_ctx *ctx,
 {
     struct shash_node *node = shash_find(&ctx->current, pb->logical_port);
 
+    VLOG_WARN("in ct_zone_handle_port_update = %s", pb->logical_port); 
     if (node) {
         struct ct_zone *ct_zone = node->data;
         if (ct_zone->zone < min_ct_zone || ct_zone->zone > max_ct_zone) {
@@ -431,6 +435,8 @@ ct_zone_handle_port_update(struct ct_zone_ctx *ctx,
     } else if (node && ct_zone_remove(ctx, node->name)) {
         return true;
     }
+
+    VLOG_WARN("returned false");
 
     return false;
 }
@@ -504,7 +510,7 @@ ct_zone_remove(struct ct_zone_ctx *ctx, const char *name)
 static void
 ct_zone_add(struct ct_zone_ctx *ctx, const char *name, uint16_t zone,
             bool set_pending)
-{
+{   
     VLOG_DBG("assigning ct zone %"PRIu16" for '%s'", zone, name);
 
     struct ct_zone *ct_zone = shash_find_data(&ctx->current, name);
@@ -519,6 +525,7 @@ ct_zone_add(struct ct_zone_ctx *ctx, const char *name, uint16_t zone,
     };
 
     if (set_pending) {
+        VLOG_WARN("set pending = %s", name);
         ct_zone_add_pending(&ctx->pending, CT_ZONE_OF_QUEUED,
                             ct_zone, true, name);
     }
@@ -589,6 +596,7 @@ static void
 ct_zone_restore(const struct sbrec_datapath_binding_table *dp_table,
                 struct ct_zone_ctx *ctx, const char *name, int zone)
 {
+    VLOG_WARN("hehe");
     VLOG_DBG("restoring ct zone %"PRId32" for '%s'", zone, name);
 
     char *new_name = ct_zone_name_from_uuid(dp_table, name);

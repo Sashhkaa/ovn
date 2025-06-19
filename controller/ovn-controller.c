@@ -2375,6 +2375,7 @@ en_ct_zones_cleanup(void *data)
 static enum engine_node_state
 en_ct_zones_run(struct engine_node *node, void *data)
 {
+    VLOG_WARN("en_ct_zones_run");
     struct ed_type_ct_zones *ct_zones_data = data;
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
@@ -2404,6 +2405,7 @@ en_ct_zones_run(struct engine_node *node, void *data)
 static enum engine_input_handler_result
 ct_zones_datapath_binding_handler(struct engine_node *node, void *data)
 {
+    VLOG_WARN("ct_zones_datapath_binding_handler");
     struct ed_type_ct_zones *ct_zones_data = data;
     const struct sbrec_datapath_binding *dp;
     struct ed_type_runtime_data *rt_data =
@@ -2436,6 +2438,8 @@ ct_zones_datapath_binding_handler(struct engine_node *node, void *data)
 static enum engine_input_handler_result
 ct_zones_runtime_data_handler(struct engine_node *node, void *data)
 {
+    VLOG_WARN("ct_zones_runtime_data_handler");
+
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
     const struct ovsrec_open_vswitch_table *ovs_table =
@@ -2462,22 +2466,31 @@ ct_zones_runtime_data_handler(struct engine_node *node, void *data)
             /* A new datapath has been added. Fall back to full recompute. */
             return EN_UNHANDLED;
         }
-
+        VLOG_WARN("tracked");
         struct shash_node *shash_node;
         SHASH_FOR_EACH (shash_node, &tdp->lports) {
             struct tracked_lport *t_lport = shash_node->data;
+            VLOG_WARN("lports %s", t_lport->pb->logical_port);
             if (strcmp(t_lport->pb->type, "")
                 && strcmp(t_lport->pb->type, "localport")
                 && strcmp(t_lport->pb->type, "l3gateway")
                 && strcmp(t_lport->pb->type, "localnet")) {
                 /* We allocate zone-id's only to VIF, localport, l3gateway,
                  * and localnet lports. */
+                VLOG_WARN("here");
+
+                if (sbrec_port_binding_is_deleted(t_lport->pb)) {
+                    /* тут нужно как-то удалять зоны для роутеров которые есть. */
+                    VLOG_WARN("deleted");
+                }
+
                 if (sbrec_port_binding_is_updated(t_lport->pb,
-                                              SBREC_PORT_BINDING_COL_TYPE)) {
+                                                  SBREC_PORT_BINDING_COL_TYPE)) {
+                    VLOG_WARN("updated type");
                     updated |= ct_zone_handle_port_update(&ct_zones_data->ctx,
-                                               t_lport->pb,
-                                               false, &scan_start,
-                                               min_ct_zone, max_ct_zone);
+                                                          t_lport->pb,
+                                                          false, &scan_start,
+                                                          min_ct_zone, max_ct_zone);
                 }
 
                 continue;
@@ -2834,6 +2847,7 @@ en_lb_data_init(struct engine_node *node OVS_UNUSED,
 static enum engine_node_state
 en_lb_data_run(struct engine_node *node, void *data)
 {
+    VLOG_WARN("en_lb_data_run");
     struct ed_type_lb_data *lb_data = data;
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
@@ -3192,6 +3206,7 @@ en_mac_cache_init(struct engine_node *node OVS_UNUSED,
 static enum engine_node_state
 en_mac_cache_run(struct engine_node *node, void *data)
 {
+    VLOG_WARN("en_mac_cache_run");
     struct mac_cache_data *cache_data = data;
     struct ed_type_runtime_data *rt_data =
             engine_get_input_data("runtime_data", node);
@@ -3301,6 +3316,7 @@ mac_cache_sb_fdb_handler(struct engine_node *node, void *data)
 static enum engine_input_handler_result
 mac_cache_runtime_data_handler(struct engine_node *node, void *data OVS_UNUSED)
 {
+    VLOG_WARN("mac_cache_runtime_data_handler");
     struct mac_cache_data *cache_data = data;
     struct ed_type_runtime_data *rt_data =
             engine_get_input_data("runtime_data", node);

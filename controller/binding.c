@@ -688,6 +688,9 @@ update_related_lport(const struct sbrec_port_binding *pb,
                      struct binding_ctx_out *b_ctx)
 {
     char buf[16];
+
+    VLOG_WARN("patch port pb->logical_port = %s", pb->logical_port);
+
     get_unique_lport_key(pb->datapath->tunnel_key, pb->tunnel_key,
                          buf, sizeof(buf));
     if (sset_add(&b_ctx->related_lports->lport_ids, buf) != NULL) {
@@ -2069,8 +2072,7 @@ consider_ha_lport(const struct sbrec_port_binding *pb,
                   ha_chassis_group_is_active(pb->ha_chassis_group,
                                              b_ctx_in->active_tunnels,
                                              b_ctx_in->chassis_rec);
-
-    if (is_ha_chassis && !our_chassis) {
+    /*if (is_ha_chassis && !our_chassis) {*/
         /* If the chassis_rec is part of ha_chassis_group associated with
          * the port_binding 'pb', we need to add to the local_datapath
          * in even if its not active.
@@ -2078,14 +2080,14 @@ consider_ha_lport(const struct sbrec_port_binding *pb,
          * If the chassis is active, consider_nonvif_lport_() takes care
          * of adding the datapath of this 'pb' to local datapaths.
          * */
-        add_local_datapath(b_ctx_in->sbrec_datapath_binding_by_key,
+        /*add_local_datapath(b_ctx_in->sbrec_datapath_binding_by_key,
                            b_ctx_in->sbrec_port_binding_by_datapath,
                            b_ctx_in->sbrec_port_binding_by_name,
                            pb->datapath, b_ctx_in->chassis_rec,
                            b_ctx_out->local_datapaths,
                            b_ctx_out->tracked_dp_bindings);
         update_related_lport(pb, b_ctx_out);
-    }
+    }*/
 
     return consider_nonvif_lport_(pb, our_chassis, is_ha_chassis, b_ctx_in,
                                   b_ctx_out);
