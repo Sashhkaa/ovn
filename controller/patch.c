@@ -180,6 +180,7 @@ add_bridge_mappings_by_type(struct ovsdb_idl_txn *ovs_idl_txn,
         sbrec_port_binding_index_init_row(sbrec_port_binding_by_type);
     sbrec_port_binding_index_set_type(target, pb_type);
 
+    const struct local_datapath *ld;
     const struct sbrec_port_binding *binding;
     SBREC_PORT_BINDING_FOR_EACH_EQUAL (binding, target,
                                        sbrec_port_binding_by_type) {
@@ -189,7 +190,7 @@ add_bridge_mappings_by_type(struct ovsdb_idl_txn *ovs_idl_txn,
                                 binding->datapath->tunnel_key)) {
             continue;
         }
-
+        VLOG_WARN("sbrec port name = %s", binding->logical_port);
         /* If needed, check if the port is bound to this chassis. */
         const struct sbrec_chassis *bchassis = binding->chassis;
         if (chassis && (!bchassis || strcmp(chassis->name, bchassis->name))) {

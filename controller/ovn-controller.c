@@ -1536,6 +1536,7 @@ init_binding_ctx(struct engine_node *node,
 static enum engine_node_state
 en_runtime_data_run(struct engine_node *node, void *data)
 {
+    VLOG_WARN("en_runtime_data_run");
     struct ed_type_runtime_data *rt_data = data;
     struct hmap *local_datapaths = &rt_data->local_datapaths;
     struct shash *local_active_ipv6_pd = &rt_data->local_active_ports_ipv6_pd;
@@ -2375,6 +2376,7 @@ en_ct_zones_cleanup(void *data)
 static enum engine_node_state
 en_ct_zones_run(struct engine_node *node, void *data)
 {
+    VLOG_WARN("en_ct_zones_run");
     struct ed_type_ct_zones *ct_zones_data = data;
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
