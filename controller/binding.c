@@ -2072,7 +2072,7 @@ consider_ha_lport(const struct sbrec_port_binding *pb,
                   ha_chassis_group_is_active(pb->ha_chassis_group,
                                              b_ctx_in->active_tunnels,
                                              b_ctx_in->chassis_rec);
-    /*if (is_ha_chassis && !our_chassis) {*/
+    if (is_ha_chassis && !our_chassis) {
         /* If the chassis_rec is part of ha_chassis_group associated with
          * the port_binding 'pb', we need to add to the local_datapath
          * in even if its not active.
@@ -2080,14 +2080,14 @@ consider_ha_lport(const struct sbrec_port_binding *pb,
          * If the chassis is active, consider_nonvif_lport_() takes care
          * of adding the datapath of this 'pb' to local datapaths.
          * */
-        /*add_local_datapath(b_ctx_in->sbrec_datapath_binding_by_key,
+        add_local_datapath(b_ctx_in->sbrec_datapath_binding_by_key,
                            b_ctx_in->sbrec_port_binding_by_datapath,
                            b_ctx_in->sbrec_port_binding_by_name,
                            pb->datapath, b_ctx_in->chassis_rec,
                            b_ctx_out->local_datapaths,
                            b_ctx_out->tracked_dp_bindings);
         update_related_lport(pb, b_ctx_out);
-    }*/
+    }
 
     return consider_nonvif_lport_(pb, our_chassis, is_ha_chassis, b_ctx_in,
                                   b_ctx_out);
@@ -2326,6 +2326,11 @@ binding_run(struct binding_ctx_in *b_ctx_in, struct binding_ctx_out *b_ctx_out)
     ovs_qos_entries_gc(b_ctx_in->ovs_idl_txn, b_ctx_in->ovsrec_port_by_qos,
                        b_ctx_in->ovsrec_queue_by_external_ids,
                        b_ctx_in->qos_table, b_ctx_out->qos_map);
+
+    struct local_datapath *ld;
+    HMAP_FOR_EACH (ld, hmap_node, b_ctx_out->local_datapaths) {
+        VLOG_WARN("local datapath = %ld", ld->datapath->tunnel_key);
+    }
 
     cleanup_claimed_port_timestamps();
 }

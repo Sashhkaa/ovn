@@ -299,6 +299,8 @@ ct_zones_commit(const struct ovsrec_bridge *br_int,
         return;
     }
 
+    VLOG_WARN("ct_zones_commit");
+
     struct ovsrec_ct_zone **all_zones =
             xzalloc(sizeof *all_zones * (MAX_CT_ZONES + 1));
     for (size_t i = 0; i < ovs_dp->n_ct_zones; i++) {

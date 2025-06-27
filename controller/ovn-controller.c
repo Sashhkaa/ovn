@@ -2447,6 +2447,7 @@ ct_zones_runtime_data_handler(struct engine_node *node, void *data)
 
     /* There is no tracked data. Fall back to full recompute of ct_zones. */
     if (!rt_data->tracked) {
+        VLOG_WARN("EN_UNHANDLED");
         return EN_UNHANDLED;
     }
 
@@ -2463,6 +2464,7 @@ ct_zones_runtime_data_handler(struct engine_node *node, void *data)
 
     HMAP_FOR_EACH (tdp, node, tracked_dp_bindings) {
         if (tdp->tracked_type == TRACKED_RESOURCE_NEW) {
+            VLOG_WARN("TRACKED_RESOURCE_NEW");
             /* A new datapath has been added. Fall back to full recompute. */
             return EN_UNHANDLED;
         }
@@ -2477,11 +2479,13 @@ ct_zones_runtime_data_handler(struct engine_node *node, void *data)
                 && strcmp(t_lport->pb->type, "localnet")) {
                 /* We allocate zone-id's only to VIF, localport, l3gateway,
                  * and localnet lports. */
+
                 VLOG_WARN("here");
 
                 if (sbrec_port_binding_is_deleted(t_lport->pb)) {
+                    VLOG_WARN("here 2");
                     /* тут нужно как-то удалять зоны для роутеров которые есть. */
-                    VLOG_WARN("deleted");
+                    return EN_HANDLED_UPDATED; 
                 }
 
                 if (sbrec_port_binding_is_updated(t_lport->pb,
