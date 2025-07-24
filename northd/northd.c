@@ -9484,6 +9484,48 @@ build_lswitch_lflows_admission_control(struct ovn_datapath *od,
                   lflow_ref);
 }
 
+static void
+build_arp_nd_service_monitor_lflow(const char *svc_monitor_mac,
+                                   const char *svc_src_ip,
+                                   struct ds *action,
+                                   struct ds *match,
+                                   bool is_ipv4)
+{
+    if (is_ipv4) {
+        ds_put_format(match, "arp.tpa == %s && arp.op == 1",
+                      svc_src_ip);
+        ds_put_format(action,
+            "eth.dst = eth.src; "
+            "eth.src = %s; "
+            "arp.op = 2; /* ARP reply */ "
+            "arp.tha = arp.sha; "
+            "arp.sha = %s; "
+            "arp.tpa = arp.spa; "
+            "arp.spa = %s; "
+            "outport = inport; "
+            "flags.loopback = 1; "
+            "output;",
+            svc_monitor_mac, svc_monitor_mac,
+            svc_src_ip);
+    } else {
+        ds_put_format(match, "nd_ns && nd.target == %s",
+                      svc_src_ip);
+        ds_put_format(action,
+            "nd_na { "
+            "eth.dst = eth.src; "
+            "eth.src = %s; "
+            "ip6.src = %s; "
+            "nd.target = %s; "
+            "nd.tll = %s; "
+            "outport = inport; "
+            "flags.loopback = 1; "
+            "output; "
+            "};",
+            svc_monitor_mac, svc_src_ip,
+            svc_src_ip, svc_monitor_mac);
+    }
+}
+
 /* Ingress table 19: ARP/ND responder, skip requests coming from localnet
  * ports. (priority 100); see ovn-northd.8.xml for the rationale. */
 
@@ -9845,12 +9887,12 @@ build_lswitch_arp_nd_responder_default(struct ovn_datapath *od,
 /* Ingress table 19: ARP/ND responder for service monitor source ip.
  * (priority 110)*/
 static void
-build_lswitch_arp_nd_service_monitor(const struct ovn_lb_datapaths *lb_dps,
-                                     const struct hmap *ls_ports,
-                                     const char *svc_monitor_mac,
-                                     struct lflow_table *lflows,
-                                     struct ds *actions,
-                                     struct ds *match)
+build_lswitch_arp_nd_local_svc_mon(const struct ovn_lb_datapaths *lb_dps,
+                                   const struct hmap *ls_ports,
+                                   const char *svc_monitor_mac,
+                                   struct lflow_table *lflows,
+                                   struct ds *actions,
+                                   struct ds *match)
 {
     const struct ovn_northd_lb *lb = lb_dps->lb;
     for (size_t i = 0; i < lb->n_vips; i++) {
@@ -9876,41 +9918,11 @@ build_lswitch_arp_nd_service_monitor(const struct ovn_lb_datapaths *lb_dps,
 
             ds_clear(match);
             ds_clear(actions);
-            if (IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)) {
-                ds_put_format(match, "arp.tpa == %s && arp.op == 1",
-                              backend_nb->svc_mon_src_ip);
-                ds_put_format(actions,
-                    "eth.dst = eth.src; "
-                    "eth.src = %s; "
-                    "arp.op = 2; /* ARP reply */ "
-                    "arp.tha = arp.sha; "
-                    "arp.sha = %s; "
-                    "arp.tpa = arp.spa; "
-                    "arp.spa = %s; "
-                    "outport = inport; "
-                    "flags.loopback = 1; "
-                    "output;",
-                    svc_monitor_mac, svc_monitor_mac,
-                    backend_nb->svc_mon_src_ip);
-            } else {
-                ds_put_format(match, "nd_ns && nd.target == %s",
-                              backend_nb->svc_mon_src_ip);
-                ds_put_format(actions,
-                        "nd_na { "
-                        "eth.dst = eth.src; "
-                        "eth.src = %s; "
-                        "ip6.src = %s; "
-                        "nd.target = %s; "
-                        "nd.tll = %s; "
-                        "outport = inport; "
-                        "flags.loopback = 1; "
-                        "output; "
-                        "};",
-                        svc_monitor_mac,
-                        backend_nb->svc_mon_src_ip,
-                        backend_nb->svc_mon_src_ip,
-                        svc_monitor_mac);
-            }
+
+            build_arp_nd_service_monitor_lflow(svc_monitor_mac,
+                backend_nb->svc_mon_src_ip, actions, match,
+                IN6_IS_ADDR_V4MAPPED(&lb_vip->vip) ? true : false);
+
             ovn_lflow_add_with_hint(lflows,
                                     op->od,
                                     S_SWITCH_IN_ARP_ND_RSP, 110,
@@ -9921,6 +9933,41 @@ build_lswitch_arp_nd_service_monitor(const struct ovn_lb_datapaths *lb_dps,
     }
 }
 
+static void
+build_lswitch_arp_nd_ic_learned_svc_mon(struct hmap *ic_learned_svcs_map,
+                                        const struct hmap *ls_ports,
+                                        const char *svc_monitor_mac,
+                                        struct lflow_table *lflows,
+                                        struct lflow_ref *lflow_ref)
+{
+    struct ds action = DS_EMPTY_INITIALIZER;
+    struct ds match = DS_EMPTY_INITIALIZER;
+
+    struct service_monitor_info *mon_info;
+    HMAP_FOR_EACH (mon_info, hmap_node, ic_learned_svcs_map) {
+        struct ovn_port *op = ovn_port_find(ls_ports,
+                                            mon_info->sbrec_mon->logical_port);
+
+        if (!op || !mon_info->sbrec_mon->src_ip) {
+            continue;
+        }
+
+        bool is_ipv4 = strchr(mon_info->sbrec_mon->ip, '.') ? true : false;
+
+        build_arp_nd_service_monitor_lflow(svc_monitor_mac,
+                                           mon_info->sbrec_mon->src_ip,
+                                           &action, &match, is_ipv4);
+
+        ovn_lflow_add(lflows, op->od, S_SWITCH_IN_ARP_ND_RSP,
+                      110, ds_cstr(&match), ds_cstr(&action), lflow_ref);
+
+        ds_clear(&match);
+        ds_clear(&action);
+    }
+
+    ds_destroy(&match);
+    ds_destroy(&action);
+}
 
 /* Logical switch ingress table 20 and 21: DHCP options and response
  * priority 100 flows. */
@@ -17171,12 +17218,12 @@ build_lflows_thread(void *arg)
                     if (stop_parallel_processing()) {
                         return NULL;
                     }
-                    build_lswitch_arp_nd_service_monitor(lb_dps,
-                                                         lsi->ls_ports,
-                                                         lsi->svc_monitor_mac,
-                                                         lsi->lflows,
-                                                         &lsi->match,
-                                                         &lsi->actions);
+                    build_lswitch_arp_nd_local_svc_mon(lb_dps,
+                                                       lsi->ls_ports,
+                                                       lsi->svc_monitor_mac,
+                                                       lsi->lflows,
+                                                       &lsi->match,
+                                                       &lsi->actions);
                     build_lrouter_defrag_flows_for_lb(lb_dps, lsi->lflows,
                                                       lsi->lr_datapaths,
                                                       &lsi->match);
@@ -17420,10 +17467,10 @@ build_lswitch_and_lrouter_flows(
         stopwatch_stop(LFLOWS_PORTS_STOPWATCH_NAME, time_msec());
         stopwatch_start(LFLOWS_LBS_STOPWATCH_NAME, time_msec());
         HMAP_FOR_EACH (lb_dps, hmap_node, lb_dps_map) {
-            build_lswitch_arp_nd_service_monitor(lb_dps, lsi.ls_ports,
-                                                 lsi.svc_monitor_mac,
-                                                 lsi.lflows, &lsi.actions,
-                                                 &lsi.match);
+            build_lswitch_arp_nd_local_svc_mon(lb_dps, lsi.ls_ports,
+                                               lsi.svc_monitor_mac,
+                                               lsi.lflows, &lsi.actions,
+                                               &lsi.match);
             build_lrouter_defrag_flows_for_lb(lb_dps, lsi.lflows,
                                               lsi.lr_datapaths, &lsi.match);
             build_lrouter_flows_for_lb(lb_dps, lsi.lflows, lsi.meter_groups,
@@ -17547,7 +17594,12 @@ void build_lflows(struct ovsdb_idl_txn *ovnsb_txn,
                                     input_data->bfd_connections,
                                     input_data->features,
                                     input_data->svc_monitor_mac);
-
+    build_lswitch_arp_nd_ic_learned_svc_mon(
+        input_data->ic_learned_svcs,
+        input_data->ls_ports,
+        input_data->svc_monitor_mac,
+        lflows,
+        input_data->ic_leared_svcs_lflow_ref);
     if (parallelization_state == STATE_INIT_HASH_SIZES) {
         parallelization_state = STATE_USE_PARALLELIZATION;
     }
@@ -17827,10 +17879,10 @@ lflow_handle_northd_lb_changes(struct ovsdb_idl_txn *ovnsb_txn,
         struct ds match = DS_EMPTY_INITIALIZER;
         struct ds actions = DS_EMPTY_INITIALIZER;
 
-        build_lswitch_arp_nd_service_monitor(lb_dps, lflow_input->ls_ports,
-                                             lflow_input->svc_monitor_mac,
-                                             lflows, &actions,
-                                             &match);
+        build_lswitch_arp_nd_local_svc_mon(lb_dps, lflow_input->ls_ports,
+                                           lflow_input->svc_monitor_mac,
+                                           lflows, &actions,
+                                           &match);
         build_lrouter_defrag_flows_for_lb(lb_dps, lflows,
                                           lflow_input->lr_datapaths, &match);
         build_lrouter_flows_for_lb(lb_dps, lflows,
