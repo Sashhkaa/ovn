@@ -4895,6 +4895,11 @@ tcp.flags = RST;
         Source IPv4 or IPv6 address to use in the service monitor packet.
       </column>
 
+      <column name="ic_learned">
+        Set to true if the service monitor was propagated from another
+        OVN deployment via ovn-ic management.
+      </column>
+
       <column name="chassis_name">
         The name of the chassis where the logical port is bound.
       </column>

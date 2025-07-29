@@ -10563,6 +10563,33 @@ build_bfd_table(struct ovsdb_idl_txn *ovnsb_txn,
     bitmap_free(bfd_src_ports);
 }
 
+void
+build_ic_learned_svcs_map(
+    struct hmap *ic_learned_svcs_map,
+    struct ovsdb_idl_index *sbrec_service_monitor_by_learned_type)
+{
+    struct sbrec_service_monitor *key;
+
+    key = sbrec_service_monitor_index_init_row(
+        sbrec_service_monitor_by_learned_type);
+
+    sbrec_service_monitor_set_ic_learned(key, true);
+
+    const struct sbrec_service_monitor *sbrec_mon;
+    SBREC_SERVICE_MONITOR_FOR_EACH_EQUAL (sbrec_mon, key,
+        sbrec_service_monitor_by_learned_type) {
+        uint32_t hash = sbrec_mon->port;
+        hash = hash_string(sbrec_mon->ip, hash);
+        hash = hash_string(sbrec_mon->logical_port, hash);
+        struct service_monitor_info *mon_info = xzalloc(sizeof *mon_info);
+        mon_info->sbrec_mon = sbrec_mon;
+        mon_info->required = true;
+        hmap_insert(ic_learned_svcs_map, &mon_info->hmap_node, hash);
+    }
+
+    sbrec_service_monitor_index_destroy_row(key);
+}
+
 /* Returns a string of the IP address of the router port 'op' that
  * overlaps with 'ip_s".  If one is not found, returns NULL.
  *
@@ -18548,6 +18575,13 @@ northd_init(struct northd_data *data)
 }
 
 void
+ic_learned_svcs_init(struct ic_learned_svcs_data *data)
+{
+    hmap_init(&data->ic_learned_svs);
+    data->lflow_ref = lflow_ref_create();
+}
+
+void
 northd_destroy(struct northd_data *data)
 {
     struct ovn_lb_datapaths *lb_dps;
@@ -18584,6 +18618,23 @@ northd_destroy(struct northd_data *data)
 
     sset_destroy(&data->svc_monitor_lsps);
     destroy_northd_tracked_data(data);
+}
+
+static void
+__ic_learned_svcs_cleanup(struct hmap *ic_learned_svs_map)
+{
+    struct service_monitor_info *mon_info;
+    HMAP_FOR_EACH_POP (mon_info, hmap_node, ic_learned_svs_map) {
+        free(mon_info);
+    }
+    hmap_destroy(ic_learned_svs_map);
+}
+
+void
+ic_learned_svcs_cleanup(struct ic_learned_svcs_data *data)
+{
+    __ic_learned_svcs_cleanup(&data->ic_learned_svs);
+    lflow_ref_destroy(data->lflow_ref);
 }
 
 void
