@@ -1,7 +1,7 @@
 {
     "name": "OVN_Southbound",
-    "version": "20.34.1",
-    "cksum": "506056287 31527",
+    "version": "20.35.0",
+    "cksum": "954231618 31624",
     "tables": {
         "SB_Global": {
             "columns": {
@@ -518,6 +518,8 @@
                     "type": {"key": {"type": "string",
                              "enum": ["set", ["online", "offline", "error"]]},
                              "min": 0, "max": 1}},
+                "ic_learned": {"type": "boolean"},
+                "local": {"type": "boolean"},
                 "options": {
                     "type": {"key": "string", "value": "string",
                              "min": 0, "max": "unlimited"}},
