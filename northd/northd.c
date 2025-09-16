@@ -6431,11 +6431,7 @@ build_stateless_filter(const struct ovn_datapath *od,
                                 action,
                                 &acl->header_,
                                 lflow_ref);
-    } else if (!od->nbs->n_load_balancer){
-        /* For cases when we have statefull ACLs but no load
-           balancer configured on logical switch - we should
-           completely bypass conntrack on egress, otherwise
-           it is necessary to check the balanced traffic. */
+    } else {
         ovn_lflow_add_with_hint(lflows, od, S_SWITCH_OUT_PRE_ACL,
                                 acl->priority + OVN_ACL_PRI_OFFSET,
                                 acl->match,
@@ -6708,8 +6704,6 @@ build_pre_lb(struct ovn_datapath *od, const struct shash *meter_groups,
 
     /* Do not send statless flows via conntrack */
     ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB, 110,
-                  REGBIT_ACL_STATELESS" == 1", "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_LB, 110,
                   REGBIT_ACL_STATELESS" == 1", "next;", lflow_ref);
 }
 
@@ -8237,6 +8231,26 @@ build_lrouter_lb_affinity_default_flows(struct ovn_datapath *od,
                   lflow_ref);
     ovn_lflow_add(lflows, od, S_ROUTER_IN_LB_AFF_LEARN, 0, "1", "next;",
                   lflow_ref);
+}
+
+static void
+build_lb_rules_for_stateless_acl(struct lflow_table *lflows,
+                                 struct ovn_lb_datapaths *lb_dps,
+                                 const struct ovn_datapaths *ls_datapaths)
+{
+    /* When enable-stateless-acl-with-lb is enabled:
+     * 1. All stateless traffic must first pass through connection tracker
+     * in egress.
+     * 2. New connections (ct.new) will bypass commit phase.
+     */
+    const struct ovn_northd_lb *lb = lb_dps->lb;
+
+    ovn_lflow_add_with_dp_group(lflows, lb_dps->nb_ls_map,
+                                ods_size(ls_datapaths),
+                                S_SWITCH_OUT_STATEFUL, 110,
+                                REGBIT_ACL_STATELESS " == 1 && ct.new",
+                                "next;", &lb->nlb->header_,
+                                lb_dps->lflow_ref);
 }
 
 static void
@@ -12168,6 +12182,7 @@ build_lswitch_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
     build_lb_rules(lflows, lb_dps, ls_datapaths, features, match, action,
                    meter_groups, local_svc_monitor_map,
                    ic_learned_svc_monitor_map);
+    build_lb_rules_for_stateless_acl(lflows, lb_dps, ls_datapaths);
 }
 
 /* If there are any load balancing rules, we should send the packet to
