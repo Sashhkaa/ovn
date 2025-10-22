@@ -66,6 +66,16 @@ Post v25.09.0
      specified LS.
    - Add ovn-nbctl lsp-add-localnet-port which will create localnet port on
      specified LS.
+    - Change administrative distance for specific routes.
+      New AD is:
+        1. (new) Static (both local and ic-learned) high-proirity routes.
+        2. (new) Ic-learned connected routes that have route table ID set.
+        3. All other directly connected routes.
+        4. All other static routes.
+        5. routes learned from the outside via ovn-controller (e.g. bgp)
+        6. (lowest priority) src-ip routes
+      New option is introduced in order to mark static routes as priority
+      routes: override-connected.
   - Add a new experimental service - ovn-br-controller to program and
     manage OVS bridges (not managed by ovn-controller) using OVN logical flows.
     For more details see man ovn-br(5).

@@ -358,6 +358,8 @@
         have more than one Transit Switch, which interconnects them,
         directly-connected routes will be added via each transit switch port
         and configured as ECMP routes.
+        Additionally, these routes will be learned to the route table having
+        this name.
         </p>
         <p>
         Static routes within route tables will be advertised and learned only
@@ -376,6 +378,23 @@
       <column name="nexthop">
         Nexthop IP address for this route.
       </column>
+
+      <column name="options">
+        Options of the route.
+      </column>
+
+      <column name="options" key="override-connected"
+              type='{"type": "boolean"}'>
+        <p>
+            For static routes this options is a copy of same option
+            from northbound database.
+        </p>
+        <p>
+            For connected routes this option is set to true if there is a route
+            table associated with given connected route, i.e.
+            <ref table="Route" column="route_table"/> is not empty.
+        </p>
+     </column>
 
       <column name="origin">
         Can be one of <code>connected</code>, <code>static</code> or
