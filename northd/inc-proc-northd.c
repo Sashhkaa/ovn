@@ -151,6 +151,7 @@ static ENGINE_NODE(fdb_aging, "fdb_aging");
 static ENGINE_NODE(fdb_aging_waker, "fdb_aging_waker");
 static ENGINE_NODE(sync_to_sb_lb, "sync_to_sb_lb");
 static ENGINE_NODE(sync_to_sb_pb, "sync_to_sb_pb");
+static ENGINE_NODE(ic_learned_svcs, "ic_learned_svcs");
 static ENGINE_NODE_WITH_CLEAR_TRACK_DATA(global_config, "global_config");
 static ENGINE_NODE_WITH_CLEAR_TRACK_DATA(lb_data, "lb_data");
 static ENGINE_NODE_WITH_CLEAR_TRACK_DATA(lr_nat, "lr_nat");
@@ -178,6 +179,8 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_global_config, &en_sb_chassis,
                      global_config_sb_chassis_handler);
 
+    engine_add_input(&en_ic_learned_svcs, &en_sb_service_monitor, NULL);
+
     engine_add_input(&en_northd, &en_nb_mirror, NULL);
     engine_add_input(&en_northd, &en_nb_mirror_rule, NULL);
     engine_add_input(&en_northd, &en_nb_static_mac_binding, NULL);
@@ -194,6 +197,7 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_northd, &en_sb_fdb, NULL);
     engine_add_input(&en_northd, &en_sb_static_mac_binding, NULL);
     engine_add_input(&en_northd, &en_sb_chassis_template_var, NULL);
+    engine_add_input(&en_northd, &en_ic_learned_svcs, NULL);
     engine_add_input(&en_northd, &en_global_config,
                      northd_global_config_handler);
 
@@ -252,6 +256,7 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_lflow, &en_sb_multicast_group, NULL);
     engine_add_input(&en_lflow, &en_sb_igmp_group, NULL);
     engine_add_input(&en_lflow, &en_sb_logical_dp_group, NULL);
+    engine_add_input(&en_lflow, &en_ic_learned_svcs, NULL);
     engine_add_input(&en_lflow, &en_global_config,
                      node_global_config_handler);
     engine_add_input(&en_lflow, &en_northd, lflow_northd_handler);
@@ -383,6 +388,13 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_ovsdb_node_add_index(&en_sb_fdb,
                                 "sbrec_fdb_by_dp_and_port",
                                 sbrec_fdb_by_dp_and_port);
+
+    struct ovsdb_idl_index *sbrec_service_monitor_by_learned_type
+        = ovsdb_idl_index_create1(sb->idl,
+                                  &sbrec_service_monitor_col_ic_learned);
+    engine_ovsdb_node_add_index(&en_sb_service_monitor,
+                                "sbrec_service_monitor_by_learned_type",
+                                sbrec_service_monitor_by_learned_type);
 
     struct ed_type_global_config *global_config =
         engine_get_internal_data(&en_global_config);

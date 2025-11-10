@@ -3553,9 +3553,20 @@ struct service_monitor_info {
     bool required;
 };
 
+static bool
+monitor_info_matches(const struct service_monitor_info *mon_info,
+                     const char *ip, const char *logical_port,
+                     uint16_t service_port, const char *protocol)
+{
+    return (mon_info->sbrec_mon->port == service_port &&
+            !strcmp(mon_info->sbrec_mon->ip, ip) &&
+            !strcmp(mon_info->sbrec_mon->protocol, protocol) &&
+            !strcmp(mon_info->sbrec_mon->logical_port, logical_port));
+}
 
 static struct service_monitor_info *
-get_service_mon(const struct hmap *monitor_map,
+get_service_mon(const struct hmap *local_monitor_map,
+                const struct hmap *ic_learned_monitor_map,
                 const char *ip, const char *logical_port,
                 uint16_t service_port, const char *protocol)
 {
@@ -3564,11 +3575,18 @@ get_service_mon(const struct hmap *monitor_map,
     hash = hash_string(logical_port, hash);
 
     struct service_monitor_info *mon_info;
-    HMAP_FOR_EACH_WITH_HASH (mon_info, hmap_node, hash, monitor_map) {
-        if (mon_info->sbrec_mon->port == service_port &&
-            !strcmp(mon_info->sbrec_mon->ip, ip) &&
-            !strcmp(mon_info->sbrec_mon->protocol, protocol) &&
-            !strcmp(mon_info->sbrec_mon->logical_port, logical_port)) {
+    HMAP_FOR_EACH_WITH_HASH (mon_info, hmap_node, hash,
+        local_monitor_map) {
+        if (monitor_info_matches(mon_info, ip, logical_port,
+                                 service_port, protocol)) {
+            return mon_info;
+        }
+    }
+
+    HMAP_FOR_EACH_WITH_HASH (mon_info, hmap_node, hash,
+        ic_learned_monitor_map) {
+        if (monitor_info_matches(mon_info, ip, logical_port,
+                                 service_port, protocol)) {
             return mon_info;
         }
     }
@@ -3576,16 +3594,32 @@ get_service_mon(const struct hmap *monitor_map,
     return NULL;
 }
 
+static void
+set_service_mon_options(const struct sbrec_service_monitor *sbrec_mon,
+                        const struct smap *nb_hc_options,
+                        const char *target_az_name)
+{
+    struct smap sb_svc_options = SMAP_INITIALIZER(&sb_svc_options);
+
+    smap_clone(&sb_svc_options, nb_hc_options);
+    if (target_az_name) {
+        smap_add(&sb_svc_options, "az-name", target_az_name);
+    }
+    sbrec_service_monitor_set_options(sbrec_mon, &sb_svc_options);
+    smap_destroy(&sb_svc_options);
+}
+
 static struct service_monitor_info *
 create_or_get_service_mon(struct ovsdb_idl_txn *ovnsb_txn,
-                          struct hmap *monitor_map,
+                          struct hmap *local_monitor_map,
+                          struct hmap *ic_learned_monitor_map,
                           const char *ip, const char *logical_port,
                           uint16_t service_port, const char *protocol,
-                          const char *chassis_name)
+                          const char *chassis_name, bool remote_backend)
 {
     struct service_monitor_info *mon_info =
-        get_service_mon(monitor_map, ip, logical_port, service_port,
-                        protocol);
+        get_service_mon(local_monitor_map, ic_learned_monitor_map,
+                        ip, logical_port, service_port, protocol);
 
     if (mon_info) {
         if (chassis_name && strcmp(mon_info->sbrec_mon->chassis_name,
@@ -3593,6 +3627,14 @@ create_or_get_service_mon(struct ovsdb_idl_txn *ovnsb_txn,
             sbrec_service_monitor_set_chassis_name(mon_info->sbrec_mon,
                                                    chassis_name);
         }
+        /*
+         * if a similar record was created by the interconet database,
+         * then we transfer ownership rights to delete to northd:
+         * northd will create logical flows and delete the entry
+         * when the backend is no longer used locally.
+         */
+        sbrec_service_monitor_set_ic_learned(mon_info->sbrec_mon,
+                                             false);
         return mon_info;
     }
 
@@ -3607,12 +3649,14 @@ create_or_get_service_mon(struct ovsdb_idl_txn *ovnsb_txn,
     sbrec_service_monitor_set_port(sbrec_mon, service_port);
     sbrec_service_monitor_set_logical_port(sbrec_mon, logical_port);
     sbrec_service_monitor_set_protocol(sbrec_mon, protocol);
+    sbrec_service_monitor_set_remote(sbrec_mon, remote_backend);
+    sbrec_service_monitor_set_ic_learned(sbrec_mon, false);
     if (chassis_name) {
         sbrec_service_monitor_set_chassis_name(sbrec_mon, chassis_name);
     }
     mon_info = xzalloc(sizeof *mon_info);
     mon_info->sbrec_mon = sbrec_mon;
-    hmap_insert(monitor_map, &mon_info->hmap_node, hash);
+    hmap_insert(local_monitor_map, &mon_info->hmap_node, hash);
     return mon_info;
 }
 
@@ -3621,7 +3665,9 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                   const struct ovn_northd_lb *lb,
                   const char *svc_monitor_mac,
                   const struct eth_addr *svc_monitor_mac_ea,
-                  struct hmap *monitor_map, struct hmap *ls_ports,
+                  struct hmap *local_monitor_map,
+                  struct hmap *ic_learned_monitor_map,
+                  struct hmap *ls_ports,
                   struct sset *svc_monitor_lsps)
 {
     if (lb->template) {
@@ -3645,7 +3691,8 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
             struct ovn_port *op = ovn_port_find(ls_ports,
                                                 backend_nb->logical_port);
 
-            if (!op || !lsp_is_enabled(op->nbsp)) {
+            if (!backend_nb->remote_backend &&
+                (!op || !lsp_is_enabled(op->nbsp))) {
                 continue;
             }
 
@@ -3655,20 +3702,24 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
             }
 
             const char *chassis_name = NULL;
-            if (op->sb && op->sb->chassis) {
+            if (!backend_nb->remote_backend && op->sb && op->sb->chassis) {
                 chassis_name = op->sb->chassis->name;
             }
 
             struct service_monitor_info *mon_info =
-                create_or_get_service_mon(ovnsb_txn, monitor_map,
+                create_or_get_service_mon(ovnsb_txn,
+                                          local_monitor_map,
+                                          ic_learned_monitor_map,
                                           backend->ip_str,
                                           backend_nb->logical_port,
                                           backend->port,
                                           protocol,
-                                          chassis_name);
+                                          chassis_name,
+                                          backend_nb->remote_backend);
             ovs_assert(mon_info);
-            sbrec_service_monitor_set_options(
-                mon_info->sbrec_mon, &lb_vip_nb->lb_health_check->options);
+            set_service_mon_options(mon_info->sbrec_mon,
+                                    &lb_vip_nb->lb_health_check->options,
+                                    backend_nb->az_name);
             struct eth_addr ea;
             if (!mon_info->sbrec_mon->src_mac ||
                 !eth_addr_from_string(mon_info->sbrec_mon->src_mac, &ea) ||
@@ -3685,7 +3736,8 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                     backend_nb->svc_mon_src_ip);
             }
 
-            if ((!op->sb->n_up || !op->sb->up[0])
+            if (!backend_nb->remote_backend &&
+                (!op->sb->n_up || !op->sb->up[0])
                 && mon_info->sbrec_mon->status
                 && !strcmp(mon_info->sbrec_mon->status, "online")) {
                 sbrec_service_monitor_set_status(mon_info->sbrec_mon,
@@ -3705,7 +3757,8 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
                      struct ds *skip_snat_action,
                      struct ds *force_snat_action,
                      bool ls_dp, const struct chassis_features *features,
-                     const struct hmap *svc_monitor_map)
+                     const struct hmap *local_monitor_map,
+                     const struct hmap *ic_learned_monitor_map)
 {
     const char *ct_lb_action =
         features->ct_no_masked_label ? "ct_lb_mark" : "ct_lb";
@@ -3731,7 +3784,8 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
             }
 
             struct service_monitor_info *mon_info = get_service_mon(
-                svc_monitor_map, backend->ip_str, backend_nb->logical_port,
+                local_monitor_map, ic_learned_monitor_map,
+                backend->ip_str, backend_nb->logical_port,
                 backend->port, protocol);
 
             if (!mon_info) {
@@ -3887,16 +3941,23 @@ build_lb_datapaths(const struct hmap *lbs, const struct hmap *lb_groups,
 static void
 build_lb_svcs(
     struct ovsdb_idl_txn *ovnsb_txn,
-    const struct sbrec_service_monitor_table *sbrec_service_monitor_table,
+    struct ovsdb_idl_index *sbrec_service_monitor_by_learned_type,
     const char *svc_monitor_mac,
     const struct eth_addr *svc_monitor_mac_ea,
     struct hmap *ls_ports, struct hmap *lb_dps_map,
     struct sset *svc_monitor_lsps,
-    struct hmap *svc_monitor_map)
+    struct hmap *svc_monitor_map,
+    struct hmap *ic_learned_svs)
 {
     const struct sbrec_service_monitor *sbrec_mon;
-    SBREC_SERVICE_MONITOR_TABLE_FOR_EACH (sbrec_mon,
-                            sbrec_service_monitor_table) {
+    struct sbrec_service_monitor *key =
+        sbrec_service_monitor_index_init_row(
+            sbrec_service_monitor_by_learned_type);
+
+    sbrec_service_monitor_set_ic_learned(key, false);
+
+    SBREC_SERVICE_MONITOR_FOR_EACH_EQUAL (sbrec_mon, key,
+        sbrec_service_monitor_by_learned_type) {
         uint32_t hash = sbrec_mon->port;
         hash = hash_string(sbrec_mon->ip, hash);
         hash = hash_string(sbrec_mon->logical_port, hash);
@@ -3906,11 +3967,13 @@ build_lb_svcs(
         hmap_insert(svc_monitor_map, &mon_info->hmap_node, hash);
     }
 
+    sbrec_service_monitor_index_destroy_row(key);
+
     struct ovn_lb_datapaths *lb_dps;
     HMAP_FOR_EACH (lb_dps, hmap_node, lb_dps_map) {
         ovn_lb_svc_create(ovnsb_txn, lb_dps->lb, svc_monitor_mac,
-                          svc_monitor_mac_ea, svc_monitor_map, ls_ports,
-                          svc_monitor_lsps);
+                          svc_monitor_mac_ea, svc_monitor_map,
+                          ic_learned_svs, ls_ports, svc_monitor_lsps);
     }
 
     struct service_monitor_info *mon_info;
@@ -3979,17 +4042,19 @@ build_lb_count_dps(struct hmap *lb_dps_map,
 static void
 build_lb_port_related_data(
     struct ovsdb_idl_txn *ovnsb_txn,
-    const struct sbrec_service_monitor_table *sbrec_service_monitor_table,
+    struct ovsdb_idl_index *sbrec_service_monitor_by_learned_type,
     const char *svc_monitor_mac,
     const struct eth_addr *svc_monitor_mac_ea,
     struct ovn_datapaths *lr_datapaths, struct hmap *ls_ports,
     struct hmap *lb_dps_map, struct hmap *lb_group_dps_map,
     struct sset *svc_monitor_lsps,
-    struct hmap *svc_monitor_map)
+    struct hmap *svc_monitor_map,
+    struct hmap *ic_learned_svs)
 {
-    build_lb_svcs(ovnsb_txn, sbrec_service_monitor_table, svc_monitor_mac,
-                  svc_monitor_mac_ea, ls_ports, lb_dps_map,
-                  svc_monitor_lsps, svc_monitor_map);
+    build_lb_svcs(ovnsb_txn, sbrec_service_monitor_by_learned_type,
+                  svc_monitor_mac, svc_monitor_mac_ea, ls_ports,
+                  lb_dps_map, svc_monitor_lsps, svc_monitor_map,
+                  ic_learned_svs);
     build_lswitch_lbs_from_lrouter(lr_datapaths, lb_dps_map, lb_group_dps_map);
 }
 
@@ -6366,11 +6431,7 @@ build_stateless_filter(const struct ovn_datapath *od,
                                 action,
                                 &acl->header_,
                                 lflow_ref);
-    } else if (!od->nbs->n_load_balancer){
-        /* For cases when we have statefull ACLs but no load
-           balancer configured on logical switch - we should
-           completely bypass conntrack on egress, otherwise
-           it is necessary to check the balanced traffic. */
+    } else {
         ovn_lflow_add_with_hint(lflows, od, S_SWITCH_OUT_PRE_ACL,
                                 acl->priority + OVN_ACL_PRI_OFFSET,
                                 acl->match,
@@ -6643,8 +6704,6 @@ build_pre_lb(struct ovn_datapath *od, const struct shash *meter_groups,
 
     /* Do not send statless flows via conntrack */
     ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB, 110,
-                  REGBIT_ACL_STATELESS" == 1", "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_LB, 110,
                   REGBIT_ACL_STATELESS" == 1", "next;", lflow_ref);
 }
 
@@ -8175,11 +8234,32 @@ build_lrouter_lb_affinity_default_flows(struct ovn_datapath *od,
 }
 
 static void
+build_lb_rules_for_stateless_acl(struct lflow_table *lflows,
+                                 struct ovn_lb_datapaths *lb_dps,
+                                 const struct ovn_datapaths *ls_datapaths)
+{
+    /* When enable-stateless-acl-with-lb is enabled:
+     * 1. All stateless traffic must first pass through connection tracker
+     * in egress.
+     * 2. New connections (ct.new) will bypass commit phase.
+     */
+    const struct ovn_northd_lb *lb = lb_dps->lb;
+
+    ovn_lflow_add_with_dp_group(lflows, lb_dps->nb_ls_map,
+                                ods_size(ls_datapaths),
+                                S_SWITCH_OUT_STATEFUL, 110,
+                                REGBIT_ACL_STATELESS " == 1 && ct.new",
+                                "next;", &lb->nlb->header_,
+                                lb_dps->lflow_ref);
+}
+
+static void
 build_lb_rules(struct lflow_table *lflows, struct ovn_lb_datapaths *lb_dps,
                const struct ovn_datapaths *ls_datapaths,
                const struct chassis_features *features, struct ds *match,
                struct ds *action, const struct shash *meter_groups,
-               const struct hmap *svc_monitor_map)
+               const struct hmap *local_monitor_map,
+               const struct hmap *ic_learned_monitor_map)
 {
     const struct ovn_northd_lb *lb = lb_dps->lb;
     for (size_t i = 0; i < lb->n_vips; i++) {
@@ -8225,7 +8305,8 @@ build_lb_rules(struct lflow_table *lflows, struct ovn_lb_datapaths *lb_dps,
         bool reject = build_lb_vip_actions(lb, lb_vip, lb_vip_nb, action,
                                            lb->selection_fields,
                                            NULL, NULL, true, features,
-                                           svc_monitor_map);
+                                           local_monitor_map,
+                                           ic_learned_monitor_map);
 
         ds_put_format(match, "ct.new && %s.dst == %s", ip_match,
                       lb_vip->vip_str);
@@ -9446,6 +9527,48 @@ build_lswitch_lflows_admission_control(struct ovn_datapath *od,
                   lflow_ref);
 }
 
+static void
+build_arp_nd_service_monitor_lflow(const char *svc_monitor_mac,
+                                   const char *svc_src_ip,
+                                   struct ds *action,
+                                   struct ds *match,
+                                   bool is_ipv4)
+{
+    if (is_ipv4) {
+        ds_put_format(match, "arp.tpa == %s && arp.op == 1",
+                      svc_src_ip);
+        ds_put_format(action,
+            "eth.dst = eth.src; "
+            "eth.src = %s; "
+            "arp.op = 2; /* ARP reply */ "
+            "arp.tha = arp.sha; "
+            "arp.sha = %s; "
+            "arp.tpa = arp.spa; "
+            "arp.spa = %s; "
+            "outport = inport; "
+            "flags.loopback = 1; "
+            "output;",
+            svc_monitor_mac, svc_monitor_mac,
+            svc_src_ip);
+    } else {
+        ds_put_format(match, "nd_ns && nd.target == %s",
+                      svc_src_ip);
+        ds_put_format(action,
+            "nd_na { "
+            "eth.dst = eth.src; "
+            "eth.src = %s; "
+            "ip6.src = %s; "
+            "nd.target = %s; "
+            "nd.tll = %s; "
+            "outport = inport; "
+            "flags.loopback = 1; "
+            "output; "
+            "};",
+            svc_monitor_mac, svc_src_ip,
+            svc_src_ip, svc_monitor_mac);
+    }
+}
+
 /* Ingress table 19: ARP/ND responder, skip requests coming from localnet
  * ports. (priority 100); see ovn-northd.8.xml for the rationale. */
 
@@ -9807,12 +9930,12 @@ build_lswitch_arp_nd_responder_default(struct ovn_datapath *od,
 /* Ingress table 19: ARP/ND responder for service monitor source ip.
  * (priority 110)*/
 static void
-build_lswitch_arp_nd_service_monitor(const struct ovn_lb_datapaths *lb_dps,
-                                     const struct hmap *ls_ports,
-                                     const char *svc_monitor_mac,
-                                     struct lflow_table *lflows,
-                                     struct ds *actions,
-                                     struct ds *match)
+build_lswitch_arp_nd_local_svc_mon(const struct ovn_lb_datapaths *lb_dps,
+                                   const struct hmap *ls_ports,
+                                   const char *svc_monitor_mac,
+                                   struct lflow_table *lflows,
+                                   struct ds *actions,
+                                   struct ds *match)
 {
     const struct ovn_northd_lb *lb = lb_dps->lb;
     for (size_t i = 0; i < lb->n_vips; i++) {
@@ -9838,41 +9961,11 @@ build_lswitch_arp_nd_service_monitor(const struct ovn_lb_datapaths *lb_dps,
 
             ds_clear(match);
             ds_clear(actions);
-            if (IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)) {
-                ds_put_format(match, "arp.tpa == %s && arp.op == 1",
-                              backend_nb->svc_mon_src_ip);
-                ds_put_format(actions,
-                    "eth.dst = eth.src; "
-                    "eth.src = %s; "
-                    "arp.op = 2; /* ARP reply */ "
-                    "arp.tha = arp.sha; "
-                    "arp.sha = %s; "
-                    "arp.tpa = arp.spa; "
-                    "arp.spa = %s; "
-                    "outport = inport; "
-                    "flags.loopback = 1; "
-                    "output;",
-                    svc_monitor_mac, svc_monitor_mac,
-                    backend_nb->svc_mon_src_ip);
-            } else {
-                ds_put_format(match, "nd_ns && nd.target == %s",
-                              backend_nb->svc_mon_src_ip);
-                ds_put_format(actions,
-                        "nd_na { "
-                        "eth.dst = eth.src; "
-                        "eth.src = %s; "
-                        "ip6.src = %s; "
-                        "nd.target = %s; "
-                        "nd.tll = %s; "
-                        "outport = inport; "
-                        "flags.loopback = 1; "
-                        "output; "
-                        "};",
-                        svc_monitor_mac,
-                        backend_nb->svc_mon_src_ip,
-                        backend_nb->svc_mon_src_ip,
-                        svc_monitor_mac);
-            }
+
+            build_arp_nd_service_monitor_lflow(svc_monitor_mac,
+                backend_nb->svc_mon_src_ip, actions, match,
+                IN6_IS_ADDR_V4MAPPED(&lb_vip->vip) ? true : false);
+
             ovn_lflow_add_with_hint(lflows,
                                     op->od,
                                     S_SWITCH_IN_ARP_ND_RSP, 110,
@@ -9883,6 +9976,41 @@ build_lswitch_arp_nd_service_monitor(const struct ovn_lb_datapaths *lb_dps,
     }
 }
 
+static void
+build_lswitch_arp_nd_ic_learned_svc_mon(struct hmap *ic_learned_svcs_map,
+                                        const struct hmap *ls_ports,
+                                        const char *svc_monitor_mac,
+                                        struct lflow_table *lflows,
+                                        struct lflow_ref *lflow_ref)
+{
+    struct ds action = DS_EMPTY_INITIALIZER;
+    struct ds match = DS_EMPTY_INITIALIZER;
+
+    struct service_monitor_info *mon_info;
+    HMAP_FOR_EACH (mon_info, hmap_node, ic_learned_svcs_map) {
+        struct ovn_port *op = ovn_port_find(ls_ports,
+                                            mon_info->sbrec_mon->logical_port);
+
+        if (!op || !mon_info->sbrec_mon->src_ip) {
+            continue;
+        }
+
+        bool is_ipv4 = strchr(mon_info->sbrec_mon->ip, '.') ? true : false;
+
+        build_arp_nd_service_monitor_lflow(svc_monitor_mac,
+                                           mon_info->sbrec_mon->src_ip,
+                                           &action, &match, is_ipv4);
+
+        ovn_lflow_add(lflows, op->od, S_SWITCH_IN_ARP_ND_RSP,
+                      110, ds_cstr(&match), ds_cstr(&action), lflow_ref);
+
+        ds_clear(&match);
+        ds_clear(&action);
+    }
+
+    ds_destroy(&match);
+    ds_destroy(&action);
+}
 
 /* Logical switch ingress table 20 and 21: DHCP options and response
  * priority 100 flows. */
@@ -10561,6 +10689,33 @@ build_bfd_table(struct ovsdb_idl_txn *ovnsb_txn,
     hmap_destroy(&sb_only);
 
     bitmap_free(bfd_src_ports);
+}
+
+void
+build_ic_learned_svcs_map(
+    struct hmap *ic_learned_svcs_map,
+    struct ovsdb_idl_index *sbrec_service_monitor_by_learned_type)
+{
+    struct sbrec_service_monitor *key;
+
+    key = sbrec_service_monitor_index_init_row(
+        sbrec_service_monitor_by_learned_type);
+
+    sbrec_service_monitor_set_ic_learned(key, true);
+
+    const struct sbrec_service_monitor *sbrec_mon;
+    SBREC_SERVICE_MONITOR_FOR_EACH_EQUAL (sbrec_mon, key,
+        sbrec_service_monitor_by_learned_type) {
+        uint32_t hash = sbrec_mon->port;
+        hash = hash_string(sbrec_mon->ip, hash);
+        hash = hash_string(sbrec_mon->logical_port, hash);
+        struct service_monitor_info *mon_info = xzalloc(sizeof *mon_info);
+        mon_info->sbrec_mon = sbrec_mon;
+        mon_info->required = true;
+        hmap_insert(ic_learned_svcs_map, &mon_info->hmap_node, hash);
+    }
+
+    sbrec_service_monitor_index_destroy_row(key);
 }
 
 /* Returns a string of the IP address of the router port 'op' that
@@ -11832,7 +11987,8 @@ build_lrouter_nat_flows_for_lb(
     struct ds *match, struct ds *action,
     const struct shash *meter_groups,
     const struct chassis_features *features,
-    const struct hmap *svc_monitor_map)
+    const struct hmap *local_monitor_map,
+    const struct hmap *ic_learned_monitor_map)
 {
     const struct ovn_northd_lb *lb = lb_dps->lb;
     bool ipv4 = lb_vip->address_family == AF_INET;
@@ -11855,7 +12011,8 @@ build_lrouter_nat_flows_for_lb(
     bool reject = build_lb_vip_actions(lb, lb_vip, vips_nb, action,
                                        lb->selection_fields, &skip_snat_act,
                                        &force_snat_act, false, features,
-                                       svc_monitor_map);
+                                       local_monitor_map,
+                                       ic_learned_monitor_map);
 
     /* Higher priority rules are added for load-balancing in DNAT
      * table.  For every match (on a VIP[:port]), we add two flows.
@@ -11977,7 +12134,8 @@ build_lswitch_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
                            const struct shash *meter_groups,
                            const struct ovn_datapaths *ls_datapaths,
                            const struct chassis_features *features,
-                           const struct hmap *svc_monitor_map,
+                           const struct hmap *local_svc_monitor_map,
+                           const struct hmap *ic_learned_svc_monitor_map,
                            struct ds *match, struct ds *action)
 {
     if (!lb_dps->n_nb_ls) {
@@ -12022,7 +12180,9 @@ build_lswitch_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
     build_lb_rules_pre_stateful(lflows, lb_dps, features->ct_no_masked_label,
                                 ls_datapaths, match, action);
     build_lb_rules(lflows, lb_dps, ls_datapaths, features, match, action,
-                   meter_groups, svc_monitor_map);
+                   meter_groups, local_svc_monitor_map,
+                   ic_learned_svc_monitor_map);
+    build_lb_rules_for_stateless_acl(lflows, lb_dps, ls_datapaths);
 }
 
 /* If there are any load balancing rules, we should send the packet to
@@ -12095,7 +12255,8 @@ build_lrouter_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
                            const struct ovn_datapaths *lr_datapaths,
                            const struct lr_stateful_table *lr_stateful_table,
                            const struct chassis_features *features,
-                           const struct hmap *svc_monitor_map,
+                           const struct hmap *local_monitor_map,
+                           const struct hmap *ic_learned_monitor_map,
                            struct ds *match, struct ds *action)
 {
     size_t index;
@@ -12111,7 +12272,8 @@ build_lrouter_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
         build_lrouter_nat_flows_for_lb(lb_vip, lb_dps, &lb->vips_nb[i],
                                        lr_datapaths, lr_stateful_table, lflows,
                                        match, action, meter_groups, features,
-                                       svc_monitor_map);
+                                       local_monitor_map,
+                                       ic_learned_monitor_map);
 
         build_lrouter_allow_vip_traffic_template(lflows, lb_dps, lb_vip, lb,
                                                  lr_datapaths);
@@ -16847,7 +17009,8 @@ struct lswitch_flow_build_info {
     struct hmap *igmp_groups;
     const struct shash *meter_groups;
     const struct hmap *lb_dps_map;
-    const struct hmap *svc_monitor_map;
+    const struct hmap *local_svc_monitor_map;
+    const struct hmap *ic_learned_svc_monitor_map;
     const struct hmap *bfd_connections;
     const struct chassis_features *features;
     char *svc_check_match;
@@ -17099,12 +17262,12 @@ build_lflows_thread(void *arg)
                     if (stop_parallel_processing()) {
                         return NULL;
                     }
-                    build_lswitch_arp_nd_service_monitor(lb_dps,
-                                                         lsi->ls_ports,
-                                                         lsi->svc_monitor_mac,
-                                                         lsi->lflows,
-                                                         &lsi->match,
-                                                         &lsi->actions);
+                    build_lswitch_arp_nd_local_svc_mon(lb_dps,
+                                                       lsi->ls_ports,
+                                                       lsi->svc_monitor_mac,
+                                                       lsi->lflows,
+                                                       &lsi->match,
+                                                       &lsi->actions);
                     build_lrouter_defrag_flows_for_lb(lb_dps, lsi->lflows,
                                                       lsi->lr_datapaths,
                                                       &lsi->match);
@@ -17113,13 +17276,15 @@ build_lflows_thread(void *arg)
                                                lsi->lr_datapaths,
                                                lsi->lr_stateful_table,
                                                lsi->features,
-                                               lsi->svc_monitor_map,
+                                               lsi->local_svc_monitor_map,
+                                               lsi->ic_learned_svc_monitor_map,
                                                &lsi->match, &lsi->actions);
                     build_lswitch_flows_for_lb(lb_dps, lsi->lflows,
                                                lsi->meter_groups,
                                                lsi->ls_datapaths,
                                                lsi->features,
-                                               lsi->svc_monitor_map,
+                                               lsi->local_svc_monitor_map,
+                                               lsi->ic_learned_svc_monitor_map,
                                                &lsi->match, &lsi->actions);
                 }
             }
@@ -17226,7 +17391,8 @@ build_lswitch_and_lrouter_flows(
     struct hmap *igmp_groups,
     const struct shash *meter_groups,
     const struct hmap *lb_dps_map,
-    const struct hmap *svc_monitor_map,
+    const struct hmap *local_svc_monitor_map,
+    const struct hmap *ic_learned_svc_monitor_map,
     const struct hmap *bfd_connections,
     const struct chassis_features *features,
     const char *svc_monitor_mac)
@@ -17257,7 +17423,10 @@ build_lswitch_and_lrouter_flows(
             lsiv[index].igmp_groups = igmp_groups;
             lsiv[index].meter_groups = meter_groups;
             lsiv[index].lb_dps_map = lb_dps_map;
-            lsiv[index].svc_monitor_map = svc_monitor_map;
+            lsiv[index].local_svc_monitor_map =
+                local_svc_monitor_map;
+            lsiv[index].ic_learned_svc_monitor_map =
+                ic_learned_svc_monitor_map;
             lsiv[index].bfd_connections = bfd_connections;
             lsiv[index].features = features;
             lsiv[index].svc_check_match = svc_check_match;
@@ -17298,7 +17467,8 @@ build_lswitch_and_lrouter_flows(
             .igmp_groups = igmp_groups,
             .meter_groups = meter_groups,
             .lb_dps_map = lb_dps_map,
-            .svc_monitor_map = svc_monitor_map,
+            .local_svc_monitor_map = local_svc_monitor_map,
+            .ic_learned_svc_monitor_map = ic_learned_svc_monitor_map,
             .bfd_connections = bfd_connections,
             .features = features,
             .svc_check_match = svc_check_match,
@@ -17341,19 +17511,21 @@ build_lswitch_and_lrouter_flows(
         stopwatch_stop(LFLOWS_PORTS_STOPWATCH_NAME, time_msec());
         stopwatch_start(LFLOWS_LBS_STOPWATCH_NAME, time_msec());
         HMAP_FOR_EACH (lb_dps, hmap_node, lb_dps_map) {
-            build_lswitch_arp_nd_service_monitor(lb_dps, lsi.ls_ports,
-                                                 lsi.svc_monitor_mac,
-                                                 lsi.lflows, &lsi.actions,
-                                                 &lsi.match);
+            build_lswitch_arp_nd_local_svc_mon(lb_dps, lsi.ls_ports,
+                                               lsi.svc_monitor_mac,
+                                               lsi.lflows, &lsi.actions,
+                                               &lsi.match);
             build_lrouter_defrag_flows_for_lb(lb_dps, lsi.lflows,
                                               lsi.lr_datapaths, &lsi.match);
             build_lrouter_flows_for_lb(lb_dps, lsi.lflows, lsi.meter_groups,
                                        lsi.lr_datapaths, lsi.lr_stateful_table,
-                                       lsi.features, lsi.svc_monitor_map,
+                                       lsi.features, lsi.local_svc_monitor_map,
+                                       lsi.ic_learned_svc_monitor_map,
                                        &lsi.match, &lsi.actions);
             build_lswitch_flows_for_lb(lb_dps, lsi.lflows, lsi.meter_groups,
                                        lsi.ls_datapaths, lsi.features,
-                                       lsi.svc_monitor_map,
+                                       lsi.local_svc_monitor_map,
+                                       lsi.ic_learned_svc_monitor_map,
                                        &lsi.match, &lsi.actions);
         }
         stopwatch_stop(LFLOWS_LBS_STOPWATCH_NAME, time_msec());
@@ -17462,10 +17634,16 @@ void build_lflows(struct ovsdb_idl_txn *ovnsb_txn,
                                     input_data->meter_groups,
                                     input_data->lb_datapaths_map,
                                     input_data->svc_monitor_map,
+                                    input_data->ic_learned_svcs,
                                     input_data->bfd_connections,
                                     input_data->features,
                                     input_data->svc_monitor_mac);
-
+    build_lswitch_arp_nd_ic_learned_svc_mon(
+        input_data->ic_learned_svcs,
+        input_data->ls_ports,
+        input_data->svc_monitor_mac,
+        lflows,
+        input_data->ic_leared_svcs_lflow_ref);
     if (parallelization_state == STATE_INIT_HASH_SIZES) {
         parallelization_state = STATE_USE_PARALLELIZATION;
     }
@@ -17745,10 +17923,10 @@ lflow_handle_northd_lb_changes(struct ovsdb_idl_txn *ovnsb_txn,
         struct ds match = DS_EMPTY_INITIALIZER;
         struct ds actions = DS_EMPTY_INITIALIZER;
 
-        build_lswitch_arp_nd_service_monitor(lb_dps, lflow_input->ls_ports,
-                                             lflow_input->svc_monitor_mac,
-                                             lflows, &actions,
-                                             &match);
+        build_lswitch_arp_nd_local_svc_mon(lb_dps, lflow_input->ls_ports,
+                                           lflow_input->svc_monitor_mac,
+                                           lflows, &actions,
+                                           &match);
         build_lrouter_defrag_flows_for_lb(lb_dps, lflows,
                                           lflow_input->lr_datapaths, &match);
         build_lrouter_flows_for_lb(lb_dps, lflows,
@@ -17757,12 +17935,14 @@ lflow_handle_northd_lb_changes(struct ovsdb_idl_txn *ovnsb_txn,
                                    lflow_input->lr_stateful_table,
                                    lflow_input->features,
                                    lflow_input->svc_monitor_map,
+                                   lflow_input->ic_learned_svcs,
                                    &match, &actions);
         build_lswitch_flows_for_lb(lb_dps, lflows,
                                    lflow_input->meter_groups,
                                    lflow_input->ls_datapaths,
                                    lflow_input->features,
                                    lflow_input->svc_monitor_map,
+                                   lflow_input->ic_learned_svcs,
                                    &match, &actions);
 
         ds_destroy(&match);
@@ -18548,6 +18728,13 @@ northd_init(struct northd_data *data)
 }
 
 void
+ic_learned_svcs_init(struct ic_learned_svcs_data *data)
+{
+    hmap_init(&data->ic_learned_svs);
+    data->lflow_ref = lflow_ref_create();
+}
+
+void
 northd_destroy(struct northd_data *data)
 {
     struct ovn_lb_datapaths *lb_dps;
@@ -18584,6 +18771,23 @@ northd_destroy(struct northd_data *data)
 
     sset_destroy(&data->svc_monitor_lsps);
     destroy_northd_tracked_data(data);
+}
+
+static void
+__ic_learned_svcs_cleanup(struct hmap *ic_learned_svs_map)
+{
+    struct service_monitor_info *mon_info;
+    HMAP_FOR_EACH_POP (mon_info, hmap_node, ic_learned_svs_map) {
+        free(mon_info);
+    }
+    hmap_destroy(ic_learned_svs_map);
+}
+
+void
+ic_learned_svcs_cleanup(struct ic_learned_svcs_data *data)
+{
+    __ic_learned_svcs_cleanup(&data->ic_learned_svs);
+    lflow_ref_destroy(data->lflow_ref);
 }
 
 void
@@ -18637,14 +18841,11 @@ ovnnb_db_run(struct northd_input *input_data,
                 &data->ls_datapaths.datapaths, &data->lr_datapaths.datapaths,
                 &data->ls_ports, &data->lr_ports);
     build_lb_port_related_data(ovnsb_txn,
-                               input_data->sbrec_service_monitor_table,
-                               input_data->svc_monitor_mac,
-                               &input_data->svc_monitor_mac_ea,
-                               &data->lr_datapaths, &data->ls_ports,
-                               &data->lb_datapaths_map,
-                               &data->lb_group_datapaths_map,
-                               &data->svc_monitor_lsps,
-                               &data->svc_monitor_map);
+        input_data->sbrec_service_monitor_by_learned_type,
+        input_data->svc_monitor_mac, &input_data->svc_monitor_mac_ea,
+        &data->lr_datapaths, &data->ls_ports, &data->lb_datapaths_map,
+        &data->lb_group_datapaths_map, &data->svc_monitor_lsps,
+        &data->svc_monitor_map, input_data->ic_learned_svs);
     build_lb_count_dps(&data->lb_datapaths_map,
                        ods_size(&data->ls_datapaths),
                        ods_size(&data->lr_datapaths));

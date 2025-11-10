@@ -65,6 +65,10 @@ northd_get_input_data(struct engine_node *node,
         engine_ovsdb_node_get_index(
             engine_get_input("SB_fdb", node),
             "sbrec_fdb_by_dp_and_port");
+    input_data->sbrec_service_monitor_by_learned_type =
+        engine_ovsdb_node_get_index(
+            engine_get_input("SB_service_monitor", node),
+            "sbrec_service_monitor_by_learned_type");
 
     input_data->nbrec_logical_switch_table =
         EN_OVSDB_GET(engine_get_input("NB_logical_switch", node));
@@ -116,6 +120,11 @@ northd_get_input_data(struct engine_node *node,
     input_data->svc_monitor_mac = global_config->svc_monitor_mac;
     input_data->svc_monitor_mac_ea = global_config->svc_monitor_mac_ea;
     input_data->features = &global_config->features;
+
+    /* Add Service Monitor data for interconnect learned records. */
+    struct ic_learned_svcs_data *ic_learned_svcs_data =
+        engine_get_input_data("ic_learned_svcs", node);
+    input_data->ic_learned_svs = &ic_learned_svcs_data->ic_learned_svs;
 }
 
 void
@@ -238,6 +247,25 @@ northd_global_config_handler(struct engine_node *node, void *data OVS_UNUSED)
     return true;
 }
 
+
+void
+en_ic_learned_svcs_run(struct engine_node *node, void *data_)
+{
+    struct ic_learned_svcs_data *data = (struct ic_learned_svcs_data *) data_;
+    struct ovsdb_idl_index *sbrec_service_monitor_by_learned_type =
+        engine_ovsdb_node_get_index(
+            engine_get_input("SB_service_monitor", node),
+            "sbrec_service_monitor_by_learned_type");
+
+    ic_learned_svcs_cleanup(data);
+    ic_learned_svcs_init(data);
+
+    build_ic_learned_svcs_map(&data->ic_learned_svs,
+                              sbrec_service_monitor_by_learned_type);
+
+    engine_set_node_state(node, EN_UPDATED);
+}
+
 void
 *en_northd_init(struct engine_node *node OVS_UNUSED,
                 struct engine_arg *arg OVS_UNUSED)
@@ -246,6 +274,15 @@ void
 
     northd_init(data);
 
+    return data;
+}
+
+void
+*en_ic_learned_svcs_init(struct engine_node *node OVS_UNUSED,
+                         struct engine_arg *arg OVS_UNUSED)
+{
+    struct ic_learned_svcs_data *data = xzalloc(sizeof *data);
+    ic_learned_svcs_init(data);
     return data;
 }
 
@@ -260,4 +297,10 @@ en_northd_clear_tracked_data(void *data_)
 {
     struct northd_data *data = data_;
     destroy_northd_data_tracked_changes(data);
+}
+
+void
+en_ic_learned_svcs_cleanup(void *data)
+{
+    ic_learned_svcs_cleanup(data);
 }

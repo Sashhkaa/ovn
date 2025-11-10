@@ -64,14 +64,18 @@ struct northd_input {
     struct eth_addr svc_monitor_mac_ea;
     const struct chassis_features *features;
 
+    /* Service Monitor data for interconnect learned records.*/
+    struct hmap *ic_learned_svs;
+
     /* Indexes */
+    struct ovsdb_idl_index *nbrec_mirror_by_type_and_sink;
     struct ovsdb_idl_index *sbrec_chassis_by_name;
     struct ovsdb_idl_index *sbrec_chassis_by_hostname;
     struct ovsdb_idl_index *sbrec_ha_chassis_grp_by_name;
     struct ovsdb_idl_index *sbrec_ip_mcast_by_dp;
     struct ovsdb_idl_index *sbrec_static_mac_binding_by_lport_ip;
     struct ovsdb_idl_index *sbrec_fdb_by_dp_and_port;
-    struct ovsdb_idl_index *nbrec_mirror_by_type_and_sink;
+    struct ovsdb_idl_index *sbrec_service_monitor_by_learned_type;
 };
 
 /* A collection of datapaths. E.g. all logical switch datapaths, or all
@@ -170,6 +174,12 @@ struct northd_data {
     struct northd_tracked_data trk_data;
 };
 
+
+struct ic_learned_svcs_data {
+    struct hmap ic_learned_svs;
+    struct lflow_ref *lflow_ref;
+};
+
 struct lr_nat_table;
 
 struct lflow_input {
@@ -200,6 +210,8 @@ struct lflow_input {
     const struct hmap *svc_monitor_map;
     bool ovn_internal_version_changed;
     const char *svc_monitor_mac;
+    struct hmap *ic_learned_svcs;
+    struct lflow_ref *ic_leared_svcs_lflow_ref;
 };
 
 extern int parallelization_state;
@@ -734,6 +746,9 @@ bool northd_handle_lb_data_changes(struct tracked_lb_data *,
                                    struct hmap *lbgrp_datapaths_map,
                                    struct northd_tracked_data *);
 
+void ic_learned_svcs_init(struct ic_learned_svcs_data *data);
+void ic_learned_svcs_cleanup(struct ic_learned_svcs_data *data);
+
 void build_bfd_table(struct ovsdb_idl_txn *ovnsb_txn,
                      const struct nbrec_bfd_table *,
                      const struct sbrec_bfd_table *,
@@ -741,6 +756,8 @@ void build_bfd_table(struct ovsdb_idl_txn *ovnsb_txn,
                      struct hmap *bfd_connections);
 void bfd_cleanup_connections(const struct nbrec_bfd_table *,
                              struct hmap *bfd_map);
+void build_ic_learned_svcs_map(struct hmap *ic_learned_svcs_map,
+    struct ovsdb_idl_index *sbrec_service_monitor_by_learned_type);
 void run_update_worker_pool(int n_threads);
 
 const struct ovn_datapath *northd_get_datapath_for_port(

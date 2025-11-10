@@ -49,6 +49,8 @@ lflow_get_input_data(struct engine_node *node,
         engine_get_input_data("lr_stateful", node);
     struct ed_type_ls_stateful *ls_stateful_data =
         engine_get_input_data("ls_stateful", node);
+    struct ic_learned_svcs_data *ic_learned_svcs_data =
+        engine_get_input_data("ic_learned_svcs", node);
 
     lflow_input->nbrec_bfd_table =
         EN_OVSDB_GET(engine_get_input("NB_bfd", node));
@@ -79,6 +81,8 @@ lflow_get_input_data(struct engine_node *node,
     lflow_input->lb_datapaths_map = &northd_data->lb_datapaths_map;
     lflow_input->svc_monitor_map = &northd_data->svc_monitor_map;
     lflow_input->bfd_connections = NULL;
+    lflow_input->ic_learned_svcs = &ic_learned_svcs_data->ic_learned_svs;
+    lflow_input->ic_leared_svcs_lflow_ref = ic_learned_svcs_data->lflow_ref;
 
     struct ed_type_global_config *global_config =
         engine_get_input_data("global_config", node);

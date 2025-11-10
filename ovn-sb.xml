@@ -4856,6 +4856,10 @@ tcp.flags = RST;
       The service can be an IPv4 TCP or UDP
       service. <code>ovn-controller</code> periodically sends out service
       monitor packets and updates the status of the service.
+      If the service monitor is not local, then ovn-ic creates a record about
+      it in the SBDB database, after which another OVN deployment creates a
+      record about the Service Monitor in its SBDB and the status is
+      propagated back to the initial record in the original availability zone.
     </p>
 
     <p>
@@ -4870,7 +4874,7 @@ tcp.flags = RST;
       </p>
 
       <column name="ip">
-        IP of the service to be monitored. Only IPv4 is supported.
+        IP of the service to be monitored.
       </column>
 
       <column name="protocol">
@@ -4893,6 +4897,19 @@ tcp.flags = RST;
 
       <column name="src_ip">
         Source IPv4 or IPv6 address to use in the service monitor packet.
+      </column>
+
+      <column name="chassis_name">
+        The name of the chassis where the logical port is bound.
+      </column>
+
+      <column name="remote">
+        Set to true if backend locates on remote ovn deployment.
+      </column>
+
+      <column name="ic_learned">
+        Set to true if the service monitor was propagated from another
+        OVN deployment via ovn-ic management.
       </column>
 
       <column name="chassis_name">
