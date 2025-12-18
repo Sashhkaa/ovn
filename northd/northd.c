@@ -217,7 +217,6 @@ BUILD_ASSERT_DECL(ACL_OBS_STAGE_MAX < (1 << 2));
 #define REG_SRC_IPV6 "xxreg1"
 #define REG_DHCP_RELAY_DIP_IPV4 "reg2"
 #define REG_POLICY_CHAIN_ID "reg9[16..31]"
-#define REG_ROUTE_TABLE_ID "reg7"
 
 /* Registers used for pasing observability information for switches:
  * domain and point ID. */
@@ -11607,9 +11606,10 @@ build_route_table_lflow(struct ovn_datapath *od, struct lflow_table *lflows,
         return;
     }
 
-    ds_put_format(&match, "inport == \"%s\"", lrp->name);
-    ds_put_format(&actions, "%s = %d; next;",
-                  REG_ROUTE_TABLE_ID, rtb_id);
+    /* Don't overwrite route_selector if we recirved it */
+    ds_put_format(&match, "route_selector == 0 && inport == \"%s\"",
+                  lrp->name);
+    ds_put_format(&actions, "route_selector = %d; next;", rtb_id);
 
     ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING_PRE, 100,
                   ds_cstr(&match), ds_cstr(&actions), lflow_ref);
@@ -12081,14 +12081,16 @@ build_route_match(const struct ovn_port *op_inport, uint32_t rtb_id,
     if (op_inport) {
         ds_put_format(match, "inport == %s && ", op_inport->json_key);
     }
+
     if (rtb_id || source == ROUTE_SOURCE_STATIC ||
             source == ROUTE_SOURCE_LEARNED) {
-        ds_put_format(match, "%s == %d && ", REG_ROUTE_TABLE_ID, rtb_id);
+        ds_put_format(match, "route_selector == %d && ", rtb_id);
     }
 
     if (has_protocol_match) {
         ofs += 1;
     }
+
     *priority = (plen * ROUTE_PRIO_OFFSET_MULTIPLIER) + ofs;
 
     ds_put_format(match, "ip%s.%s == %s/%d", is_ipv4 ? "4" : "6", dir,
@@ -14426,7 +14428,7 @@ build_ip_routing_pre_flows_for_lrouter(struct ovn_datapath *od,
 {
     ovs_assert(od->nbr);
     ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING_PRE, 0, "1",
-                  REG_ROUTE_TABLE_ID" = 0; next;", lflow_ref);
+                  "next;", lflow_ref);
 }
 
 static void

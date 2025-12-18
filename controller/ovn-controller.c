@@ -2471,6 +2471,7 @@ en_ct_zones_is_valid(struct engine_node *node OVS_UNUSED)
 
 struct ed_type_mff_ovn_geneve {
     enum mf_field_id mff_ovn_geneve;
+    enum mf_field_id mff_ovn_geneve_route_selector;
 };
 
 static void *
@@ -2489,13 +2490,18 @@ en_mff_ovn_geneve_cleanup(void *data OVS_UNUSED)
 static enum engine_node_state
 en_mff_ovn_geneve_run(struct engine_node *node OVS_UNUSED, void *data)
 {
-    struct ed_type_mff_ovn_geneve *ed_mff_ovn_geneve = data;
-    enum mf_field_id mff_ovn_geneve = ofctrl_get_mf_field_id();
-    if (ed_mff_ovn_geneve->mff_ovn_geneve != mff_ovn_geneve) {
-        ed_mff_ovn_geneve->mff_ovn_geneve = mff_ovn_geneve;
-        return EN_UPDATED;
-    }
-    return EN_UNCHANGED;
+    struct ed_type_mff_ovn_geneve *ed = data;
+    enum mf_field_id old_geneve = ed->mff_ovn_geneve;
+    enum mf_field_id old_selector = ed->mff_ovn_geneve_route_selector;
+
+    ed->mff_ovn_geneve =
+        ofctrl_get_mf_field_id_ovn_geneve_base();
+    ed->mff_ovn_geneve_route_selector =
+        ofctrl_get_mf_field_id_ovn_geneve_route_selector();
+
+    return (ed->mff_ovn_geneve != old_geneve ? EN_UPDATED : 0)
+            | (ed->mff_ovn_geneve_route_selector != old_selector
+            ? EN_UPDATED : 0);
 }
 
 /* Stores the load balancers that are applied to the datapath 'dp'. */
@@ -4649,6 +4655,8 @@ static void init_physical_ctx(struct engine_node *node,
     p_ctx->local_datapaths = &rt_data->local_datapaths;
     p_ctx->ct_zones = ct_zones;
     p_ctx->mff_ovn_geneve = ed_mff_ovn_geneve->mff_ovn_geneve;
+    p_ctx->mff_ovn_geneve_route_selector =
+        ed_mff_ovn_geneve->mff_ovn_geneve_route_selector;
     p_ctx->local_bindings = &rt_data->lbinding_data.bindings;
     p_ctx->patch_ofports = &non_vif_data->patch_ofports;
     p_ctx->chassis_tunnels = &non_vif_data->chassis_tunnels;

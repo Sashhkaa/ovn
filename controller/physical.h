@@ -43,6 +43,12 @@ struct local_nonvif_data;
 #define OVN_GENEVE_TYPE 0x80     /* Critical option. */
 #define OVN_GENEVE_LEN 4
 
+/* Assigned Geneve class for OVN route selector. */
+#define OVN_GENEVE_ROUTE_SELECTOR_CLASS 0x0101
+#define OVN_GENEVE_ROUTE_SELECTOR_TYPE 0x81
+ /* in used first 16 bit */
+#define OVN_GENEVE_ROUTE_SELECTOR_LEN 4
+
 struct physical_debug {
     uint32_t collector_set_id;
     uint32_t obs_domain_id;
@@ -63,6 +69,7 @@ struct physical_ctx {
     struct hmap *local_datapaths;
     const struct shash *ct_zones;
     enum mf_field_id mff_ovn_geneve;
+    enum mf_field_id mff_ovn_geneve_route_selector;
     struct shash *local_bindings;
     struct simap *patch_ofports;
     struct hmap *chassis_tunnels;

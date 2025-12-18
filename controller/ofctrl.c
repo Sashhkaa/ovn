@@ -399,6 +399,7 @@ static void ofctrl_meter_bands_clear(void);
  * S_CLEAR_FLOWS or S_UPDATE_FLOWS, this is really the option we have. */
 static enum mf_field_id mff_ovn_geneve;
 
+static enum mf_field_id mff_ovn_geneve_route_selector;
 /* Indicates if we just went through the S_CLEAR_FLOWS state, which means we
  * need to perform a one time deletion for all the existing flows, groups and
  * meters. This can happen during initialization or OpenFlow reconnection
@@ -505,6 +506,13 @@ process_tlv_table_reply(const struct ofputil_tlv_table_reply *reply)
             } else {
                 mff_ovn_geneve = MFF_TUN_METADATA0 + map->index;
                 state = S_WAIT_BEFORE_CLEAR;
+                /* alocate next index for route selector tlv */
+                /* TODO: handle case of setting this option
+                   from the command line. */
+                if (ovs_list_size(&reply->mappings) > map->index + 1) {
+                    mff_ovn_geneve_route_selector =
+                        MFF_TUN_METADATA0 + map->index + 1;
+                }
                 return true;
             }
         }
@@ -520,18 +528,28 @@ process_tlv_table_reply(const struct ofputil_tlv_table_reply *reply)
         return false;
     }
 
+    /* TODO: This works but its look ugly, remove code duplicate */
     unsigned int index = rightmost_1bit_idx(md_free);
     mff_ovn_geneve = MFF_TUN_METADATA0 + index;
-    struct ofputil_tlv_map tm;
-    tm.option_class = OVN_GENEVE_CLASS;
-    tm.option_type = OVN_GENEVE_TYPE;
-    tm.option_len = OVN_GENEVE_LEN;
-    tm.index = index;
+    struct ofputil_tlv_map tm_ovn_geneve;
+    tm_ovn_geneve.option_class = OVN_GENEVE_CLASS;
+    tm_ovn_geneve.option_type = OVN_GENEVE_TYPE;
+    tm_ovn_geneve.option_len = OVN_GENEVE_LEN;
+    tm_ovn_geneve.index = index;
+    index++;
+
+    mff_ovn_geneve_route_selector = MFF_TUN_METADATA0 + index;
+    struct ofputil_tlv_map tm_route_selector;
+    tm_route_selector.option_class = OVN_GENEVE_ROUTE_SELECTOR_CLASS;
+    tm_route_selector.option_type = OVN_GENEVE_ROUTE_SELECTOR_TYPE;
+    tm_route_selector.option_len = OVN_GENEVE_ROUTE_SELECTOR_LEN;
+    tm_route_selector.index = index;
 
     struct ofputil_tlv_table_mod ttm;
     ttm.command = NXTTMC_ADD;
     ovs_list_init(&ttm.mappings);
-    ovs_list_push_back(&ttm.mappings, &tm.list_node);
+    ovs_list_push_back(&ttm.mappings, &tm_ovn_geneve.list_node);
+    ovs_list_push_back(&ttm.mappings, &tm_route_selector.list_node);
 
     xid = queue_msg(ofputil_encode_tlv_table_mod(OFP15_VERSION, &ttm));
     xid2 = queue_msg(ofputil_encode_barrier_request(OFP15_VERSION));
@@ -572,6 +590,7 @@ recv_S_TLV_TABLE_REQUESTED(const struct ofp_header *oh, enum ofptype type,
 
     /* Error path. */
     mff_ovn_geneve = 0;
+    mff_ovn_geneve_route_selector = 0;
     state = S_WAIT_BEFORE_CLEAR;
 }
 
@@ -768,7 +787,7 @@ recv_S_UPDATE_FLOWS(const struct ofp_header *oh, enum ofptype type,
 
 
 enum mf_field_id
-ofctrl_get_mf_field_id(void)
+ofctrl_get_mf_field_id_ovn_geneve_base(void)
 {
     if (!rconn_is_connected(swconn)) {
         return 0;
@@ -777,6 +796,18 @@ ofctrl_get_mf_field_id(void)
             || state == S_CLEAR_FLOWS
             || state == S_UPDATE_FLOWS
             ? mff_ovn_geneve : 0);
+}
+
+enum mf_field_id
+ofctrl_get_mf_field_id_ovn_geneve_route_selector(void)
+{
+    if (!rconn_is_connected(swconn)) {
+        return 0;
+    }
+    return (state == S_WAIT_BEFORE_CLEAR
+            || state == S_CLEAR_FLOWS
+            || state == S_UPDATE_FLOWS
+            ? mff_ovn_geneve_route_selector : 0);
 }
 
 /* Runs the OpenFlow state machine against 'br_int', which is local to the

@@ -30,6 +30,7 @@ enum ovn_controller_event {
  *
  * These values are documented in ovn-architecture(7), please update the
  * documentation if you change any of them. */
+ /* Logical datapath (64 bits  */
 #define MFF_LOG_DATAPATH MFF_METADATA /* Logical datapath (64 bits). */
 #define MFF_LOG_FLAGS      MFF_REG10  /* One of MLF_* (32 bits). */
 #define MFF_LOG_DNAT_ZONE  MFF_REG11  /* conntrack dnat zone for gateway router
@@ -43,6 +44,7 @@ enum ovn_controller_event {
 #define MFF_LOG_INPORT     MFF_REG14  /* Logical input port (32 bits). */
 #define MFF_LOG_OUTPORT    MFF_REG15  /* Logical output port (32 bits). */
 #define MFF_LOG_TUN_OFPORT MFF_REG5   /* 16..31 of the 32 bits */
+#define MFF_LOG_ROUTE_SELECTOR MFF_REG7
 
 /* Logical registers.
  *
