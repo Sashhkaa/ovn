@@ -3086,3 +3086,100 @@ Route Table <main>:
 OVN_CLEANUP_IC([az1])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn-ic -- Learning same prefix through multiple ts])
+
+ovn_init_ic_db
+ovn-ic-nbctl ts-add ts11
+ovn-ic-nbctl ts-add ts12
+
+for i in 1 2; do
+    ovn_start az$i
+    ovn_as az$i
+
+    # Enable route learning at AZ level
+    check ovn-nbctl set nb_global . options:ic-route-learn=true
+    # Enable route advertising at AZ level
+    check ovn-nbctl set nb_global . options:ic-route-adv=true
+
+    check ovn-nbctl lr-add lr$i
+    check ovn-nbctl lrp-add lr$i lr-lrp-$i aa:aa:aa:aa:a1:0$i 169.254.1.$i/24
+    check ovn-nbctl lsp-add ts11 lsp-az$i -- \
+                    lsp-set-type lsp-az$i router -- \
+                    lsp-set-addresses lsp-az$i router -- \
+                    lsp-set-options lsp-az$i router-port=lr-lrp-$i
+
+    # Create subnet for annonce.
+    check ovn-nbctl lrp-add lr$i lr-lrp-subnet-$i aa:aa:aa:aa:a2:0$i 192.168.$i.1/24
+
+    # Create one more lrp-ts port through another transit switch.
+    check ovn-nbctl lrp-add lr$i lr-lrp-dup$i aa:aa:aa:aa:a3:01 169.254.1.$i/24
+    check ovn-nbctl lsp-add ts12 lsp-dup-az$i -- \
+                    lsp-set-type lsp-dup-az$i router -- \
+                    lsp-set-addresses lsp-dup-az$i router -- \
+                    lsp-set-options lsp-dup-az$i router-port=lr-lrp-dup$i
+done
+
+OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr1 | grep 192.168 |
+             grep learned | awk '{print $1, $2}' | sort ], [0], [dnl
+192.168.2.0/24 169.254.1.2
+192.168.2.0/24 169.254.1.2
+])
+
+OVN_CLEANUP_IC([az1], [az2])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn-ic -- Learning same prefix through single ts])
+
+ovn_init_ic_db
+ovn-ic-nbctl ts-add ts11
+
+for i in 1 2 3; do
+    ovn_start az$i
+    ovn_as az$i
+
+    # Enable route learning at AZ level
+    check ovn-nbctl set nb_global . options:ic-route-learn=true
+    # Enable route advertising at AZ level
+    check ovn-nbctl set nb_global . options:ic-route-adv=true
+done
+
+# Create lr11, lr12, ts11 and connect them
+for i in 1 2; do
+    ovn_as az$i
+
+    check ovn-nbctl lr-add lr1$i
+    check ovn-ic-nbctl --wait=sb --may-exist ts-add ts11
+
+    # Create LRP with same IP address in two AZs
+    check ovn-nbctl lrp-add lr1$i lrp-lr1$i-ts11 aa:aa:aa:aa:a1:0$i 169.254.101.1/24
+    check ovn-nbctl lsp-add ts11 lsp-ts11-lr1$i -- \
+                    lsp-set-type lsp-ts11-lr1$i router -- \
+                    lsp-set-addresses lsp-ts11-lr1$i router -- \
+                    lsp-set-options lsp-ts11-lr1$i router-port=lrp-lr1$i-ts11
+
+    # Create same subnet in two AZs for annonce.
+    check ovn-nbctl lrp-add lr1$i lr-lrp-subnet-$i aa:aa:aa:aa:a2:0$i 192.168.0.1/24
+done
+
+ovn_as az3
+check ovn-nbctl lr-add lr13
+
+check ovn-nbctl lrp-add lr13 lrp-lr13-ts11 aa:aa:aa:aa:a1:03 169.254.101.3/24
+check ovn-nbctl lsp-add ts11 lsp-lr13-ts11 -- \
+                lsp-set-type lsp-lr13-ts11 router -- \
+                lsp-set-addresses lsp-lr13-ts11 router -- \
+                lsp-set-options lsp-lr13-ts11 router-port=lrp-lr13-ts11
+
+OVS_WAIT_FOR_OUTPUT([ovn_as az3 ovn-nbctl lr-route-list lr13 | grep 192.168 |
+             grep learned | awk '{print $1, $2}' | sort ], [0], [dnl
+192.168.0.0/24 169.254.101.1
+192.168.0.0/24 169.254.101.1
+])
+
+OVN_CLEANUP_IC([az1], [az2], [az3])
+AT_CLEANUP
+])
