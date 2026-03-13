@@ -386,6 +386,9 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
     lb->is_distributed = smap_get_bool(&nbrec_lb->options, "distributed",
                                        false);
 
+    lb->is_direct_nat = smap_get_bool(&nbrec_lb->options, "direct-nat",
+                                      false);
+
     sset_init(&lb->ips_v4);
     sset_init(&lb->ips_v6);
     struct smap_node *node;

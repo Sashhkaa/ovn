@@ -77,6 +77,8 @@ struct ovn_northd_lb {
     /* Indicates if distributed option is enabled for load balancer. */
     bool is_distributed;
 
+    bool is_direct_nat;
+
     bool use_stateless_nat;
 
     char *hairpin_snat_ip;
