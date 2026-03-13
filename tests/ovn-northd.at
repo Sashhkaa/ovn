@@ -19939,3 +19939,67 @@ done
 
 OVN_CLEANUP_NORTHD
 AT_CLEANUP
+
+AT_SETUP([lflow verify])
+ovn_start
+
+check ovn-nbctl ls-add ls1
+check ovn-nbctl lr-add lr1
+
+check ovn-nbctl --wait=sb lb-add lb1 30.0.0.1:80 172.16.0.103:10880,172.16.0.102:10880,172.16.0.101:10880
+check ovn-nbctl lr-lb-add lr1 lb1
+check ovn-nbctl ls-lb-add ls1 lb1
+
+check ovn-nbctl lrp-add lr1 lr1-down 00:00:01:02:03:04 172.31.0.1/24  4343::1/64
+check ovn-nbctl lrp-set-gateway-chassis lr1-down chassis-2
+
+# just for data structures in code were initialized
+AT_CHECK(
+  [ovn-nbctl --wait=sb \
+          -- --id=@hc create Load_Balancer_Health_Check vip=30.0.0.1\\:80 \
+          -- add Load_Balancer . health_check @hc | uuidfilt], [0], [<0>
+])
+
+check ovn-nbctl lsp-add ls1 lport1 -- lsp-set-addresses lport1 "00:00:00:00:00:01 172.16.0.101"
+check ovn-nbctl lsp-add ls1 lport2 -- lsp-set-addresses lport2 "00:00:00:00:00:02 172.16.0.102"
+check ovn-nbctl lsp-add ls1 lport3 -- lsp-set-addresses lport3 "00:00:00:00:00:03 172.16.0.103"
+check ovn-nbctl set load_balancer lb1 ip_port_mappings:172.16.0.103=lport1:192.168.0.99
+check ovn-nbctl set load_balancer lb1 ip_port_mappings:172.16.0.102=lport2:192.168.0.99
+check ovn-nbctl set load_balancer lb1 ip_port_mappings:172.16.0.101=lport3:192.168.0.99
+
+check ovn-nbctl lsp-add-router-port ls1 ls1-up lr1-down
+
+AT_CHECK([ovn-sbctl lflow-list lr1 | grep "lr_in_ct_extract" | ovn_strip_lflows | grep "30.0.0.1"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(reg1[[0..15]] = select(0,1,2);)
+])
+
+AT_CHECK([ovn-sbctl lflow-list lr1 | grep "lr_in_dnat" | ovn_strip_lflows | grep "30.0.0.1" | grep "priority=130"], [0], [dnl
+  table=??(lr_in_dnat         ), priority=130  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(next;)
+])
+
+AT_CHECK([ovn-sbctl lflow-list lr1 | grep "lr_in_ip_routing" | ovn_strip_lflows| grep "priority=600"], [0], [dnl
+  table=??(lr_in_ip_routing   ), priority=600  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && reg1[[0..15]] == 0), action=(ip.ttl--; reg8[[0..15]] = 0; reg0 = 172.16.0.103; reg5 = 172.31.0.1; eth.src = 00:00:01:02:03:04; outport = "lr1-down"; reg9[[9]] =  1; next;)
+  table=??(lr_in_ip_routing   ), priority=600  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && reg1[[0..15]] == 1), action=(ip.ttl--; reg8[[0..15]] = 0; reg0 = 172.16.0.102; reg5 = 172.31.0.1; eth.src = 00:00:01:02:03:04; outport = "lr1-down"; reg9[[9]] =  1; next;)
+  table=??(lr_in_ip_routing   ), priority=600  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && reg1[[0..15]] == 2), action=(ip.ttl--; reg8[[0..15]] = 0; reg0 = 172.16.0.101; reg5 = 172.31.0.1; eth.src = 00:00:01:02:03:04; outport = "lr1-down"; reg9[[9]] =  1; next;)
+])
+
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep "ls_out_lb" | ovn_strip_lflows], [0], [dnl
+  table=??(ls_out_lb          ), priority=0    , match=(1), action=(next;)
+  table=??(ls_out_lb          ), priority=130  , match=(eth.dst == 00:00:00:00:00:01 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(ct_lb_mark(backends=172.16.0.103:10880); next;)
+  table=??(ls_out_lb          ), priority=130  , match=(eth.dst == 00:00:00:00:00:02 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(ct_lb_mark(backends=172.16.0.102:10880); next;)
+  table=??(ls_out_lb          ), priority=130  , match=(eth.dst == 00:00:00:00:00:03 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(ct_lb_mark(backends=172.16.0.101:10880); next;)
+])
+
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep "ls_in_pre_stateful" | ovn_strip_lflows | grep "priority=200"], [0], [dnl
+  table=??(ls_in_pre_stateful ), priority=200  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && inport == "ls1-up"), action=(next;)
+])
+
+# check status
+check ovn-nbctl set logical_switch_port lport1 enable=false
+
+AT_CHECK([ovn-sbctl lflow-list lr1 | grep "lr_in_ct_extract" | ovn_strip_lflows | grep "30.0.0.1"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(reg1[[0..15]] = select(1,2);)
+])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
