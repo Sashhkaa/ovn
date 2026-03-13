@@ -15192,7 +15192,7 @@ check ovn-nbctl lsp-add-router-port sw1 sw1-rtr rtr-sw1
 
 check ovn-nbctl --wait=sb lsp-add-router-port sw2 sw2-rtr rtr-sw2
 
-check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-statsz
 
 # Create IGMP_Group 239.0.1.68 with port sw1-p11
 check_uuid ovn-sbctl create IGMP_Group address=239.0.1.68 \
@@ -19936,6 +19936,40 @@ for i in 2 3 4; do
     AT_CHECK_UNQUOTED([ovn-nbctl get logical_router_port rop$i networks], [0], [[["192.168.1.$i/24"]]
 ])
 done
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+
+AT_SETUP([lflow verify])
+ovn_start
+
+check ovn-nbctl ls-add ls1
+check ovn-nbctl lr-add lr1
+
+check ovn-nbctl --wait=sb lb-add lb1 "30.0.0.1" "172.16.0.103,172.16.0.102,172.16.0.101"
+check ovn-nbctl lr-lb-add lr1 lb1
+check ovn-nbctl ls-lb-add ls1 lb1
+
+check ovn-nbctl lrp-add lr1 lr1-ts1 00:00:01:02:03:04 2001:db8:aaaa:1::1/64
+check ovn-nbctl lrp-set-gateway-chassis lr1-ts1 chassis-2
+
+AT_CHECK([ovn-sbctl lflow-list lr1 | grep "lr_in_ct_extract" | ovn_strip_lflows | grep "30.0.0.1"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip && ip4.dst == 30.0.0.1), action=(reg1[[0..15]] = select(0,1,2);)
+])
+
+AT_CHECK([ovn-sbctl lflow-list lr1 | grep "lr_in_dnat" | ovn_strip_lflows | grep "30.0.0.1" | grep "priority=130"], [0], [dnl
+  table=??(lr_in_dnat         ), priority=130  , match=(ip4.dst == 30.0.0.1 && reg1[[0..15]] == 0), action=(ip4.dst = 172.16.0.103; next;)
+  table=??(lr_in_dnat         ), priority=130  , match=(ip4.dst == 30.0.0.1 && reg1[[0..15]] == 1), action=(ip4.dst = 172.16.0.102; next;)
+  table=??(lr_in_dnat         ), priority=130  , match=(ip4.dst == 30.0.0.1 && reg1[[0..15]] == 2), action=(ip4.dst = 172.16.0.101; next;)
+])
+
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep "ls_out_lb" | ovn_strip_lflows
+], [0], [dnl
+  table=??(ls_out_lb          ), priority=0    , match=(1), action=(next;)
+  table=??(ls_out_lb          ), priority=130  , match=(ct.new && ip4.dst == 172.16.0.101), action=(ip4.dst = 30.0.0.1; ct_lb_mark(backends=172.16.0.101:0); next;)
+  table=??(ls_out_lb          ), priority=130  , match=(ct.new && ip4.dst == 172.16.0.102), action=(ip4.dst = 30.0.0.1; ct_lb_mark(backends=172.16.0.102:0); next;)
+  table=??(ls_out_lb          ), priority=130  , match=(ct.new && ip4.dst == 172.16.0.103), action=(ip4.dst = 30.0.0.1; ct_lb_mark(backends=172.16.0.103:0); next;)
+])
 
 OVN_CLEANUP_NORTHD
 AT_CLEANUP
