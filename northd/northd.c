@@ -8802,6 +8802,9 @@ build_lb_health_check_response_lflows(
     }
 }
 
+/*
+ * todo: решить вопрос с snat = из-за него на gw происходит коммит в snat зону
+ */
 static void
 build_lb_rules_direct_nat(struct lflow_table *lflows,
                           const struct ovn_northd_lb *lb,
@@ -8882,7 +8885,8 @@ build_lb_egress_lb_rules(const struct ovn_northd_lb *lb,
      * match: load_balancer == vip ? && ct.new ? && ip.dst == backend.ip -->
      * action: ip.dst = vip.ip ? ct_lb_mark(backend.ip)
      */
-
+    /* бля в geneve еще надо переносить ебучий порт ... надо как-то ее парсить */
+    /* для ipv6 это вообще как-будто не очень прикольно получается */
     struct ds match = DS_EMPTY_INITIALIZER;
     struct ds action = DS_EMPTY_INITIALIZER;
 
@@ -8892,14 +8896,18 @@ build_lb_egress_lb_rules(const struct ovn_northd_lb *lb,
         ds_clear(&action);
 
         ds_put_format(&match,  "ct.new && ip4.dst == %s && tcp.dst == %d", backend->ip_str, backend->port);
-        ds_put_format(&action, "ip4.dst = %s; ct_lb_mark(backends=%s:%"PRIu16"); next;",
-                               lb_vip->vip_str, backend->ip_str, backend->port);
+        ds_put_format(&action, "ip4.dst = %s; tcp.dst = %d; ct_lb_mark(backends=%s:%"PRIu16"); next;",
+                               lb_vip->vip_str, lb_vip->vip_port, backend->ip_str, backend->port);
 
         ovn_lflow_add_with_dp_group(lflows, lb_dps->nb_ls_map.map,
                                     ods_size(ls_datapaths), S_SWITCH_OUT_LB,
                                     130, ds_cstr(&match),
                                     ds_cstr(&action), lb_dps->lflow_ref,
                                     WITH_HINT(&lb->nlb->header_));
+        ds_clear(&match);
+        ds_clear(&action);
+        ds_put_format(&match,  "ip4.dst == %s && tcp.dst == %d", backend->ip_str, backend->port);
+        ds_put_format(&match,  "ct_lb_mark; next;");
     }
 }
 
