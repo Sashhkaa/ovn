@@ -19996,5 +19996,11 @@ AT_CHECK([ovn-sbctl lflow-list ls1 | grep "ls_in_pre_stateful" | ovn_strip_lflow
   table=??(ls_in_pre_stateful ), priority=200  , match=(ip4.dst == 172.16.0.103 && tcp.dst == 10880 &&  inport == "ls1-up"), action=(next;)
 ])
 
+check ovn-nbctl set logical_switch_port lport1 enable=false
+
+AT_CHECK([ovn-sbctl lflow-list lr1 | grep "lr_in_ct_extract" | ovn_strip_lflows | grep "30.0.0.1"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(reg1[[0..15]] = select(1,2);)
+])
+
 OVN_CLEANUP_NORTHD
 AT_CLEANUP
