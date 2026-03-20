@@ -8971,7 +8971,7 @@ build_lb_egress_lb_rules(const struct ovn_northd_lb *lb,
         ds_clear(&match);
         ds_clear(&action);
 
-        ds_put_format(&match, "ip4.dst == %s && tcp.dst == %d &&  inport == %s", backend->ip_str, backend->port, lsp->json_key);
+        ds_put_format(&match, "ip4.dst == %s && tcp.dst == %d && inport == %s", lb_vip->vip_str, lb_vip->vip_port, lsp->json_key);
         ds_put_format(&action, "next;");
         ovn_lflow_add_with_dp_group(lflows, lb_dps->nb_ls_map.map,
                                     ods_size(ls_datapaths), S_SWITCH_IN_PRE_STATEFUL,
