@@ -869,8 +869,8 @@ ip_address_and_port_from_lb_key(const char *key, char **ip_address,
  *
  * NOTE: If OVN_NORTHD_PIPELINE_CSUM is updated make sure to double check
  * whether an update of OVN_INTERNAL_MINOR_VER is required. */
-#define OVN_NORTHD_PIPELINE_CSUM "2839329900 9927"
-#define OVN_INTERNAL_MINOR_VER 8
+#define OVN_NORTHD_PIPELINE_CSUM "65365199 9921"
+#define OVN_INTERNAL_MINOR_VER 9
 
 /* Returns the OVN version. The caller must free the returned value. */
 char *

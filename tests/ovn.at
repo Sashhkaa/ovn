@@ -18561,9 +18561,24 @@ OVN_CHECK_PACKETS([hv3/vif1-tx.pcap], [expected])
 as hv2 reset_pcap_file hv2-vif1 hv2/vif1
 as hv3 reset_pcap_file hv3-vif1 hv3/vif1
 
-# Test mirror filtering.
 check ovn-nbctl lsp-attach-mirror ls1-lp1 mirror0
+# Ensure that port security on the source port does not impact mirroring:
+# send a packet with an unknown MAC and checking it appears on the sink port.
+check ovn-nbctl lsp-set-port-security ls1-lp1 $ls1_lp1_mac
 
+fake_mac="f1:f1:f1:f1:f1:04"
+packet="inport==\"ls1-lp1\" && eth.src==$fake_mac && eth.dst==$rp_ls1_mac &&
+        ip4 && ip.ttl==64 && ip4.src==$ls1_lp1_ip && ip4.dst==$ls2_lp1_ip &&
+        udp && udp.src==53 && udp.dst==4369"
+OVS_WAIT_UNTIL([as hv1 ovs-appctl -t ovn-controller inject-pkt "$packet"])
+
+echo $packet | ovstest test-ovn expr-to-packets > packet
+
+OVN_CHECK_PACKETS([hv3/vif1-tx.pcap], [packet])
+
+as hv3 reset_pcap_file hv3-vif1 hv3/vif1
+
+# Test mirror filtering.
 check ovn-nbctl mirror-rule-add mirror0 200 '1' skip
 check ovn-nbctl --wait=hv sync
 
