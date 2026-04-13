@@ -509,9 +509,9 @@ ovn_datapath_is_stale(const struct ovn_datapath *od)
 /* Pipeline stages. */
 #define PIPELINE_STAGES                                                   \
     /* Logical switch ingress stages. */                                  \
-    PIPELINE_STAGE(SWITCH, IN,  CHECK_PORT_SEC, 0, "ls_in_check_port_sec")   \
-    PIPELINE_STAGE(SWITCH, IN,  APPLY_PORT_SEC, 1, "ls_in_apply_port_sec")   \
-    PIPELINE_STAGE(SWITCH, IN,  MIRROR,         2, "ls_in_mirror")        \
+    PIPELINE_STAGE(SWITCH, IN,  MIRROR,         0, "ls_in_mirror")        \
+    PIPELINE_STAGE(SWITCH, IN,  CHECK_PORT_SEC, 1, "ls_in_check_port_sec") \
+    PIPELINE_STAGE(SWITCH, IN,  APPLY_PORT_SEC, 2, "ls_in_apply_port_sec") \
     PIPELINE_STAGE(SWITCH, IN,  LOOKUP_FDB,     3, "ls_in_lookup_fdb")    \
     PIPELINE_STAGE(SWITCH, IN,  PUT_FDB,        4, "ls_in_put_fdb")       \
     PIPELINE_STAGE(SWITCH, IN,  PRE_ACL,        5, "ls_in_pre_acl")       \
