@@ -141,6 +141,7 @@ struct chassis_tunnel {
     ofp_port_t ofport;
     enum chassis_tunnel_type type;
     bool is_ipv6;
+    bool is_vtep_tunnel;
 };
 
 void local_nonvif_data_run(const struct ovsrec_bridge *br_int,
