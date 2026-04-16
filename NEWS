@@ -3,6 +3,10 @@ Post v26.03.0
    - Dynamic Routing:
      * Add support for hub-and-spoke propagation via the "hub-spoke" option
        in dynamic-routing-redistribute settings.
+     * Changed administrative distance for specific route types. Please see
+       the "Route Administrative Distance" section of the ovn-northd manpage.
+     * Added "override-connected" option to Logical Router Static Routes
+       to mark static routes as higher-priority than connected routes.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
