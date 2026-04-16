@@ -886,6 +886,7 @@ chassis_update(const struct sbrec_chassis *chassis_rec,
         smap_clone(&other_config, &chassis_rec->other_config);
         chassis_build_other_config(ovs_cfg, &other_config);
         sbrec_chassis_verify_other_config(chassis_rec);
+        smap_remove(&other_config, "ovn-evpn-local-ip");
         sbrec_chassis_set_other_config(chassis_rec, &other_config);
         smap_destroy(&other_config);
         update_status = CHASSIS_UPDATED;
