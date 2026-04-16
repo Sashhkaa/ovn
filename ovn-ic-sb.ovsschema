@@ -1,7 +1,7 @@
 {
     "name": "OVN_IC_Southbound",
-    "version": "2.4.0",
-    "cksum": "859073048 9662",
+    "version": "2.5.0",
+    "cksum": "1828374608 9817",
     "tables": {
         "IC_SB_Global": {
             "columns": {
@@ -117,6 +117,9 @@
                     "type": "string",
                     "enum": ["set",
                              ["connected", "static", "loadbalancer"]]}}},
+                "options": {
+                    "type": {"key": "string", "value": "string",
+                             "min": 0, "max": "unlimited"}},
                 "external_ids": {
                     "type": {"key": "string", "value": "string",
                              "min": 0, "max": "unlimited"}}},

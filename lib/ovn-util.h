@@ -34,6 +34,8 @@
 #define ROUTE_ORIGIN_STATIC "static"
 #define ROUTE_ORIGIN_LB "loadbalancer"
 
+#define ROUTE_OVERRIDE_CONNECTED "override-connected"
+
 #define ETH_CRC_LENGTH 4
 #define ETHERNET_OVERHEAD (ETH_HEADER_LEN + ETH_CRC_LENGTH)
 
