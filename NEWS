@@ -1,5 +1,7 @@
 Post v26.03.0
 -------------
+    - Changed administrative distance for specific route types. Please see
+      section Route Administrative Distance ovn-northd manpage.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------

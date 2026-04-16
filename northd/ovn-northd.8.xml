@@ -6293,6 +6293,48 @@ clone {
       </ul>
     </p>
 
+    <h1>Route Administrative Distance in OVN</h1>
+
+    <p>
+      In OVN, routes are selected based on an administrative distance,
+      similar AD concept in traditional networking, but with some custom
+      extensions. Routes with higher priority are preferred over those with
+      lower priority.
+      The priority order, from highest to lowest, is as follows:
+    </p>
+
+    <p>
+      <ol>
+        <li>
+          High-priority static routes — includes routes with
+          <code>override-connected</code> option set, as well as ic-learned
+          routes with <code>override-connected</code> option set to true.
+        </li>
+
+        <li>
+          Ic-learned connected routes with route_table — connected routes
+          learned via IC that have the <code>route_table</code> parameter set.
+        </li>
+
+        <li>
+          Connected routes — directly connected routes, including ic-learned
+          connected routes that do not have a <code>route_table</code> set.
+        </li>
+
+        <li>
+          Static routes — manually configured static routes.
+        </li>
+
+        <li>
+          Learned routes — routes learned from outside via ovn-controller.
+        </li>
+
+        <li>
+          Src-ip routes — source-based IP routes.
+        </li>
+      </ol>
+    </p>
+
     <h1>Drop sampling</h1>
 
     <p>
