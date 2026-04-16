@@ -2574,34 +2574,46 @@ physical_run(struct physical_ctx *p_ctx,
         ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 100, 0, &match,
                         &ofpacts, hc_uuid);
 
-        /* Set allow rx from tunnel bit. */
-        put_load(1, MFF_LOG_FLAGS, MLF_RX_FROM_TUNNEL_BIT, 1, &ofpacts);
-
-        /* Add specif flows for E/W ICMPv{4,6} packets if tunnelled packets
-         * do not fit path MTU.
+        /* Add handling for E/W ICMPv4/v6 packets when tunneled packets exceed
+         * path MTU.
+         * If packet needs to be tunneled to another node and the physical
+         * interface used for tunneling has a lower MTU than the packet size,
+         * or if there is a route exception with a smaller MTU, kernel
+         * generates an ICMP "Fragmentation Needed" message, but the package
+         * metadata didn't change. Such packets might have been dropped due
+         * to required metadata modifications for returned packet.
+         *
+         * Mark these packets with MLF_RX_FROM_TUNNEL_BIT for further
+         * processing. Packets received from a VTEP tunnel should be passed
+         * through, and errors handled via the normal processing path, since
+         * port metadata is not carried in VTEP packets in VNI.
          */
-        put_resubmit(OFTABLE_CT_ZONE_LOOKUP, &ofpacts);
+        if (!tun->is_vtep_tunnel) {
+            put_load(1, MFF_LOG_FLAGS, MLF_RX_FROM_TUNNEL_BIT, 1, &ofpacts);
 
-        /* IPv4 */
-        match_init_catchall(&match);
-        match_set_in_port(&match, tun->ofport);
-        match_set_dl_type(&match, htons(ETH_TYPE_IP));
-        match_set_nw_proto(&match, IPPROTO_ICMP);
-        match_set_icmp_type(&match, 3);
-        match_set_icmp_code(&match, 4);
+            put_resubmit(OFTABLE_CT_ZONE_LOOKUP, &ofpacts);
 
-        ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 120, 0, &match,
-                        &ofpacts, hc_uuid);
-        /* IPv6 */
-        match_init_catchall(&match);
-        match_set_in_port(&match, tun->ofport);
-        match_set_dl_type(&match, htons(ETH_TYPE_IPV6));
-        match_set_nw_proto(&match, IPPROTO_ICMPV6);
-        match_set_icmp_type(&match, 2);
-        match_set_icmp_code(&match, 0);
+            /* IPv4 */
+            match_init_catchall(&match);
+            match_set_in_port(&match, tun->ofport);
+            match_set_dl_type(&match, htons(ETH_TYPE_IP));
+            match_set_nw_proto(&match, IPPROTO_ICMP);
+            match_set_icmp_type(&match, 3);
+            match_set_icmp_code(&match, 4);
 
-        ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 120, 0, &match,
-                        &ofpacts, hc_uuid);
+            ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 120, 0, &match,
+                            &ofpacts, hc_uuid);
+            /* IPv6 */
+            match_init_catchall(&match);
+            match_set_in_port(&match, tun->ofport);
+            match_set_dl_type(&match, htons(ETH_TYPE_IPV6));
+            match_set_nw_proto(&match, IPPROTO_ICMPV6);
+            match_set_icmp_type(&match, 2);
+            match_set_icmp_code(&match, 0);
+
+            ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 120, 0, &match,
+                            &ofpacts, hc_uuid);
+        }
     }
 
     /* Add VXLAN specific rules to transform port keys
