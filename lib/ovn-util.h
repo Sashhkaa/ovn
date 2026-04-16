@@ -33,6 +33,7 @@
 #define ROUTE_ORIGIN_CONNECTED "connected"
 #define ROUTE_ORIGIN_STATIC "static"
 #define ROUTE_ORIGIN_LB "loadbalancer"
+#define ROUTE_OVERRIDE_CONNECTED "override-connected"
 
 #define ETH_CRC_LENGTH 4
 #define ETHERNET_OVERHEAD (ETH_HEADER_LEN + ETH_CRC_LENGTH)
@@ -41,6 +42,8 @@
 #define VXLAN_TUNNEL_OVERHEAD 30
 
 #define IDL_LOOP_MAX_DURATION_MS 500
+
+#define MAX_PREFIX_LEN 128
 
 struct eth_addr;
 struct nbrec_logical_router;
