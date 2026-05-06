@@ -19702,15 +19702,10 @@ check ovn-nbctl lr-add lr1
 check ovn-nbctl lrp-add lr1 down_link f0:00:00:00:00:f1 192.168.1.1/24
 
 check ovn-nbctl ls-add ls1
-check ovn-nbctl lsp-add ls1 up_link
 check ovn-nbctl lsp-add ls1 down_vif1
 check ovn-nbctl lsp-add ls1 down_vif2
 check ovn-nbctl lsp-add ls1 down_ext
-
-check ovn-nbctl set Logical_Switch_Port up_link \
-    type=router \
-    options:router-port=down_link \
-    addresses=router
+check ovn-nbctl lsp-add-router-port ls1 up_link down_link
 
 check ovn-nbctl lsp-set-addresses down_vif1 'f0:00:00:00:00:01 192.168.1.101'
 check ovn-nbctl lsp-set-addresses down_vif2 'f0:00:00:00:00:02 192.168.1.102'
@@ -19728,6 +19723,8 @@ AT_CHECK([ovn-sbctl lflow-list ls1 | grep ls_in_apply_port_sec | ovn_strip_lflow
   table=??(ls_in_apply_port_sec), priority=50   , match=(reg0[[15]] == 1), action=(drop;)
   table=??(ls_in_apply_port_sec), priority=70   , match=(reg0[[22]] == 1), action=(drop;)
   table=??(ls_in_apply_port_sec), priority=75   , match=(reg0[[22]] == 1 && is_chassis_resident("cr-down_link")), action=(next;)
+  table=??(ls_in_apply_port_sec), priority=85   , match=(reg0[[22]] == 1 && arp.tpa == 192.168.1.101 && is_chassis_resident("down_vif1")), action=(next;)
+  table=??(ls_in_apply_port_sec), priority=85   , match=(reg0[[22]] == 1 && arp.tpa == 192.168.1.102 && is_chassis_resident("down_vif2")), action=(next;)
 ])
 
 # Check nat adding to dgr attached to logical switch trigger ls-arp flow.
@@ -19740,6 +19737,8 @@ AT_CHECK([ovn-sbctl lflow-list ls1 | grep ls_in_apply_port_sec | ovn_strip_lflow
   table=??(ls_in_apply_port_sec), priority=70   , match=(reg0[[22]] == 1), action=(drop;)
   table=??(ls_in_apply_port_sec), priority=75   , match=(reg0[[22]] == 1 && is_chassis_resident("cr-down_link")), action=(next;)
   table=??(ls_in_apply_port_sec), priority=85   , match=(reg0[[22]] == 1 && arp.tpa == 192.168.0.3 && is_chassis_resident("down_vif1")), action=(next;)
+  table=??(ls_in_apply_port_sec), priority=85   , match=(reg0[[22]] == 1 && arp.tpa == 192.168.1.101 && is_chassis_resident("down_vif1")), action=(next;)
+  table=??(ls_in_apply_port_sec), priority=85   , match=(reg0[[22]] == 1 && arp.tpa == 192.168.1.102 && is_chassis_resident("down_vif2")), action=(next;)
 ])
 
 check ovn-nbctl --wait=sb lr-nat-del lr1 dnat_and_snat 192.168.0.3
@@ -19748,6 +19747,8 @@ AT_CHECK([ovn-sbctl lflow-list ls1 | grep ls_in_apply_port_sec | ovn_strip_lflow
   table=??(ls_in_apply_port_sec), priority=50   , match=(reg0[[15]] == 1), action=(drop;)
   table=??(ls_in_apply_port_sec), priority=70   , match=(reg0[[22]] == 1), action=(drop;)
   table=??(ls_in_apply_port_sec), priority=75   , match=(reg0[[22]] == 1 && is_chassis_resident("cr-down_link")), action=(next;)
+  table=??(ls_in_apply_port_sec), priority=85   , match=(reg0[[22]] == 1 && arp.tpa == 192.168.1.101 && is_chassis_resident("down_vif1")), action=(next;)
+  table=??(ls_in_apply_port_sec), priority=85   , match=(reg0[[22]] == 1 && arp.tpa == 192.168.1.102 && is_chassis_resident("down_vif2")), action=(next;)
 ])
 
 # Check changing logical port type to l2gateway.
@@ -19757,6 +19758,8 @@ AT_CHECK([ovn-sbctl lflow-list ls1 | grep ls_in_apply_port_sec | ovn_strip_lflow
   table=??(ls_in_apply_port_sec), priority=50   , match=(reg0[[15]] == 1), action=(drop;)
   table=??(ls_in_apply_port_sec), priority=70   , match=(reg0[[22]] == 1), action=(drop;)
   table=??(ls_in_apply_port_sec), priority=75   , match=(reg0[[22]] == 1 && is_chassis_resident("cr-down_link")), action=(next;)
+  table=??(ls_in_apply_port_sec), priority=85   , match=(reg0[[22]] == 1 && arp.tpa == 192.168.1.101 && is_chassis_resident("down_vif1")), action=(next;)
+  table=??(ls_in_apply_port_sec), priority=85   , match=(reg0[[22]] == 1 && arp.tpa == 192.168.1.102 && is_chassis_resident("down_vif2")), action=(next;)
 ])
 
 # Check changing logical port type to vif.
@@ -19773,6 +19776,8 @@ AT_CHECK([ovn-sbctl lflow-list ls1 | grep ls_in_apply_port_sec | ovn_strip_lflow
   table=??(ls_in_apply_port_sec), priority=50   , match=(reg0[[15]] == 1), action=(drop;)
   table=??(ls_in_apply_port_sec), priority=70   , match=(reg0[[22]] == 1), action=(drop;)
   table=??(ls_in_apply_port_sec), priority=75   , match=(reg0[[22]] == 1 && is_chassis_resident("cr-down_link")), action=(next;)
+  table=??(ls_in_apply_port_sec), priority=85   , match=(reg0[[22]] == 1 && arp.tpa == 192.168.1.101 && is_chassis_resident("down_vif1")), action=(next;)
+  table=??(ls_in_apply_port_sec), priority=85   , match=(reg0[[22]] == 1 && arp.tpa == 192.168.1.102 && is_chassis_resident("down_vif2")), action=(next;)
 ])
 
 # Check changing removing logical port.

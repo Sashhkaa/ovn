@@ -10066,6 +10066,8 @@ build_drop_arp_nd_flows_for_unbound_router_ports(struct ovn_port *op,
  * router connection ports that requires chassis residence.
  * ARP requests coming from localnet/l2gateway ports
  * allowed for processing on resident chassis only.
+ * If logical switch has VIF port, ARP requests are allowed
+ * to be processed on the chassis hosting this VIF port.
  */
 static void
 build_lswitch_arp_chassis_resident(const struct ovn_datapath *od,
@@ -10130,6 +10132,25 @@ build_lswitch_arp_chassis_resident(const struct ovn_datapath *od,
                               ent->nb->logical_port);
                 ovn_lflow_add(lflows, od, S_SWITCH_IN_APPLY_PORT_SEC, 85,
                               ds_cstr(&match), "next;", ar->lflow_ref);
+            }
+        }
+
+        HMAP_FOR_EACH (op, dp_node, &od->ports) {
+            if (!port_is_vif(op)) {
+                continue;
+            }
+
+            for (size_t i = 0; i < op->n_lsp_addrs; i++) {
+                for (size_t j = 0; j < op->lsp_addrs[i].n_ipv4_addrs; j++) {
+                    ds_clear(&match);
+                    ds_put_format(&match,
+                                  REGBIT_EXT_ARP " == 1 && arp.tpa == %s "
+                                  "&& is_chassis_resident(%s)",
+                                  op->lsp_addrs[i].ipv4_addrs[j].addr_s,
+                                  op->json_key);
+                    ovn_lflow_add(lflows, od, S_SWITCH_IN_APPLY_PORT_SEC, 85,
+                                  ds_cstr(&match), "next;", ar->lflow_ref);
+                }
             }
         }
 

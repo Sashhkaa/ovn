@@ -1178,6 +1178,12 @@ od_is_centralized(const struct ovn_datapath *od)
     return !od->is_distributed;
 }
 
+static inline bool
+port_is_vif(const struct ovn_port *op)
+{
+    return op->sb ? !strcmp(op->sb->type, "") : 0;
+}
+
 struct ovn_port *ovn_port_find(const struct hmap *ports, const char *name);
 
 void build_igmp_lflows(struct hmap *igmp_groups,
