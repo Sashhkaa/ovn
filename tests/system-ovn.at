@@ -21847,6 +21847,12 @@ start_daemon ovn-controller
 check ovn-nbctl lr-add lr1
 check ovn-nbctl ls-add public
 
+check ovn-nbctl lrp-add lr1 rp-public 00:00:02:01:02:03 172.31.1.1/24
+check ovn-nbctl lsp-add-router-port public public-rp rp-public
+check ovn-nbctl lsp-add-localnet-port public localnet phynet
+check ovn-nbctl lrp-set-gateway-chassis rp-public hv2
+check ovn-nbctl --wait=hv sync
+
 ADD_NAMESPACES(ext)
 ADD_VETH(ext, ext, br-ext, "172.31.1.3/24", "f0:00:00:01:02:04", \
          "172.31.1.1")
@@ -21857,12 +21863,6 @@ ADD_VETH(lsp, lsp, br-int, "172.31.1.2/24", "f0:00:00:01:02:03", \
 
 check ovn-nbctl lsp-add public lsp
 check ovn-nbctl lsp-set-addresses lsp "f0:00:00:01:02:03 172.31.1.2"
-
-check ovn-nbctl lrp-add lr1 rp-public 00:00:02:01:02:03 172.31.1.1/24
-check ovn-nbctl lsp-add-router-port public public-rp rp-public
-check ovn-nbctl lsp-add-localnet-port public localnet phynet
-check ovn-nbctl lrp-set-gateway-chassis rp-public hv2
-
 check ovn-nbctl --wait=hv sync
 
 NS_CHECK_EXEC([ext], [ping -q -c 3 -i 0.3 -w 2 172.31.1.2 | FORMAT_PING], \
@@ -21872,7 +21872,6 @@ NS_CHECK_EXEC([ext], [ping -q -c 3 -i 0.3 -w 2 172.31.1.2 | FORMAT_PING], \
 
 OVN_CLEANUP_CONTROLLER([hv1])
 OVN_CLEANUP_NORTHD
-
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
 /connection dropped.*/d"])

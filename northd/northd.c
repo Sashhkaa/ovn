@@ -4812,6 +4812,10 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
             struct nbrec_logical_switch_port *new_nbsp = changed_ls->ports[j];
             op = ovn_port_find_in_datapath(od, new_nbsp);
 
+            if (!hmapx_is_empty(&od->phys_ports)) {
+                goto fail;
+            }
+    
             if (!op) {
                 if (!lsp_can_be_inc_processed(new_nbsp)) {
                     goto fail;
