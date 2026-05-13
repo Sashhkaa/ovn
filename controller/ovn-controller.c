@@ -3769,7 +3769,8 @@ en_non_vif_data_run(struct engine_node *node, void *data)
         = chassis_lookup_by_name(sbrec_chassis_by_name, chassis_id);
     ovs_assert(chassis);
 
-    local_nonvif_data_run(br_int, chassis, &ed_non_vif_data->patch_ofports,
+    local_nonvif_data_run(br_int, chassis, sbrec_chassis_by_name,
+                          &ed_non_vif_data->patch_ofports,
                           &ed_non_vif_data->chassis_tunnels);
     engine_set_node_state(node, EN_UPDATED);
 }
