@@ -52,7 +52,6 @@ encaps_register_ovs_idl(struct ovsdb_idl *ovs_idl)
     ovsdb_idl_track_add_column(ovs_idl, &ovsrec_interface_col_name);
     ovsdb_idl_track_add_column(ovs_idl, &ovsrec_interface_col_type);
     ovsdb_idl_track_add_column(ovs_idl, &ovsrec_interface_col_options);
-    ovsdb_idl_track_add_column(ovs_idl, &ovsrec_interface_col_other_config);
 }
 
 /* Enough context to create a new tunnel, using tunnel_add(). */
@@ -214,15 +213,12 @@ tunnel_add(struct tunnel_ctx *tc, const struct sbrec_sb_global *sbg,
            const struct ovsrec_open_vswitch_table *ovs_table)
 {
     struct smap options = SMAP_INITIALIZER(&options);
-    struct smap other_config = SMAP_INITIALIZER(&other_config);
     smap_add(&options, "remote_ip", encap->ip);
     smap_add(&options, "key", "flow");
     const char *dst_port = smap_get(&encap->options, "dst_port");
     const char *csum = smap_get(&encap->options, "csum");
     char *tunnel_entry_id = NULL;
     char *tunnel_entry_id_old = NULL;
-    bool is_vtep_tunnel = smap_get_bool(&chassis_rec->other_config,
-                                        "is-vtep", false);
     /*
      * Since a chassis may have multiple encap-ip, we can't just add the
      * chassis name as the OVN_TUNNEL_ID for the port; we use the
@@ -298,10 +294,6 @@ tunnel_add(struct tunnel_ctx *tc, const struct sbrec_sb_global *sbg,
         smap_add(&options, "local_ip", local_ip);
     }
 
-    if (is_vtep_tunnel) {
-        smap_add(&other_config, "is-vtep", "true");
-    }
-
     /* If there's an existing tunnel record that does not need any change,
      * keep it.  Otherwise, create a new record (if there was an existing
      * record, the new record will supplant it and encaps_run() will delete
@@ -349,7 +341,6 @@ tunnel_add(struct tunnel_ctx *tc, const struct sbrec_sb_global *sbg,
     ovsrec_interface_set_name(iface, port_name);
     ovsrec_interface_set_type(iface, encap->type);
     ovsrec_interface_set_options(iface, &options);
-    ovsrec_interface_set_other_config(iface, &other_config);
 
     struct ovsrec_port *port = ovsrec_port_insert(tc->ovs_txn);
     ovsrec_port_set_name(port, port_name);
@@ -365,7 +356,6 @@ exit:
     free(tunnel_entry_id);
     free(tunnel_entry_id_old);
     smap_destroy(&options);
-    smap_destroy(&other_config);
 }
 
 static bool

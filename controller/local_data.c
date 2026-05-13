@@ -31,6 +31,7 @@
 #include "lib/ovn-util.h"
 #include "lib/ovn-sb-idl.h"
 #include "local_data.h"
+#include "lib/chassis-index.h"
 #include "lport.h"
 
 VLOG_DEFINE_THIS_MODULE(ldata);
@@ -389,6 +390,7 @@ tracked_datapaths_destroy(struct hmap *tracked_datapaths)
 void
 local_nonvif_data_run(const struct ovsrec_bridge *br_int,
                       const struct sbrec_chassis *chassis_rec,
+                      struct ovsdb_idl_index *sbrec_chassis_by_name,
                       struct simap *patch_ofports,
                       struct hmap *chassis_tunnels)
 {
@@ -456,6 +458,8 @@ local_nonvif_data_run(const struct ovsrec_bridge *br_int,
                 if (!encaps_tunnel_id_parse(tunnel_id, &hash_id, &ip, NULL)) {
                     continue;
                 }
+                const struct sbrec_chassis *chassis =
+                    chassis_lookup_by_name(sbrec_chassis_by_name, hash_id);
                 struct chassis_tunnel *tun = xmalloc(sizeof *tun);
                 hmap_insert(chassis_tunnels, &tun->hmap_node,
                             hash_string(hash_id, 0));
@@ -463,8 +467,9 @@ local_nonvif_data_run(const struct ovsrec_bridge *br_int,
                 tun->ofport = u16_to_ofp(ofport);
                 tun->type = tunnel_type;
                 tun->is_ipv6 = ip ? addr_is_ipv6(ip) : false;
-                tun->is_vtep_tunnel = smap_get_bool(&iface_rec->other_config,
-                                                    "is-vtep", false);
+                tun->is_vtep_tunnel = chassis ?
+                                      smap_get_bool(&chassis->other_config,
+                                                    "is-vtep", false) : false;
                 free(hash_id);
                 free(ip);
                 break;
