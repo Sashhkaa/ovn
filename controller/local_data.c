@@ -454,12 +454,11 @@ local_nonvif_data_run(const struct ovsrec_bridge *br_int,
                  */
                 char *hash_id = NULL;
                 char *ip = NULL;
-
                 if (!encaps_tunnel_id_parse(tunnel_id, &hash_id, &ip, NULL)) {
                     continue;
                 }
-                const struct sbrec_chassis *chassis
-                    = chassis_lookup_by_name(sbrec_chassis_by_name, hash_id);
+                const struct sbrec_chassis *chassis =
+                    chassis_lookup_by_name(sbrec_chassis_by_name, hash_id);
                 struct chassis_tunnel *tun = xmalloc(sizeof *tun);
                 hmap_insert(chassis_tunnels, &tun->hmap_node,
                             hash_string(hash_id, 0));
@@ -467,10 +466,9 @@ local_nonvif_data_run(const struct ovsrec_bridge *br_int,
                 tun->ofport = u16_to_ofp(ofport);
                 tun->type = tunnel_type;
                 tun->is_ipv6 = ip ? addr_is_ipv6(ip) : false;
-                if (chassis) {
-                    tun->is_vtep_tunnel = smap_get_bool(&chassis->other_config,
-                                                        "is-vtep", false);
-                }
+                tun->is_vtep_tunnel = chassis ?
+                                      smap_get_bool(&chassis->other_config,
+                                                    "is-vtep", false) : false;
                 free(hash_id);
                 free(ip);
                 break;
