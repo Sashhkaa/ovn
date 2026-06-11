@@ -674,6 +674,25 @@ dynamic_routes_northd_change_handler(struct engine_node *node, void *data_)
     return EN_HANDLED_UNCHANGED;
 }
 
+enum engine_input_handler_result
+dynamic_routes_adv_mac_northd_change_handler(struct engine_node *node,
+                                             void *data_ OVS_UNUSED)
+{
+    struct northd_data *northd_data = engine_get_input_data("northd", node);
+    struct northd_tracked_data *trk_data = &northd_data->trk_data;
+    if (!northd_has_tracked_data(trk_data)) {
+        return EN_UNHANDLED;
+    }
+
+    if (!hmapx_is_empty(&northd_data->trk_data.trk_lsps.created) ||
+        !hmapx_is_empty(&northd_data->trk_data.trk_lsps.updated) ||
+        !hmapx_is_empty(&northd_data->trk_data.trk_lsps.deleted)) {
+        return EN_UNHANDLED;
+    }
+
+    return EN_HANDLED_UNCHANGED;
+}
+
 static bool
 should_advertise_route(const struct ovn_datapath *advertising_od,
                        const struct ovn_port *advertising_op,

@@ -43,6 +43,9 @@ dynamic_routes_northd_change_handler(struct engine_node *node, void *data_);
 enum engine_input_handler_result
 dynamic_routes_lr_stateful_change_handler(struct engine_node *node,
                                           void *data_);
+enum engine_input_handler_result
+dynamic_routes_adv_mac_northd_change_handler(struct engine_node *,
+                                             void * OVS_UNUSED);
 
 void *en_advertised_mac_binding_sync_init(struct engine_node *,
                                           struct engine_arg *);

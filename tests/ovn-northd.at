@@ -20231,6 +20231,9 @@ check_row_count Advertised_MAC_Binding 1
 check ovn-nbctl --wait=sb clear logical_switch ls-evpn other_config
 check_row_count Advertised_MAC_Binding 0
 
+AT_CHECK([grep -c "referential integrity violation" northd/ovn-northd.log], [1], [0
+])
+
 OVN_CLEANUP_NORTHD
 AT_CLEANUP
 ])
