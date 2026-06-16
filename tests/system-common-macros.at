@@ -93,6 +93,9 @@ m4_define([ADD_VETH],
 #
 m4_define([FORMAT_PING], [grep "transmitted" | sed 's/time.*ms$/time 0ms/'])
 
+m4_define([FORMAT_ARPING],
+[[sed -n 's/^Unicast reply from \([0-9.][0-9.]*\) \[\([^][]*\)\].*/\1 \2/p']])
+
 # FORMAT_CT([ip-addr])
 #
 # Strip content from the piped input which would differ from test to test
