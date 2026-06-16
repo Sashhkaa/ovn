@@ -28026,12 +28026,19 @@ AT_CAPTURE_FILE([sbflows2])
 as hv1
 AT_CHECK([ovs-ofctl dump-flows br-int | grep -E "priority=80,.*${match_sw_metadata}" | grep -oE "arp_tpa=[[0-9.]]+" | sort], [0], [dnl
 arp_tpa=10.0.0.1
+arp_tpa=10.0.0.1
+arp_tpa=10.0.0.11
 arp_tpa=10.0.0.11
 arp_tpa=10.0.0.111
+arp_tpa=10.0.0.111
+arp_tpa=10.0.0.121
 arp_tpa=10.0.0.121
 arp_tpa=10.0.0.122
 arp_tpa=10.0.0.2
+arp_tpa=10.0.0.2
 arp_tpa=10.0.0.22
+arp_tpa=10.0.0.22
+arp_tpa=10.0.0.222
 arp_tpa=10.0.0.222
 ])
 AT_CHECK([ovs-ofctl dump-flows br-int | grep -E "priority=80,.*${match_sw_metadata}" | grep -oE "nd_target=[[0-9a-f:]]+" | sort], [0], [dnl
