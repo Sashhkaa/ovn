@@ -5944,7 +5944,7 @@ check ovn-nbctl --wait=sb sync
 
 ovn-sbctl lflow-list sw > ls1_lflows
 AT_CHECK([grep "ls_in_l2_lkup" ls1_lflows | grep 10.0.10.100 | ovn_strip_lflows], [0], [dnl
-  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 10.0.10.100), action=(outport = "sw-ro2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 10.0.10.100 && ((flags.localnet == 1 && is_chassis_resident("cr-ro1-lrp2")) || flags.localnet == 0)), action=(outport = "sw-ro2"; output;)
 ])
 
 OVN_CLEANUP_NORTHD
@@ -6206,20 +6206,21 @@ AT_CHECK([grep "ls_in_l2_lkup" ls1_lflows | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_l2_lkup      ), priority=71   , match=(eth.mcast && arp), action=(outport = "_MC_flood"; output;)
   table=??(ls_in_l2_lkup      ), priority=71   , match=(eth.mcast && ip), action=(outport = "_MC_flood_l2"; output;)
   table=??(ls_in_l2_lkup      ), priority=72   , match=(eth.mcast && (nd_na || nd_rs || nd_ra)), action=(outport = "_MC_flood"; output;)
+  table=??(ls_in_l2_lkup      ), priority=73   , match=(flags.localnet == 1 && arp.op == 1 && !is_chassis_resident("cr-ro1-ls1")), action=(drop;)
   table=??(ls_in_l2_lkup      ), priority=75   , match=(eth.src == {00:00:00:00:01:01} && eth.dst == ff:ff:ff:ff:ff:ff && (arp.op == 1 || rarp.op == 3 || nd_ns)), action=(outport = "_MC_flood_l2"; output;)
-  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 10.0.0.100), action=(clone {outport = "ls1-ro1"; output; }; outport = "_MC_unknown"; output;)
-  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 10.0.0.200), action=(clone {outport = "ls1-ro1"; output; }; outport = "_MC_unknown"; output;)
-  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.1), action=(clone {outport = "ls1-ro1"; output; }; outport = "_MC_unknown"; output;)
-  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.100), action=(clone {outport = "ls1-ro1"; output; }; outport = "_MC_unknown"; output;)
-  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 30.0.0.100), action=(clone {outport = "ls1-ro1"; output; }; outport = "_MC_unknown"; output;)
-  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 30.0.0.200), action=(clone {outport = "ls1-ro1"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 10.0.0.100 && ((flags.localnet == 1 && is_chassis_resident("cr-ro1-ls1")) || flags.localnet == 0)), action=(clone {outport = "ls1-ro1"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 10.0.0.200 && ((flags.localnet == 1 && is_chassis_resident("cr-ro1-ls1")) || flags.localnet == 0)), action=(clone {outport = "ls1-ro1"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.1 && ((flags.localnet == 1 && is_chassis_resident("cr-ro1-ls1")) || flags.localnet == 0)), action=(clone {outport = "ls1-ro1"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.100 && ((flags.localnet == 1 && is_chassis_resident("cr-ro1-ls1")) || flags.localnet == 0)), action=(clone {outport = "ls1-ro1"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 30.0.0.100 && ((flags.localnet == 1 && is_chassis_resident("cr-ro1-ls1")) || flags.localnet == 0)), action=(clone {outport = "ls1-ro1"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 30.0.0.200 && ((flags.localnet == 1 && is_chassis_resident("cr-ro1-ls1")) || flags.localnet == 0)), action=(clone {outport = "ls1-ro1"; output; }; outport = "_MC_unknown"; output;)
   table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == fe80::200:ff:fe00:101), action=(clone {outport = "ls1-ro1"; output; }; outport = "_MC_unknown"; output;)
-  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 10.0.0.100 && arp.spa == 10.0.0.100), action=(outport = "_MC_flood_l2"; output;)
-  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 10.0.0.200 && arp.spa == 10.0.0.200), action=(outport = "_MC_flood_l2"; output;)
-  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.1 && arp.spa == 192.168.1.1), action=(outport = "_MC_flood_l2"; output;)
-  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.100 && arp.spa == 192.168.1.100), action=(outport = "_MC_flood_l2"; output;)
-  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 30.0.0.100 && arp.spa == 30.0.0.100), action=(outport = "_MC_flood_l2"; output;)
-  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 30.0.0.200 && arp.spa == 30.0.0.200), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 10.0.0.100 && arp.spa == 10.0.0.100 && ((flags.localnet == 1 && is_chassis_resident("cr-ro1-ls1")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 10.0.0.200 && arp.spa == 10.0.0.200 && ((flags.localnet == 1 && is_chassis_resident("cr-ro1-ls1")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.1 && arp.spa == 192.168.1.1 && ((flags.localnet == 1 && is_chassis_resident("cr-ro1-ls1")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.100 && arp.spa == 192.168.1.100 && ((flags.localnet == 1 && is_chassis_resident("cr-ro1-ls1")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 30.0.0.100 && arp.spa == 30.0.0.100 && ((flags.localnet == 1 && is_chassis_resident("cr-ro1-ls1")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 30.0.0.200 && arp.spa == 30.0.0.200 && ((flags.localnet == 1 && is_chassis_resident("cr-ro1-ls1")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
 ])
 
 
@@ -6232,8 +6233,8 @@ check ovn-nbctl --wait=sb lr-nat-add ro1 dnat_and_snat 192.168.4.100 192.168.1.1
 
 ovn-sbctl lflow-list ls1 > ls1_lflows
 AT_CHECK([grep "ls_in_l2_lkup" ls1_lflows | grep "192.168.4.100" | ovn_strip_lflows], [0], [dnl
-  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.4.100), action=(clone {outport = "ls1-ro1"; output; }; outport = "_MC_unknown"; output;)
-  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.4.100 && arp.spa == 192.168.4.100), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.4.100 && ((flags.localnet == 1 && is_chassis_resident("cr-ro1-ls1")) || flags.localnet == 0)), action=(clone {outport = "ls1-ro1"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.4.100 && arp.spa == 192.168.4.100 && ((flags.localnet == 1 && is_chassis_resident("cr-ro1-ls1")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
 ])
 
 OVN_CLEANUP_NORTHD
@@ -7711,9 +7712,6 @@ AT_CHECK([grep lr_in_admission lrflows | grep cr-DR | ovn_strip_lflows], [0], [d
 ])
 # Check the flows in lr_in_lookup_neighbor stage
 AT_CHECK([grep lr_in_lookup_neighbor lrflows | grep cr-DR | ovn_strip_lflows], [0], [dnl
-  table=??(lr_in_lookup_neighbor), priority=100  , match=(inport == "DR-S1" && arp.spa == 172.16.1.0/24 && arp.op == 1 && is_chassis_resident("cr-DR-S1")), action=(reg9[[2]] = lookup_arp(inport, arp.spa, arp.sha); next;)
-  table=??(lr_in_lookup_neighbor), priority=100  , match=(inport == "DR-S2" && arp.spa == 172.16.2.0/24 && arp.op == 1 && is_chassis_resident("cr-DR-S2")), action=(reg9[[2]] = lookup_arp(inport, arp.spa, arp.sha); next;)
-  table=??(lr_in_lookup_neighbor), priority=100  , match=(inport == "DR-S3" && arp.spa == 172.16.3.0/24 && arp.op == 1 && is_chassis_resident("cr-DR-S3")), action=(reg9[[2]] = lookup_arp(inport, arp.spa, arp.sha); next;)
   table=??(lr_in_lookup_neighbor), priority=120  , match=(inport == "DR-S1" && (nd_na || nd_ns) && eth.mcast && !is_chassis_resident("cr-DR-S1")), action=(reg9[[2]] = 1; next;)
   table=??(lr_in_lookup_neighbor), priority=120  , match=(inport == "DR-S2" && (nd_na || nd_ns) && eth.mcast && !is_chassis_resident("cr-DR-S2")), action=(reg9[[2]] = 1; next;)
   table=??(lr_in_lookup_neighbor), priority=120  , match=(inport == "DR-S3" && (nd_na || nd_ns) && eth.mcast && !is_chassis_resident("cr-DR-S3")), action=(reg9[[2]] = 1; next;)
@@ -14908,16 +14906,17 @@ AT_CHECK([grep "ls_in_l2_lkup" publicflows | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_l2_lkup      ), priority=71   , match=(eth.mcast && arp), action=(outport = "_MC_flood"; output;)
   table=??(ls_in_l2_lkup      ), priority=71   , match=(eth.mcast && ip), action=(outport = "_MC_flood_l2"; output;)
   table=??(ls_in_l2_lkup      ), priority=72   , match=(eth.mcast && (nd_na || nd_rs || nd_ra)), action=(outport = "_MC_flood"; output;)
+  table=??(ls_in_l2_lkup      ), priority=73   , match=(flags.localnet == 1 && arp.op == 1 && !is_chassis_resident("cr-lr0-public")), action=(drop;)
   table=??(ls_in_l2_lkup      ), priority=75   , match=(eth.src == {00:00:00:00:ff:02, 30:54:00:00:00:03} && eth.dst == ff:ff:ff:ff:ff:ff && (arp.op == 1 || rarp.op == 3 || nd_ns)), action=(outport = "_MC_flood_l2"; output;)
-  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.10), action=(clone {outport = "public-lr0"; output; }; outport = "_MC_unknown"; output;)
-  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.100), action=(clone {outport = "public-lr0"; output; }; outport = "_MC_unknown"; output;)
-  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.110), action=(clone {outport = "public-lr0"; output; }; outport = "_MC_unknown"; output;)
-  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.120), action=(clone {outport = "public-lr0"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.10 && ((flags.localnet == 1 && is_chassis_resident("cr-lr0-public")) || flags.localnet == 0)), action=(clone {outport = "public-lr0"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.100 && ((flags.localnet == 1 && is_chassis_resident("cr-lr0-public")) || flags.localnet == 0)), action=(clone {outport = "public-lr0"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.110 && ((flags.localnet == 1 && is_chassis_resident("sw0-port1")) || flags.localnet == 0)), action=(clone {outport = "public-lr0"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.120 && ((flags.localnet == 1 && is_chassis_resident("cr-lr0-public")) || flags.localnet == 0)), action=(clone {outport = "public-lr0"; output; }; outport = "_MC_unknown"; output;)
   table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == fe80::200:ff:fe00:ff02), action=(clone {outport = "public-lr0"; output; }; outport = "_MC_unknown"; output;)
-  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.10 && arp.spa == 172.168.0.10), action=(outport = "_MC_flood_l2"; output;)
-  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.100 && arp.spa == 172.168.0.100), action=(outport = "_MC_flood_l2"; output;)
-  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.110 && arp.spa == 172.168.0.110), action=(outport = "_MC_flood_l2"; output;)
-  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.120 && arp.spa == 172.168.0.120), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.10 && arp.spa == 172.168.0.10 && ((flags.localnet == 1 && is_chassis_resident("cr-lr0-public")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.100 && arp.spa == 172.168.0.100 && ((flags.localnet == 1 && is_chassis_resident("cr-lr0-public")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.110 && arp.spa == 172.168.0.110 && ((flags.localnet == 1 && is_chassis_resident("sw0-port1")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.120 && arp.spa == 172.168.0.120 && ((flags.localnet == 1 && is_chassis_resident("cr-lr0-public")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
 ])
 
 AT_CHECK([grep -Fe "172.168.0.110" -e "172.168.0.120" -e "10.0.0.3" -e "20.0.0.3" -e "30:54:00:00:00:03"  -e "sw0-port1" lr0flows | ovn_strip_lflows], [0], [dnl
@@ -14944,10 +14943,10 @@ AT_CHECK([grep -Fe "172.168.0.110" -e "172.168.0.120" -e "10.0.0.3" -e "20.0.0.3
 AT_CHECK([grep -Fe "172.168.0.110" -e "172.168.0.120" -e "10.0.0.3" -e "20.0.0.3" -e "30:54:00:00:00:03"  -e "sw0-port1" publicflows | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_l2_lkup      ), priority=50   , match=(eth.dst == 30:54:00:00:00:03 && is_chassis_resident("sw0-port1")), action=(outport = "public-lr0"; output;)
   table=??(ls_in_l2_lkup      ), priority=75   , match=(eth.src == {00:00:00:00:ff:02, 30:54:00:00:00:03} && eth.dst == ff:ff:ff:ff:ff:ff && (arp.op == 1 || rarp.op == 3 || nd_ns)), action=(outport = "_MC_flood_l2"; output;)
-  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.110), action=(clone {outport = "public-lr0"; output; }; outport = "_MC_unknown"; output;)
-  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.120), action=(clone {outport = "public-lr0"; output; }; outport = "_MC_unknown"; output;)
-  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.110 && arp.spa == 172.168.0.110), action=(outport = "_MC_flood_l2"; output;)
-  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.120 && arp.spa == 172.168.0.120), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.110 && ((flags.localnet == 1 && is_chassis_resident("sw0-port1")) || flags.localnet == 0)), action=(clone {outport = "public-lr0"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.120 && ((flags.localnet == 1 && is_chassis_resident("cr-lr0-public")) || flags.localnet == 0)), action=(clone {outport = "public-lr0"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.110 && arp.spa == 172.168.0.110 && ((flags.localnet == 1 && is_chassis_resident("sw0-port1")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.120 && arp.spa == 172.168.0.120 && ((flags.localnet == 1 && is_chassis_resident("cr-lr0-public")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
 ])
 }
 
@@ -15194,10 +15193,10 @@ AT_CHECK([grep -Fe "172.168.0.110" -e "172.168.0.120" -e "10.0.0.3" -e "20.0.0.3
 AT_CHECK([grep -Fe "172.168.0.110" -e "172.168.0.120" -e "10.0.0.3" -e "20.0.0.3" -e "30:54:00:00:00:03"  -e "sw0-port1" publicflows | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_l2_lkup      ), priority=50   , match=(eth.dst == 30:54:00:00:00:03 && is_chassis_resident("sw0-port1")), action=(outport = "public-lr0"; output;)
   table=??(ls_in_l2_lkup      ), priority=75   , match=(eth.src == {00:00:00:00:ff:02, 30:54:00:00:00:03} && eth.dst == ff:ff:ff:ff:ff:ff && (arp.op == 1 || rarp.op == 3 || nd_ns)), action=(outport = "_MC_flood_l2"; output;)
-  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.110), action=(clone {outport = "public-lr0"; output; }; outport = "_MC_unknown"; output;)
-  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.120), action=(clone {outport = "public-lr0"; output; }; outport = "_MC_unknown"; output;)
-  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.110 && arp.spa == 172.168.0.110), action=(outport = "_MC_flood_l2"; output;)
-  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.120 && arp.spa == 172.168.0.120), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.110 && ((flags.localnet == 1 && is_chassis_resident("sw0-port1")) || flags.localnet == 0)), action=(clone {outport = "public-lr0"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.120 && ((flags.localnet == 1 && is_chassis_resident("cr-lr0-public")) || flags.localnet == 0)), action=(clone {outport = "public-lr0"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.110 && arp.spa == 172.168.0.110 && ((flags.localnet == 1 && is_chassis_resident("sw0-port1")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.168.0.120 && arp.spa == 172.168.0.120 && ((flags.localnet == 1 && is_chassis_resident("cr-lr0-public")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
 ])
 
 OVN_CLEANUP_NORTHD
@@ -21955,6 +21954,266 @@ Statistics for 'northd'
 
 dnl Error case: non-existent node name.
 AT_CHECK([as northd ovn-appctl -t ovn-northd inc-engine/enable-stopwatch nonexistent_node], [2], [], [ignore])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([Logical Switch ARP filtering])
+ovn_start
+
+check ovn-nbctl lr-add lr1
+check ovn-nbctl lr-add lr2
+check ovn-nbctl lrp-add lr1 down_link f0:00:00:00:00:f1 192.168.1.1/24 aef0::200:ff:fe00:3/64
+check ovn-nbctl lrp-add lr1 private_link f0:00:00:00:00:f2 172.31.1.1/24 fd11::1/64
+
+check ovn-nbctl ls-add ls1
+check ovn-nbctl ls-add private
+
+check ovn-nbctl lsp-add ls1 down_vif1
+check ovn-nbctl lsp-add ls1 down_ext
+check ovn-nbctl lsp-add-router-port ls1 up_link down_link
+
+check ovn-nbctl lsp-add private private_vif1_ipv4
+check ovn-nbctl lsp-add private private_vif1_ipv6
+check ovn-nbctl lsp-add-router-port private pr_uplink private_link
+
+check ovn-nbctl lsp-set-addresses down_vif1 'f0:00:00:00:00:01 192.168.1.101'
+check ovn-nbctl lsp-set-addresses private_vif1_ipv4 'f0:00:00:00:00:05 172.31.0.101'
+check ovn-nbctl lsp-set-addresses private_vif1_ipv6 'f0:00:00:00:00:05 fd11::2'
+
+check ovn-nbctl lr-nat-add lr1 dnat_and_snat 172.31.1.2 172.31.0.101 \
+    private_vif1_ipv4 f0:00:00:00:00:07
+check ovn-nbctl lr-nat-add lr1 dnat_and_snat fd12::2 fd11::2 \
+    private_vif1_ipv6 f0:00:00:00:00:06
+
+check ovn-nbctl lb-add lb1 99.99.99.99:80 172.31.0.9:10880
+check ovn-nbctl lr-lb-add lr1 lb1
+
+# Create two NATs: one of them is part of the router subnet;
+# for the second one, a gateway (GW) will need to be added later
+# when testing with multiple DGPs
+check ovn-nbctl lr-nat-add lr1 dnat_and_snat 10.10.10.13 172.31.0.103
+check ovn-nbctl lr-nat-add lr1 dnat_and_snat fd12::3 fd11::3
+check ovn-nbctl lr-nat-add lr1 snat 192.168.1.14 172.31.0.0/24
+check ovn-nbctl lr-nat-add lr1 snat aef0::200:ff:fe00:4 fd11::/64
+
+check ovn-nbctl --wait=sb sync
+
+# Check base routing (without any gateways): ARP/ND in ls_in_l2_lkup should be redirected to the router port and flooded to the unknown multicast group.
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep 'ls_in_arp_rsp' | grep 'priority=50'| ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_arp_rsp      ), priority=50   , match=(arp.tpa == 192.168.1.1 && arp.op == 1 && eth.dst == ff:ff:ff:ff:ff:ff), action=(eth.dst = eth.src; eth.src = f0:00:00:00:00:f1; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = f0:00:00:00:00:f1; arp.tpa = arp.spa; arp.spa = 192.168.1.1; outport = inport; flags.loopback = 1; output;)
+  table=??(ls_in_arp_rsp      ), priority=50   , match=(arp.tpa == 192.168.1.101 && arp.op == 1 && eth.dst == ff:ff:ff:ff:ff:ff), action=(eth.dst = eth.src; eth.src = f0:00:00:00:00:01; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = f0:00:00:00:00:01; arp.tpa = arp.spa; arp.spa = 192.168.1.101; outport = inport; flags.loopback = 1; output;)
+  table=??(ls_in_arp_rsp      ), priority=50   , match=(nd_ns_mcast && ip6.dst == ff02::1:ff00:3 && nd.target == aef0::200:ff:fe00:3), action=(nd_na_router { eth.src = f0:00:00:00:00:f1; ip6.src = aef0::200:ff:fe00:3; nd.target = aef0::200:ff:fe00:3; nd.tll = f0:00:00:00:00:f1; outport = inport; flags.loopback = 1; output; };)
+  table=??(ls_in_arp_rsp      ), priority=50   , match=(nd_ns_mcast && ip6.dst == ff02::1:ff00:f1 && nd.target == fe80::f200:ff:fe00:f1), action=(nd_na_router { eth.src = f0:00:00:00:00:f1; ip6.src = fe80::f200:ff:fe00:f1; nd.target = fe80::f200:ff:fe00:f1; nd.tll = f0:00:00:00:00:f1; outport = inport; flags.loopback = 1; output; };)
+])
+
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep 'ls_in_l2_lkup' | grep -E 'priority=80|priority=90'| ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 10.10.10.13), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.31.1.2), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.1), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.14), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == aef0::200:ff:fe00:3), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == aef0::200:ff:fe00:4), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == fd12::2), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == fd12::3), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == fe80::f200:ff:fe00:f1), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 10.10.10.13 && arp.spa == 10.10.10.13), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.31.1.2 && arp.spa == 172.31.1.2), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.1 && arp.spa == 192.168.1.1), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.14 && arp.spa == 192.168.1.14), action=(outport = "_MC_flood_l2"; output;)
+])
+
+AT_CHECK([ovn-sbctl lflow-list lr1 | grep 'lr_in_lookup_neighbor' | grep lookup_arp | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_lookup_neighbor), priority=100  , match=(arp.op == 2), action=(reg9[[2]] = lookup_arp(inport, arp.spa, arp.sha); next;)
+  table=??(lr_in_lookup_neighbor), priority=100  , match=(inport == "down_link" && arp.spa == 192.168.1.0/24 && arp.op == 1), action=(reg9[[2]] = lookup_arp(inport, arp.spa, arp.sha); next;)
+  table=??(lr_in_lookup_neighbor), priority=100  , match=(inport == "private_link" && arp.spa == 172.31.1.0/24 && arp.op == 1), action=(reg9[[2]] = lookup_arp(inport, arp.spa, arp.sha); next;)
+])
+
+AT_CHECK([ovn-sbctl lflow-list lr1 | grep 'lr_in_ip_input' | grep -E 'priority=92|priority=91|priority=90'| ovn_strip_lflows | grep -E 'arp|nd'], [0], [dnl
+  table=??(lr_in_ip_input     ), priority=90   , match=(arp.op == 1 && arp.tpa == 10.10.10.13), action=(eth.dst = eth.src; eth.src = xreg0[[0..47]]; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = xreg0[[0..47]]; arp.tpa <-> arp.spa; outport = inport; flags.loopback = 1; output;)
+  table=??(lr_in_ip_input     ), priority=90   , match=(arp.op == 1 && arp.tpa == 172.31.1.2), action=(eth.dst = eth.src; eth.src = xreg0[[0..47]]; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = xreg0[[0..47]]; arp.tpa <-> arp.spa; outport = inport; flags.loopback = 1; output;)
+  table=??(lr_in_ip_input     ), priority=90   , match=(arp.op == 1 && arp.tpa == 192.168.1.14), action=(eth.dst = eth.src; eth.src = xreg0[[0..47]]; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = xreg0[[0..47]]; arp.tpa <-> arp.spa; outport = inport; flags.loopback = 1; output;)
+  table=??(lr_in_ip_input     ), priority=90   , match=(inport == "down_link" && arp.op == 1 && arp.tpa == 192.168.1.1 && arp.spa == 192.168.1.0/24), action=(eth.dst = eth.src; eth.src = xreg0[[0..47]]; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = xreg0[[0..47]]; arp.tpa <-> arp.spa; outport = inport; flags.loopback = 1; output;)
+  table=??(lr_in_ip_input     ), priority=90   , match=(inport == "down_link" && ip6.dst == {aef0::200:ff:fe00:3, ff02::1:ff00:3} && nd_ns && nd.target == aef0::200:ff:fe00:3), action=(nd_na_router { eth.src = xreg0[[0..47]]; ip6.src = nd.target; nd.tll = xreg0[[0..47]]; outport = inport; flags.loopback = 1; output; };)
+  table=??(lr_in_ip_input     ), priority=90   , match=(inport == "down_link" && ip6.dst == {fe80::f200:ff:fe00:f1, ff02::1:ff00:f1} && nd_ns && nd.target == fe80::f200:ff:fe00:f1), action=(nd_na_router { eth.src = xreg0[[0..47]]; ip6.src = nd.target; nd.tll = xreg0[[0..47]]; outport = inport; flags.loopback = 1; output; };)
+  table=??(lr_in_ip_input     ), priority=90   , match=(inport == "private_link" && arp.op == 1 && arp.tpa == 172.31.1.1 && arp.spa == 172.31.1.0/24), action=(eth.dst = eth.src; eth.src = xreg0[[0..47]]; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = xreg0[[0..47]]; arp.tpa <-> arp.spa; outport = inport; flags.loopback = 1; output;)
+  table=??(lr_in_ip_input     ), priority=90   , match=(inport == "private_link" && ip6.dst == {fd11::1, ff02::1:ff00:1} && nd_ns && nd.target == fd11::1), action=(nd_na_router { eth.src = xreg0[[0..47]]; ip6.src = nd.target; nd.tll = xreg0[[0..47]]; outport = inport; flags.loopback = 1; output; };)
+  table=??(lr_in_ip_input     ), priority=90   , match=(inport == "private_link" && ip6.dst == {fe80::f200:ff:fe00:f2, ff02::1:ff00:f2} && nd_ns && nd.target == fe80::f200:ff:fe00:f2), action=(nd_na_router { eth.src = xreg0[[0..47]]; ip6.src = nd.target; nd.tll = xreg0[[0..47]]; outport = inport; flags.loopback = 1; output; };)
+  table=??(lr_in_ip_input     ), priority=90   , match=(ip6.dst == {aef0::200:ff:fe00:4, ff02::1:ff00:4} && nd_ns && nd.target == aef0::200:ff:fe00:4), action=(nd_na { eth.src = xreg0[[0..47]]; ip6.src = nd.target; nd.tll = xreg0[[0..47]]; outport = inport; flags.loopback = 1; output; };)
+  table=??(lr_in_ip_input     ), priority=90   , match=(ip6.dst == {fd12::2, ff02::1:ff00:2} && nd_ns && nd.target == fd12::2), action=(nd_na { eth.src = xreg0[[0..47]]; ip6.src = nd.target; nd.tll = xreg0[[0..47]]; outport = inport; flags.loopback = 1; output; };)
+  table=??(lr_in_ip_input     ), priority=90   , match=(ip6.dst == {fd12::3, ff02::1:ff00:3} && nd_ns && nd.target == fd12::3), action=(nd_na { eth.src = xreg0[[0..47]]; ip6.src = nd.target; nd.tll = xreg0[[0..47]]; outport = inport; flags.loopback = 1; output; };)
+])
+
+# Create a gateway port to centralize routing on hv1 on router.
+check ovn-nbctl lrp-set-gateway-chassis down_link hv1
+check ovn-nbctl --wait=sb sync
+
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep 'ls_in_arp_rsp' | grep 'priority=50'| ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_arp_rsp      ), priority=50   , match=(arp.tpa == 192.168.1.1 && arp.op == 1 && eth.dst == ff:ff:ff:ff:ff:ff), action=(eth.dst = eth.src; eth.src = f0:00:00:00:00:f1; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = f0:00:00:00:00:f1; arp.tpa = arp.spa; arp.spa = 192.168.1.1; outport = inport; flags.loopback = 1; output;)
+  table=??(ls_in_arp_rsp      ), priority=50   , match=(arp.tpa == 192.168.1.101 && arp.op == 1 && eth.dst == ff:ff:ff:ff:ff:ff), action=(eth.dst = eth.src; eth.src = f0:00:00:00:00:01; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = f0:00:00:00:00:01; arp.tpa = arp.spa; arp.spa = 192.168.1.101; outport = inport; flags.loopback = 1; output;)
+  table=??(ls_in_arp_rsp      ), priority=50   , match=(nd_ns_mcast && ip6.dst == ff02::1:ff00:3 && nd.target == aef0::200:ff:fe00:3), action=(nd_na_router { eth.src = f0:00:00:00:00:f1; ip6.src = aef0::200:ff:fe00:3; nd.target = aef0::200:ff:fe00:3; nd.tll = f0:00:00:00:00:f1; outport = inport; flags.loopback = 1; output; };)
+  table=??(ls_in_arp_rsp      ), priority=50   , match=(nd_ns_mcast && ip6.dst == ff02::1:ff00:f1 && nd.target == fe80::f200:ff:fe00:f1), action=(nd_na_router { eth.src = f0:00:00:00:00:f1; ip6.src = fe80::f200:ff:fe00:f1; nd.target = fe80::f200:ff:fe00:f1; nd.tll = f0:00:00:00:00:f1; outport = inport; flags.loopback = 1; output; };)
+])
+
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep 'ls_in_l2_lkup' | grep -E 'priority=80|priority=90'| ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 10.10.10.13 && !is_chassis_resident("cr-up_link")), action=(clone {outport = "cr-up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 10.10.10.13 && is_chassis_resident("cr-up_link")), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.31.1.2 && !is_chassis_resident("cr-up_link")), action=(clone {outport = "cr-up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.31.1.2 && is_chassis_resident("cr-up_link")), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.1 && !is_chassis_resident("cr-up_link")), action=(clone {outport = "cr-up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.1 && is_chassis_resident("cr-up_link")), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.14 && !is_chassis_resident("cr-up_link")), action=(clone {outport = "cr-up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.14 && is_chassis_resident("cr-up_link")), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == aef0::200:ff:fe00:3 && !is_chassis_resident("cr-up_link")), action=(clone {outport = "cr-up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == aef0::200:ff:fe00:3 && is_chassis_resident("cr-up_link")), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == aef0::200:ff:fe00:4 && !is_chassis_resident("cr-up_link")), action=(clone {outport = "cr-up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == aef0::200:ff:fe00:4 && is_chassis_resident("cr-up_link")), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == fd12::2 && !is_chassis_resident("cr-up_link")), action=(clone {outport = "cr-up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == fd12::2 && is_chassis_resident("cr-up_link")), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == fd12::3 && !is_chassis_resident("cr-up_link")), action=(clone {outport = "cr-up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == fd12::3 && is_chassis_resident("cr-up_link")), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == fe80::f200:ff:fe00:f1 && !is_chassis_resident("cr-up_link")), action=(clone {outport = "cr-up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == fe80::f200:ff:fe00:f1 && is_chassis_resident("cr-up_link")), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 10.10.10.13 && arp.spa == 10.10.10.13), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.31.1.2 && arp.spa == 172.31.1.2), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.1 && arp.spa == 192.168.1.1), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.14 && arp.spa == 192.168.1.14), action=(outport = "_MC_flood_l2"; output;)
+])
+
+AT_CHECK([ovn-sbctl lflow-list lr1 | grep 'lr_in_lookup_neighbor' | grep lookup_arp | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_lookup_neighbor), priority=100  , match=(arp.op == 2), action=(reg9[[2]] = lookup_arp(inport, arp.spa, arp.sha); next;)
+  table=??(lr_in_lookup_neighbor), priority=100  , match=(inport == "down_link" && arp.spa == 192.168.1.0/24 && arp.op == 1), action=(reg9[[2]] = lookup_arp(inport, arp.spa, arp.sha); next;)
+  table=??(lr_in_lookup_neighbor), priority=100  , match=(inport == "private_link" && arp.spa == 172.31.1.0/24 && arp.op == 1), action=(reg9[[2]] = lookup_arp(inport, arp.spa, arp.sha); next;)
+])
+
+AT_CHECK([ovn-sbctl lflow-list lr1 | grep 'lr_in_ip_input' | grep -E 'priority=92|priority=91|priority=90'| ovn_strip_lflows | grep -E 'arp|nd'], [0], [dnl
+  table=??(lr_in_ip_input     ), priority=90   , match=(arp.op == 1 && arp.tpa == 10.10.10.13), action=(eth.dst = eth.src; eth.src = xreg0[[0..47]]; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = xreg0[[0..47]]; arp.tpa <-> arp.spa; outport = inport; flags.loopback = 1; output;)
+  table=??(lr_in_ip_input     ), priority=90   , match=(arp.op == 1 && arp.tpa == 172.31.1.2), action=(eth.dst = eth.src; eth.src = xreg0[[0..47]]; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = xreg0[[0..47]]; arp.tpa <-> arp.spa; outport = inport; flags.loopback = 1; output;)
+  table=??(lr_in_ip_input     ), priority=90   , match=(arp.op == 1 && arp.tpa == 192.168.1.14), action=(eth.dst = eth.src; eth.src = xreg0[[0..47]]; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = xreg0[[0..47]]; arp.tpa <-> arp.spa; outport = inport; flags.loopback = 1; output;)
+  table=??(lr_in_ip_input     ), priority=90   , match=(inport == "down_link" && arp.op == 1 && arp.tpa == 192.168.1.1 && arp.spa == 192.168.1.0/24), action=(eth.dst = eth.src; eth.src = xreg0[[0..47]]; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = xreg0[[0..47]]; arp.tpa <-> arp.spa; outport = inport; flags.loopback = 1; output;)
+  table=??(lr_in_ip_input     ), priority=90   , match=(inport == "down_link" && ip6.dst == {aef0::200:ff:fe00:3, ff02::1:ff00:3} && nd_ns && nd.target == aef0::200:ff:fe00:3 && is_chassis_resident("cr-down_link")), action=(nd_na_router { eth.src = xreg0[[0..47]]; ip6.src = nd.target; nd.tll = xreg0[[0..47]]; outport = inport; flags.loopback = 1; output; };)
+  table=??(lr_in_ip_input     ), priority=90   , match=(inport == "down_link" && ip6.dst == {fe80::f200:ff:fe00:f1, ff02::1:ff00:f1} && nd_ns && nd.target == fe80::f200:ff:fe00:f1 && is_chassis_resident("cr-down_link")), action=(nd_na_router { eth.src = xreg0[[0..47]]; ip6.src = nd.target; nd.tll = xreg0[[0..47]]; outport = inport; flags.loopback = 1; output; };)
+  table=??(lr_in_ip_input     ), priority=90   , match=(inport == "private_link" && arp.op == 1 && arp.tpa == 172.31.1.1 && arp.spa == 172.31.1.0/24), action=(eth.dst = eth.src; eth.src = xreg0[[0..47]]; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = xreg0[[0..47]]; arp.tpa <-> arp.spa; outport = inport; flags.loopback = 1; output;)
+  table=??(lr_in_ip_input     ), priority=90   , match=(inport == "private_link" && ip6.dst == {fd11::1, ff02::1:ff00:1} && nd_ns && nd.target == fd11::1), action=(nd_na_router { eth.src = xreg0[[0..47]]; ip6.src = nd.target; nd.tll = xreg0[[0..47]]; outport = inport; flags.loopback = 1; output; };)
+  table=??(lr_in_ip_input     ), priority=90   , match=(inport == "private_link" && ip6.dst == {fe80::f200:ff:fe00:f2, ff02::1:ff00:f2} && nd_ns && nd.target == fe80::f200:ff:fe00:f2), action=(nd_na_router { eth.src = xreg0[[0..47]]; ip6.src = nd.target; nd.tll = xreg0[[0..47]]; outport = inport; flags.loopback = 1; output; };)
+  table=??(lr_in_ip_input     ), priority=90   , match=(ip6.dst == {aef0::200:ff:fe00:4, ff02::1:ff00:4} && nd_ns && nd.target == aef0::200:ff:fe00:4), action=(nd_na { eth.src = xreg0[[0..47]]; ip6.src = nd.target; nd.tll = xreg0[[0..47]]; outport = inport; flags.loopback = 1; output; };)
+  table=??(lr_in_ip_input     ), priority=90   , match=(ip6.dst == {fd12::2, ff02::1:ff00:2} && nd_ns && nd.target == fd12::2), action=(nd_na { eth.src = xreg0[[0..47]]; ip6.src = nd.target; nd.tll = xreg0[[0..47]]; outport = inport; flags.loopback = 1; output; };)
+  table=??(lr_in_ip_input     ), priority=90   , match=(ip6.dst == {fd12::3, ff02::1:ff00:3} && nd_ns && nd.target == fd12::3), action=(nd_na { eth.src = xreg0[[0..47]]; ip6.src = nd.target; nd.tll = xreg0[[0..47]]; outport = inport; flags.loopback = 1; output; };)
+])
+
+# Check routing become distributed.
+check ovn-nbctl lsp-add-localnet-port ls1 localnet physical
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep 'ls_in_arp_rsp' | grep 'priority=50'| ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_arp_rsp      ), priority=50   , match=(arp.tpa == 192.168.1.1 && arp.op == 1 && eth.dst == ff:ff:ff:ff:ff:ff && ((flags.localnet == 1 && is_chassis_resident("up_link")) || flags.localnet == 0)), action=(eth.dst = eth.src; eth.src = f0:00:00:00:00:f1; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = f0:00:00:00:00:f1; arp.tpa = arp.spa; arp.spa = 192.168.1.1; outport = inport; flags.loopback = 1; output;)
+  table=??(ls_in_arp_rsp      ), priority=50   , match=(arp.tpa == 192.168.1.101 && arp.op == 1 && eth.dst == ff:ff:ff:ff:ff:ff && ((flags.localnet == 1 && is_chassis_resident("down_vif1")) || flags.localnet == 0)), action=(eth.dst = eth.src; eth.src = f0:00:00:00:00:01; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = f0:00:00:00:00:01; arp.tpa = arp.spa; arp.spa = 192.168.1.101; outport = inport; flags.loopback = 1; output;)
+  table=??(ls_in_arp_rsp      ), priority=50   , match=(nd_ns_mcast && ip6.dst == ff02::1:ff00:3 && nd.target == aef0::200:ff:fe00:3 && ((flags.localnet == 1 && is_chassis_resident("up_link")) || flags.localnet == 0)), action=(nd_na_router { eth.src = f0:00:00:00:00:f1; ip6.src = aef0::200:ff:fe00:3; nd.target = aef0::200:ff:fe00:3; nd.tll = f0:00:00:00:00:f1; outport = inport; flags.loopback = 1; output; };)
+  table=??(ls_in_arp_rsp      ), priority=50   , match=(nd_ns_mcast && ip6.dst == ff02::1:ff00:f1 && nd.target == fe80::f200:ff:fe00:f1 && ((flags.localnet == 1 && is_chassis_resident("up_link")) || flags.localnet == 0)), action=(nd_na_router { eth.src = f0:00:00:00:00:f1; ip6.src = fe80::f200:ff:fe00:f1; nd.target = fe80::f200:ff:fe00:f1; nd.tll = f0:00:00:00:00:f1; outport = inport; flags.loopback = 1; output; };)
+])
+
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep 'ls_in_l2_lkup' | grep -E 'priority=80|priority=90'| ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 10.10.10.13 && ((flags.localnet == 1 && is_chassis_resident("cr-down_link")) || flags.localnet == 0)), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.31.1.2 && ((flags.localnet == 1 && is_chassis_resident("private_vif1_ipv4")) || flags.localnet == 0)), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.1 && ((flags.localnet == 1 && is_chassis_resident("cr-down_link")) || flags.localnet == 0)), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.14 && ((flags.localnet == 1 && is_chassis_resident("cr-down_link")) || flags.localnet == 0)), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == aef0::200:ff:fe00:3), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == aef0::200:ff:fe00:4), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == fd12::2), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == fd12::3), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == fe80::f200:ff:fe00:f1), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 10.10.10.13 && arp.spa == 10.10.10.13 && ((flags.localnet == 1 && is_chassis_resident("cr-down_link")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 172.31.1.2 && arp.spa == 172.31.1.2 && ((flags.localnet == 1 && is_chassis_resident("private_vif1_ipv4")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.1 && arp.spa == 192.168.1.1 && ((flags.localnet == 1 && is_chassis_resident("cr-down_link")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.14 && arp.spa == 192.168.1.14 && ((flags.localnet == 1 && is_chassis_resident("cr-down_link")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+])
+
+# Check default drop for arp
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep 'ls_in_l2_lkup' | grep priority=73 | grep flags.localnet | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_l2_lkup      ), priority=73   , match=(flags.localnet == 1 && arp.op == 1 && !is_chassis_resident("cr-down_link")), action=(drop;)
+])
+
+AT_CHECK([ovn-sbctl lflow-list lr1 | grep 'lr_in_lookup_neighbor' | grep lookup_arp | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_lookup_neighbor), priority=100  , match=(arp.op == 2), action=(reg9[[2]] = lookup_arp(inport, arp.spa, arp.sha); next;)
+  table=??(lr_in_lookup_neighbor), priority=100  , match=(inport == "down_link" && arp.spa == 192.168.1.0/24 && arp.op == 1), action=(reg9[[2]] = lookup_arp(inport, arp.spa, arp.sha); next;)
+  table=??(lr_in_lookup_neighbor), priority=100  , match=(inport == "private_link" && arp.spa == 172.31.1.0/24 && arp.op == 1), action=(reg9[[2]] = lookup_arp(inport, arp.spa, arp.sha); next;)
+])
+
+AT_CHECK([ovn-sbctl lflow-list lr1 | grep 'lr_in_ip_input' | grep -E 'priority=92'| ovn_strip_lflows | grep -E 'arp|nd'], [0], [dnl
+  table=??(lr_in_ip_input     ), priority=92   , match=(inport == "down_link" && arp.op == 1 && arp.tpa == 10.10.10.13 && is_chassis_resident("cr-down_link")), action=(eth.dst = eth.src; eth.src = xreg0[[0..47]]; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = xreg0[[0..47]]; arp.tpa <-> arp.spa; outport = inport; flags.loopback = 1; output;)
+  table=??(lr_in_ip_input     ), priority=92   , match=(inport == "down_link" && arp.op == 1 && arp.tpa == 172.31.1.2 && is_chassis_resident("private_vif1_ipv4")), action=(eth.dst = eth.src; eth.src = f0:00:00:00:00:07; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = f0:00:00:00:00:07; arp.tpa <-> arp.spa; outport = inport; flags.loopback = 1; output;)
+  table=??(lr_in_ip_input     ), priority=92   , match=(inport == "down_link" && arp.op == 1 && arp.tpa == 192.168.1.14 && is_chassis_resident("cr-down_link")), action=(eth.dst = eth.src; eth.src = xreg0[[0..47]]; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = xreg0[[0..47]]; arp.tpa <-> arp.spa; outport = inport; flags.loopback = 1; output;)
+  table=??(lr_in_ip_input     ), priority=92   , match=(inport == "down_link" && ip6.dst == {aef0::200:ff:fe00:4, ff02::1:ff00:4} && nd_ns && nd.target == aef0::200:ff:fe00:4 && is_chassis_resident("cr-down_link")), action=(nd_na { eth.src = xreg0[[0..47]]; ip6.src = nd.target; nd.tll = xreg0[[0..47]]; outport = inport; flags.loopback = 1; output; };)
+  table=??(lr_in_ip_input     ), priority=92   , match=(inport == "down_link" && ip6.dst == {fd12::2, ff02::1:ff00:2} && nd_ns && nd.target == fd12::2 && is_chassis_resident("private_vif1_ipv6")), action=(nd_na { eth.src = f0:00:00:00:00:06; ip6.src = nd.target; nd.tll = f0:00:00:00:00:06; outport = inport; flags.loopback = 1; output; };)
+  table=??(lr_in_ip_input     ), priority=92   , match=(inport == "down_link" && ip6.dst == {fd12::3, ff02::1:ff00:3} && nd_ns && nd.target == fd12::3 && is_chassis_resident("cr-down_link")), action=(nd_na { eth.src = xreg0[[0..47]]; ip6.src = nd.target; nd.tll = xreg0[[0..47]]; outport = inport; flags.loopback = 1; output; };)
+])
+
+# Add one more dgp port: check drop flow.
+check ovn-nbctl lrp-add lr2 down_link_lr2 f0:00:00:00:00:f8 192.168.1.8/24 aef0::200:ff:fe00:8
+check ovn-nbctl lrp-set-gateway-chassis down_link_lr2 hv2
+check ovn-nbctl lsp-add-router-port ls1 up_link_lr2 down_link_lr2
+check ovn-nbctl --wait=sb sync
+
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep 'ls_in_l2_lkup' | grep 'priority=73' | \
+    grep -F 'flags.localnet == 1' | \
+    grep -F 'arp.op == 1' | \
+    grep -F 'is_chassis_resident("cr-down_link_lr2")' | \
+    grep -F 'is_chassis_resident("cr-down_link")' | \
+    grep -F 'action=(drop;)' | wc -l], [0], [1
+])
+
+# Create a second DGP on the router and verify that ls_in_l2_lkup
+# selects the correct CR port. Traffic destined for router-connected
+# subnets should use the DGP in the corresponding subnet, while
+# NATed traffic should use the DGP specified by the NAT rule.
+# Routing remains distributed with multiple DGPs present.
+check ovn-nbctl lrp-add lr1 lrp-gw2 f0:00:00:00:00:f1 11.11.11.1/24 aeff::200:ff:fe00:3/64
+check ovn-nbctl lrp-set-gateway-chassis lrp-gw2 hv2
+
+lrp_uuid=$(fetch_column nb:logical_router_port _uuid name=lrp-gw2)
+uuid=$(fetch_column nb:nat _uuid external_ip=10.10.10.13)
+check ovn-nbctl set nat $uuid gateway_port=$lrp_uuid
+uuid=$(fetch_column nb:nat _uuid external_ip='"fd12::3"')
+check ovn-nbctl set nat $uuid gateway_port=$lrp_uuid
+check ovn-nbctl --wait=sb sync
+
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep 'ls_in_l2_lkup' | grep -E 'priority=80|priority=90'| ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.1 && ((flags.localnet == 1 && is_chassis_resident("cr-down_link")) || flags.localnet == 0)), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.14 && ((flags.localnet == 1 && is_chassis_resident("cr-down_link")) || flags.localnet == 0)), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.8 && ((flags.localnet == 1 && is_chassis_resident("cr-down_link_lr2")) || flags.localnet == 0)), action=(clone {outport = "up_link_lr2"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == aef0::200:ff:fe00:3), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == aef0::200:ff:fe00:4), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == aef0::200:ff:fe00:8), action=(clone {outport = "up_link_lr2"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == fe80::f200:ff:fe00:f1), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == fe80::f200:ff:fe00:f8), action=(clone {outport = "up_link_lr2"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.1 && arp.spa == 192.168.1.1 && ((flags.localnet == 1 && is_chassis_resident("cr-down_link")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.14 && arp.spa == 192.168.1.14 && ((flags.localnet == 1 && is_chassis_resident("cr-down_link")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.8 && arp.spa == 192.168.1.8 && ((flags.localnet == 1 && is_chassis_resident("cr-down_link_lr2")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+])
+
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep 'ls_in_l2_lkup' | grep priority=73 | grep flags.localnet | grep -F 'is_chassis_resident("cr-down_link_lr2")' | grep -F 'is_chassis_resident("cr-down_link")' | grep drop], [0], [ignore])
+
+# Delete the localnet port. This should cause routing for up_link_lr2 to become centralized, while up_link routing remains distributed.
+check ovn-nbctl lsp-del localnet
+check ovn-nbctl --wait=sb sync
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep 'ls_in_l2_lkup' | grep -E 'priority=80|priority=90'| grep flags.localnet | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.1 && ((flags.localnet == 1 && is_chassis_resident("cr-down_link")) || flags.localnet == 0)), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.14 && ((flags.localnet == 1 && is_chassis_resident("cr-down_link")) || flags.localnet == 0)), action=(clone {outport = "up_link"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.1 && arp.spa == 192.168.1.1 && ((flags.localnet == 1 && is_chassis_resident("cr-down_link")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.14 && arp.spa == 192.168.1.14 && ((flags.localnet == 1 && is_chassis_resident("cr-down_link")) || flags.localnet == 0)), action=(outport = "_MC_flood_l2"; output;)
+])
+
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep 'ls_in_l2_lkup' | grep priority=73 | grep flags.localnet | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_l2_lkup      ), priority=73   , match=(flags.localnet == 1 && arp.op == 1 && !is_chassis_resident("cr-down_link")), action=(drop;)
+])
+
+AT_CHECK([ovn-sbctl lflow-list ls1 | grep 'ls_in_l2_lkup' | grep -E 'priority=75|priority=80|priority=90'| grep -E 'aef0::200:ff:fe00:8|192.168.1.8' | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.8 && !is_chassis_resident("cr-up_link_lr2")), action=(clone {outport = "cr-up_link_lr2"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.8 && is_chassis_resident("cr-up_link_lr2")), action=(clone {outport = "up_link_lr2"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == aef0::200:ff:fe00:8 && !is_chassis_resident("cr-up_link_lr2")), action=(clone {outport = "cr-up_link_lr2"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=80   , match=(flags[[1]] == 0 && eth.mcast && nd_ns && nd.target == aef0::200:ff:fe00:8 && is_chassis_resident("cr-up_link_lr2")), action=(clone {outport = "up_link_lr2"; output; }; outport = "_MC_unknown"; output;)
+  table=??(ls_in_l2_lkup      ), priority=90   , match=(flags[[1]] == 0 && eth.dst == ff:ff:ff:ff:ff:ff && arp.op == 1 && arp.tpa == 192.168.1.8 && arp.spa == 192.168.1.8), action=(outport = "_MC_flood_l2"; output;)
+])
 
 OVN_CLEANUP_NORTHD
 AT_CLEANUP

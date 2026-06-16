@@ -22417,24 +22417,13 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
-AT_SETUP([VIF port connected to localnet network])
-#
-# Topology:
-#    (fabric) -- localnet-port -- LS --- DGP(chassis2) -- LR
-#                                 |
-#                                 |
-#                               VM (chassis1)
-#
-# It is expected that ARP requests to this port are allowed on the chassis that hosts this port.
-
+AT_SETUP([ARP restrictions: GARPs and ARP/ND to router ips centralized and distributed routing])
 ovn_start
 OVS_TRAFFIC_VSWITCHD_START()
 ADD_BR([br-int])
-ADD_BR([br-ext])
+ADD_BR([br-ext], [set Bridge br-ext fail-mode=standalone])
 
-ovs-ofctl add-flow br-ext action=normal
-# Set external-ids in br-int needed for ovn-controller
-ovs-vsctl \
+check ovs-vsctl \
         -- set Open_vSwitch . external-ids:system-id=hv1 \
         -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
         -- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
@@ -22442,43 +22431,164 @@ ovs-vsctl \
         -- set Open_vSwitch . external-ids:ovn-bridge-mappings=phynet:br-ext \
         -- set bridge br-int fail-mode=secure other-config:disable-in-band=true
 
-# Start ovn-controller
 start_daemon ovn-controller
 
 check ovn-nbctl lr-add lr1
-check ovn-nbctl ls-add public
+check ovn-nbctl lrp-add lr1 lr1-outside f0:00:00:00:00:f1 192.168.0.1/24 2001:db8::1/64
+check ovn-nbctl lrp-add lr1 lr1-private f0:00:00:00:00:f2 172.31.0.1/24 2002:db8::1/64
 
-check ovn-nbctl lrp-add lr1 rp-public 00:00:02:01:02:03 172.31.1.1/24
-check ovn-nbctl lsp-add-router-port public public-rp rp-public
-check ovn-nbctl lsp-add-localnet-port public localnet phynet
-check ovn-nbctl lrp-set-gateway-chassis rp-public hv2
+check ovn-nbctl ls-add outside
+check ovn-nbctl ls-add private
 
-ADD_NAMESPACES(ext)
-ADD_VETH(ext, ext, br-ext, "172.31.1.2/24", "f0:00:00:01:02:02", \
-         "172.31.1.1")
-ADD_NAMESPACES(lsp1)
-ADD_VETH(lsp1, lsp1, br-int, "172.31.1.3/24", "f0:00:00:01:02:03", \
-         "172.31.1.1")
-ADD_NAMESPACES(lsp2)
-ADD_VETH(lsp2, lsp2, br-int, "172.31.1.4/24", "f0:00:00:01:02:04", \
-         "172.31.1.1")
+check ovn-nbctl lsp-add-router-port outside outside-lr1 lr1-outside
+check ovn-nbctl lsp-add-router-port private private-lr1 lr1-private
 
-check ovn-nbctl lsp-add public lsp1
-check ovn-nbctl lsp-set-addresses lsp1 "f0:00:00:01:02:03 172.31.1.3"
-check ovn-nbctl lsp-add public lsp2
-check ovn-nbctl lsp-set-addresses lsp2 "f0:00:00:01:02:04 172.31.1.4"
+check ovn-nbctl lsp-add outside outside_vif
+check ovn-nbctl lsp-add private private_vif
+check ovn-nbctl lsp-add private private_nat
+
+check ovn-nbctl lsp-set-addresses outside_vif "02:ac:10:01:01:03 192.168.0.3 2001:db8::3"
+ADD_NAMESPACES(outside_vif)
+ADD_VETH(outside_vif, outside_vif, br-int, "2001:db8::3/64", "02:ac:10:01:01:03", \
+         "2001:db8::1", "nodad", "192.168.0.3/24", "192.168.0.1")
+
+check ovn-nbctl lsp-set-addresses private_vif "02:ac:10:01:02:03 172.31.0.3 2002:db8::3"
+ADD_NAMESPACES(private_vif)
+ADD_VETH(private_vif, private_vif, br-int, "2002:db8::3/64", "02:ac:10:01:02:03", \
+         "2002:db8::1", "nodad", "172.31.0.3/24", "172.31.0.1")
+
+check ovn-nbctl lsp-set-addresses private_nat "02:ac:10:01:02:04 172.31.0.4 2002:db8::4"
+ADD_NAMESPACES(private_nat)
+ADD_VETH(private_nat, private_nat, br-int, "2002:db8::4/64", "02:ac:10:01:02:04", \
+         "2002:db8::1", "nodad", "172.31.0.4/24", "172.31.0.1")
+
+check ovn-nbctl lr-nat-add lr1 dnat_and_snat 10.10.10.1 172.31.0.3 private_nat f0:00:00:00:00:07
+check ovn-nbctl lr-nat-add lr1 dnat_and_snat 10.10.10.2 172.31.0.4
+check ovn-nbctl lr-nat-add lr1 dnat_and_snat fd12::1 2002:db8::3 private_nat f0:00:00:00:00:07
+check ovn-nbctl lr-nat-add lr1 dnat_and_snat fd12::2 2002:db8::4
+
+check ovn-nbctl lrp-set-gateway-chassis lr1-outside hv1
+check ovn-nbctl lsp-add-localnet-port outside localnet phynet
+
+ADD_NAMESPACES(external)
+ADD_VETH(external, external, br-ext, "2001:db8::2/64", "02:ac:10:01:01:02", \
+         "2001:db8::1", "nodad", "192.168.0.2/24", "192.168.0.1")
+
+OVN_POPULATE_ARP
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+
+NS_CHECK_EXEC([external], [arping -f -c 3 -I external 192.168.0.1 | FORMAT_ARPING], [0],
+[dnl
+192.168.0.1 F0:00:00:00:00:F1
+])
+NS_CHECK_EXEC([external], [arping -f -c 3 -I external 192.168.0.3 | FORMAT_ARPING], [0],
+[dnl
+192.168.0.3 02:AC:10:01:01:03
+])
+NS_CHECK_EXEC([external], [arping -f -c 3 -I external 10.10.10.1 | FORMAT_ARPING], [0],
+[dnl
+10.10.10.1 F0:00:00:00:00:07
+])
+NS_CHECK_EXEC([external], [arping -f -c 3 -I external 10.10.10.2 | FORMAT_ARPING], [0],
+[dnl
+10.10.10.2 F0:00:00:00:00:F1
+])
+
+NS_CHECK_EXEC([external], [ping6 -q -c 3 -i 0.3 -w 2 2001:db8::1 | FORMAT_PING], [0],
+[dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+NS_CHECK_EXEC([external], [ping6 -q -c 3 -i 0.3 -w 2 2001:db8::3 | FORMAT_PING], [0],
+[dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+NS_CHECK_EXEC([external], [ping6 -q -c 3 -i 0.3 -w 2 fd12::1 | FORMAT_PING], [0],
+[dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+NS_CHECK_EXEC([external], [ping6 -q -c 3 -i 0.3 -w 2 fd12::2 | FORMAT_PING], [0],
+[dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+wait_row_count MAC_Binding 1 logical_port=lr1-outside ip=192.168.0.2 mac="02\:ac\:10\:01\:01\:02"
+wait_row_count MAC_Binding 1 logical_port=lr1-outside ip='"2001:db8::2"' mac="02\:ac\:10\:01\:01\:02"
+
+# sending garp announcements
+NS_CHECK_EXEC([external], [ip addr del 192.168.0.2/24 dev external;
+                           ip addr add 192.168.0.34/24 dev external;
+                           ip route add default via 192.168.0.1])
+NS_CHECK_EXEC([external], [arping -U -c 1 -I external -s 192.168.0.34 192.168.0.34 >/dev/null 2>&1], [0])
+
+wait_row_count MAC_Binding 1 logical_port=lr1-outside ip=192.168.0.34 mac="02\:ac\:10\:01\:01\:02"
+
+# Change ha to a non-existent one - connectivity should be successful only to distributed nat and external_vif
+check ovn-nbctl clear logical_router_port lr1-outside gateway_chassis
+check ovn-nbctl lrp-set-gateway-chassis lr1-outside hv2
+check ovn-nbctl --wait=hv sync
+
+NS_CHECK_EXEC([external], [ip neigh flush dev external], [0])
+NS_CHECK_EXEC([external], [ip -6 neigh flush dev external], [0])
+
+NS_CHECK_EXEC([external], [arping -f -c 3 -I external 192.168.0.1 >/dev/null 2>&1], [1])
+NS_CHECK_EXEC([external], [ping6 -q -c 3 -i 0.3 -w 2 2001:db8::1 >/dev/null 2>&1], [1])
+NS_CHECK_EXEC([external], [arping -f -c 3 -I external 10.10.10.2 >/dev/null 2>&1], [1])
+NS_CHECK_EXEC([external], [ping6 -q -c 3 -i 0.3 -w 2 fd12::2 >/dev/null 2>&1], [1])
+NS_CHECK_EXEC([external], [arping -f -c 3 -I external 10.10.10.1  >/dev/null 2>&1], [0])
+NS_CHECK_EXEC([external], [arping -f -c 3 -I external 192.168.0.3  >/dev/null 2>&1], [0])
+
+# sending garp announcements - must be unsuccessful
+NS_CHECK_EXEC([external], [ip addr del 192.168.0.34/24 dev external;
+                           ip addr add 192.168.0.35/24 dev external;
+                           ip route add default via 192.168.0.1])
+NS_CHECK_EXEC([external], [arping -U -c 1 -I external -s 192.168.0.35 192.168.0.35 >/dev/null 2>&1], [0])
+
+wait_row_count MAC_Binding 0 logical_port=lr1-outside ip=192.168.0.35
+
+# Check centralized routing: delete localnet port, check connetivity from outside_vif
+# For a full check, another physical chassis is needed, so this test only checks when the port and HA are on the same host
+check ovn-nbctl lrp-set-gateway-chassis lr1-outside hv1
+check ovn-nbctl lsp-del localnet
 
 check ovn-nbctl --wait=hv sync
 
-NS_CHECK_EXEC([ext], [ping -q -c 3 -i 0.3 -w 2 172.31.1.3 | FORMAT_PING], \
-[0], [dnl
+NS_CHECK_EXEC([outside_vif], [arping -f -c 3 -I outside_vif 192.168.0.1 | FORMAT_ARPING], [0],
+[dnl
+192.168.0.1 F0:00:00:00:00:F1
+])
+NS_CHECK_EXEC([outside_vif], [arping -f -c 3 -I outside_vif 10.10.10.1 | FORMAT_ARPING], [0],
+[dnl
+10.10.10.1 F0:00:00:00:00:F1
+])
+NS_CHECK_EXEC([outside_vif], [arping -f -c 3 -I outside_vif 10.10.10.2 | FORMAT_ARPING], [0],
+[dnl
+10.10.10.2 F0:00:00:00:00:F1
+])
+
+NS_CHECK_EXEC([outside_vif], [ping6 -q -c 3 -i 0.3 -w 2 2001:db8::1 | FORMAT_PING], [0],
+[dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+NS_CHECK_EXEC([outside_vif], [ping6 -q -c 3 -i 0.3 -w 2 fd12::1 | FORMAT_PING], [0],
+[dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+NS_CHECK_EXEC([outside_vif], [ping6 -q -c 3 -i 0.3 -w 2 fd12::2 | FORMAT_PING], [0],
+[dnl
 3 packets transmitted, 3 received, 0% packet loss, time 0ms
 ])
 
-NS_CHECK_EXEC([lsp1], [ping -q -c 3 -i 0.3 -w 2 172.31.1.4 | FORMAT_PING], \
-[0], [dnl
-3 packets transmitted, 3 received, 0% packet loss, time 0ms
-])
+# A GARP from a VIF of that switch still has to be learnt: VIF traffic has
+# flags.localnet == 0 and is not subject to the localnet restrictions.
+check ovn-nbctl clear logical_router_port lr1-outside gateway_chassis
+check ovn-nbctl lrp-set-gateway-chassis lr1-outside hv2
+check ovn-nbctl lsp-add-localnet-port outside localnet phynet
+check ovn-nbctl --wait=hv sync
+
+NS_CHECK_EXEC([outside_vif], [ip addr add 192.168.0.44/24 dev outside_vif])
+NS_CHECK_EXEC([outside_vif], [arping -U -c 1 -I outside_vif -s 192.168.0.44 192.168.0.44 >/dev/null 2>&1], [0])
+wait_row_count MAC_Binding 1 logical_port=lr1-outside ip=192.168.0.44 mac="02\:ac\:10\:01\:01\:03"
 
 OVN_CLEANUP_CONTROLLER([hv1])
 OVN_CLEANUP_NORTHD
