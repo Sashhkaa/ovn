@@ -1290,6 +1290,12 @@ lsp_is_vtep(const struct nbrec_logical_switch_port *nbsp)
     return !strcmp(nbsp->type, "vtep");
 }
 
+static inline bool
+lsp_is_l2gw(const struct nbrec_logical_switch_port *nbsp)
+{
+    return !strcmp(nbsp->type, "l2gateway");
+}
+
 static bool
 localnet_can_learn_mac(const struct nbrec_logical_switch_port *nbsp)
 {
@@ -9616,132 +9622,254 @@ lrouter_port_ipv6_reachable(const struct ovn_port *op,
     return false;
 }
 
-/*
- * Ingress table 30: Flows that forward ARP/ND requests only to the routers
- * that own the addresses. Other ARP/ND packets are still flooded in the
- * switching domain as regular broadcast.
- */
+static inline void
+build_lswitch_rport_arp_forward_action(const char *port_name,
+                                       bool has_non_router_ports,
+                                       struct ds *actions)
+{
+    if (has_non_router_ports) {
+        ds_put_format(actions, "clone {outport = %s; output; }; "
+                                "outport = \""MC_UNKNOWN"\"; output;",
+                      port_name);
+    } else {
+        ds_put_format(actions, "outport = %s; output;", port_name);
+    }
+}
+
+static inline void
+build_distributed_routing_arp_restrictions(
+    const struct ovn_port *op,
+    const char *nat_port,
+    struct ds *match)
+{
+    const char *crp_key = nat_port
+                          ? nat_port
+                          : op->peer->cr_port->json_key;
+    ds_put_format(match,
+                  " && " LOCALNET_CHASSIS_RESIDENT_MATCH,
+                  crp_key);
+}
+
 static void
-build_lswitch_rport_arp_req_flow(
-    const char *ips, int addr_family, struct ovn_port *patch_op,
-    const struct ovn_datapath *od, uint32_t priority,
-    struct lflow_table *lflows, const struct ovsdb_idl_row *stage_hint,
+build_lswitch_rport_garp_flow(const char *arp_ip,
+                              const struct ovn_port *switch_op,
+                              const char *nat_port,
+                              bool distributed_routing,
+                              struct ds *arp_nd_base_match,
+                              struct lflow_table *lflows,
+                              struct lflow_ref *lflow_ref)
+{
+    struct ds match = DS_EMPTY_INITIALIZER;
+
+    ds_clone(&match, arp_nd_base_match);
+    ds_put_format(&match, " && arp.spa == %s", arp_ip);
+    if (distributed_routing) {
+        build_distributed_routing_arp_restrictions(switch_op,
+                                                   nat_port,
+                                                   &match);
+    }
+    ovn_lflow_add(lflows, switch_op->od, S_SWITCH_IN_L2_LKUP, 90,
+                  ds_cstr(&match),
+                  "outport = \""MC_FLOOD_L2"\"; output;",
+                  lflow_ref, WITH_HINT(&switch_op->nbsp->header_));
+
+    ds_destroy(&match);
+}
+
+static void
+buils_lswitch_rport_arp_req_flow_centralized_routing(
+    struct ovn_port *op, bool has_non_router_ports,
+    struct ds *arp_nd_base_match, struct lflow_table *lflows,
     struct lflow_ref *lflow_ref)
 {
-    struct ds match   = DS_EMPTY_INITIALIZER;
-    struct ds m       = DS_EMPTY_INITIALIZER;
-    struct ds m_garp  = DS_EMPTY_INITIALIZER;
     struct ds actions = DS_EMPTY_INITIALIZER;
+    struct ds match = DS_EMPTY_INITIALIZER;
 
-    arp_nd_ns_match(ips, addr_family, &m);
-    ds_clone(&match, &m);
+    ds_put_format(&match, "%s && is_chassis_resident(%s)",
+                  ds_cstr(arp_nd_base_match), op->cr_port->json_key);
+    build_lswitch_rport_arp_forward_action(op->json_key,
+                                           has_non_router_ports,
+                                           &actions);
+    ovn_lflow_add(lflows, op->od, S_SWITCH_IN_L2_LKUP, 80,
+                  ds_cstr(&match), ds_cstr(&actions), lflow_ref,
+                  WITH_HINT(&op->nbsp->header_));
+    ds_clear(&match);
+    ds_put_format(&match, "%s && !is_chassis_resident(%s)",
+                  ds_cstr(arp_nd_base_match), op->cr_port->json_key);
+    ds_clear(&actions);
+    build_lswitch_rport_arp_forward_action(op->cr_port->json_key,
+                                           has_non_router_ports,
+                                           &actions);
+    ovn_lflow_add(lflows, op->od, S_SWITCH_IN_L2_LKUP, 80,
+                  ds_cstr(&match), ds_cstr(&actions), lflow_ref,
+                  WITH_HINT(&op->nbsp->header_));
 
-    bool has_cr_port = patch_op->cr_port;
-
-    /* If the patch_op has a chassis resident port, it means
-     *    - its peer is a distributed gateway port (DGP) and
-     *    - routing is centralized for the DGP's networks on
-     *      the configured gateway chassis.
-     *
-     * If that's the case, make sure that the packets destined to
-     * the DGP's MAC are sent to the chassis where the DGP resides.
-     * */
-
-    if (has_cr_port) {
-        ds_put_format(&match, " && is_chassis_resident(%s)",
-                      patch_op->cr_port->json_key);
-    }
-
-    if (addr_family == AF_INET) {
-        ds_clone(&m_garp, &m);
-        ds_put_format(&m_garp, " && arp.spa == %s", ips);
-    }
-
-    /* Send a the packet to the router pipeline.  If the switch has non-router
-     * ports then flood it there as well.
-     */
-    if (vector_len(&od->router_ports) != od->nbs->n_ports) {
-        ds_put_format(&actions, "clone {outport = %s; output; }; "
-                                "outport = \""MC_UNKNOWN"\"; output;",
-                      patch_op->json_key);
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, priority,
-                      ds_cstr(&match), ds_cstr(&actions), lflow_ref,
-                      WITH_HINT(stage_hint));
-        if (addr_family == AF_INET) {
-            ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, priority + 10,
-                          ds_cstr(&m_garp),
-                          "outport = \""MC_FLOOD_L2"\"; output;",
-                          lflow_ref, WITH_HINT(stage_hint));
-        }
-    } else {
-        ds_put_format(&actions, "outport = %s; output;", patch_op->json_key);
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, priority,
-                      ds_cstr(&match), ds_cstr(&actions), lflow_ref,
-                      WITH_HINT(stage_hint));
-    }
-
-    if (has_cr_port) {
-        ds_clear(&match);
-        ds_put_format(&match, "%s && !is_chassis_resident(%s)", ds_cstr(&m),
-                      patch_op->cr_port->json_key);
-        ds_clear(&actions);
-        if (vector_len(&od->router_ports) != od->nbs->n_ports) {
-            ds_put_format(&actions, "clone {outport = %s; output; }; "
-                                    "outport = \""MC_UNKNOWN"\"; output;",
-                          patch_op->cr_port->json_key);
-            ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, priority,
-                          ds_cstr(&match), ds_cstr(&actions), lflow_ref,
-                          WITH_HINT(stage_hint));
-        } else {
-            ds_put_format(&actions, "outport = %s; output;",
-                          patch_op->cr_port->json_key);
-            ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, priority,
-                          ds_cstr(&match), ds_cstr(&actions), lflow_ref,
-                          WITH_HINT(stage_hint));
-        }
-    }
-
-    ds_destroy(&m);
     ds_destroy(&match);
-    ds_destroy(&m_garp);
+    ds_destroy(&actions);
+}
+
+static void
+buils_lswitch_rport_arp_req_flow_distributed_routing(
+    struct ovn_port *op, const char *nat_port,
+    bool has_non_router_ports, struct ds *arp_nd_base_match,
+    struct lflow_table *lflows, struct lflow_ref *lflow_ref)
+{
+    struct ds actions = DS_EMPTY_INITIALIZER;
+    struct ds match = DS_EMPTY_INITIALIZER;
+
+    ds_clone(&match, arp_nd_base_match);
+    build_distributed_routing_arp_restrictions(op, nat_port, &match);
+    build_lswitch_rport_arp_forward_action(op->json_key,
+                                           has_non_router_ports,
+                                           &actions);
+    ovn_lflow_add(lflows, op->od, S_SWITCH_IN_L2_LKUP, 80,
+                  ds_cstr(&match), ds_cstr(&actions), lflow_ref,
+                  WITH_HINT(&op->nbsp->header_));
+
+    ds_destroy(&match);
+    ds_destroy(&actions);
+}
+
+static void
+build_lswitch_rport_arp_req_flow_default_routing(
+    struct ovn_port *op, bool switch_non_router_ports,
+    struct ds *arp_nd_base_match, struct lflow_table *lflows,
+    struct lflow_ref *lflow_ref)
+{
+    struct ds actions = DS_EMPTY_INITIALIZER;
+    struct ds match   = DS_EMPTY_INITIALIZER;
+
+    ds_put_format(&match, "%s", ds_cstr(arp_nd_base_match));
+    build_lswitch_rport_arp_forward_action(op->json_key,
+                                           switch_non_router_ports,
+                                           &actions);
+    ovn_lflow_add(lflows, op->od, S_SWITCH_IN_L2_LKUP, 80,
+                  ds_cstr(&match), ds_cstr(&actions), lflow_ref,
+                  WITH_HINT(&op->nbsp->header_));
+
+    ds_destroy(&match);
     ds_destroy(&actions);
 }
 
 /*
- * Ingress table 30: Flows that forward ARP/ND requests only to the routers
- * that own the addresses.
- * Priorities:
- * - 80: self originated GARPs that need to follow regular processing.
- * - 75: ARP requests to router owned IPs (interface IP/LB/NAT).
+ * Ingress table IN_L2_LKUP:
+ *
+ * This table contains flows that forward ARP/ND requests only to the
+ * router instances that own the corresponding addresses.
+ *
+ * Other ARP/ND packets are still flooded within the switching domain
+ * as regular broadcast traffic, subject to the rules described below.
+ *
+ * If a switch has physical ports (localnet/l2gateway) and a router port
+ * is associated with a chassisredirect (cr-port), routing is no longer
+ * strictly centralized on a single router chassis.
+ * Instead, routing may occur on all chassis, subject to the following rules:
+ *
+ * 1) Packets from localnet ports addressed to router-owned IPs:
+ *    ARP/ND requests are allowed only on the HA (gateway) chassis.
+ *
+ * 2) Packets from localnet ports addressed to switch ports:
+ *    ARP/ND requests are allowed only on the chassis where the target
+ *    logical port resides.
+ *
+ *    (Implemented in build_lswitch_arp_nd_local_resp_match.)
+ *
+ * 3) Packets addressed to a distributed NAT IP:
+ *    ARP/ND requests are allowed only on the chassis where the logical
+ *    port owning the corresponding private IP is bound.
+ *
+ * 4) No restrictions are imposed on internal ARP/ND traffic.
+ *
+ * 5) All other packets are dropped. For arp packets - they are dropped
+ *    in switch pipeline, for ND packets - they are dropped on router.
+ *
+ * ----------------------------------------------------------------------
+ *
+ * If the switch has no physical (localnet/l2gateway) ports, routing is
+ * centralized on the HA chassis:
+ *
+ * 1) Packets arriving on the HA chassis are delivered directly to the
+ *    router port and flooded to unknown multicast group.
+ *
+ * 2) Packets arriving on non-HA chassis are forwarded to the HA chassis
+ *    via the chassisredirect (cr-port) and unknown multicast group.
+ *
+ * ----------------------------------------------------------------------
+ *
+ * In the default routing mode (when no router port has a cr-port),
+ * packets are simply forwarded directly to the router port and
+ * flooded to unknown multicast group.
  */
 static void
-build_lswitch_rport_arp_req_flows(struct ovn_port *op,
-                                  struct ovn_datapath *sw_od,
-                                  struct ovn_port *sw_op,
-                                  struct lflow_table *lflows,
-                                  const struct ovsdb_idl_row *stage_hint)
+build_lswitch_rport_arp_req_flow(const char *arp_ip,
+                                 int addr_family,
+                                 struct ovn_port *switch_op,
+                                 const char *nat_port,
+                                 struct lflow_table *lflows,
+                                 struct lflow_ref *lflow_ref)
 {
-    if (!op || !op->nbrp) {
-        return;
+    struct ds arp_nd_base_match = DS_EMPTY_INITIALIZER;
+    bool peer_has_cr_port = switch_op->peer && switch_op->peer->cr_port;
+    bool is_centralized_routing =
+        is_peer_router_with_centralized_routing(switch_op);
+    bool distributed_routing = peer_has_cr_port &&
+                               !is_centralized_routing &&
+                               addr_family == AF_INET;
+    bool switch_non_router_ports = vector_len(&switch_op->od->router_ports)
+                                   != switch_op->od->nbs->n_ports;
+
+    arp_nd_ns_match(arp_ip, addr_family, &arp_nd_base_match);
+
+    if (is_centralized_routing) {
+        buils_lswitch_rport_arp_req_flow_centralized_routing(
+            switch_op, switch_non_router_ports, &arp_nd_base_match,
+            lflows, lflow_ref);
+    } else if (distributed_routing) {
+        buils_lswitch_rport_arp_req_flow_distributed_routing(
+            switch_op, nat_port, switch_non_router_ports,
+            &arp_nd_base_match, lflows, lflow_ref);
+    } else {
+        build_lswitch_rport_arp_req_flow_default_routing(
+            switch_op, switch_non_router_ports, &arp_nd_base_match,
+            lflows, lflow_ref);
     }
 
-    if (!lrport_is_enabled(op->nbrp)) {
-        return;
-    }
-
-    /* Forward ARP requests for owned IP addresses (L3, VIP, NAT) only to this
-     * router port.
-     * Priority: 80.
+    /* For IPv4, also add a GARP flow at higher priority so that
+     * self-originated GARPs are flooded to the entire L2 domain.
+     * Only needed when there are non-router ports.
      */
-    for (size_t i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
-        build_lswitch_rport_arp_req_flow(
-            op->lrp_networks.ipv4_addrs[i].addr_s, AF_INET, sw_op, sw_od, 80,
-            lflows, stage_hint, sw_op->lflow_ref);
+    if (addr_family == AF_INET && switch_non_router_ports) {
+        build_lswitch_rport_garp_flow(arp_ip, switch_op, nat_port,
+                                      distributed_routing,
+                                      &arp_nd_base_match,
+                                      lflows, lflow_ref);
     }
-    for (size_t i = 0; i < op->lrp_networks.n_ipv6_addrs; i++) {
+
+    ds_destroy(&arp_nd_base_match);
+}
+
+static void
+build_lswitch_rport_arp_req_flows(struct ovn_port *router_op,
+                                  struct ovn_port *switch_op,
+                                  struct lflow_table *lflows)
+{
+    if (!router_op || !router_op->nbrp) {
+        return;
+    }
+
+    if (!lrport_is_enabled(router_op->nbrp)) {
+        return;
+    }
+
+    for (size_t i = 0; i < router_op->lrp_networks.n_ipv4_addrs; i++) {
         build_lswitch_rport_arp_req_flow(
-            op->lrp_networks.ipv6_addrs[i].addr_s, AF_INET6, sw_op, sw_od, 80,
-            lflows, stage_hint, sw_op->lflow_ref);
+            router_op->lrp_networks.ipv4_addrs[i].addr_s, AF_INET, switch_op,
+            NULL, lflows, switch_op->lflow_ref);
+    }
+    for (size_t i = 0; i < router_op->lrp_networks.n_ipv6_addrs; i++) {
+        build_lswitch_rport_arp_req_flow(
+            router_op->lrp_networks.ipv6_addrs[i].addr_s, AF_INET6, switch_op,
+            NULL,  lflows, switch_op->lflow_ref);
     }
 }
 
@@ -9756,8 +9884,7 @@ static void
 build_lswitch_rport_arp_req_flows_for_lbnats(
     struct ovn_port *op, const struct lr_stateful_record *lr_stateful_rec,
     const struct ovn_datapath *sw_od, struct ovn_port *sw_op,
-    struct lflow_table *lflows, const struct ovsdb_idl_row *stage_hint,
-    struct lflow_ref *lflow_ref)
+    struct lflow_table *lflows, struct lflow_ref *lflow_ref)
 {
     if (!op || !op->nbrp) {
         return;
@@ -9784,9 +9911,8 @@ build_lswitch_rport_arp_req_flows_for_lbnats(
              */
             if (ip_parse(ip_addr, &ipv4_addr) &&
                 lrouter_port_ipv4_reachable(op, ipv4_addr)) {
-                build_lswitch_rport_arp_req_flow(
-                    ip_addr, AF_INET, sw_op, sw_od, 80, lflows,
-                    stage_hint, lflow_ref);
+                build_lswitch_rport_arp_req_flow(ip_addr, AF_INET, sw_op,
+                                                 NULL, lflows, lflow_ref);
             }
         }
         SSET_FOR_EACH (ip_addr, &lr_stateful_rec->lb_ips->ips_v6_reachable) {
@@ -9797,9 +9923,8 @@ build_lswitch_rport_arp_req_flows_for_lbnats(
              */
             if (ipv6_parse(ip_addr, &ipv6_addr) &&
                 lrouter_port_ipv6_reachable(op, &ipv6_addr)) {
-                build_lswitch_rport_arp_req_flow(
-                    ip_addr, AF_INET6, sw_op, sw_od, 80, lflows,
-                    stage_hint, lflow_ref);
+                build_lswitch_rport_arp_req_flow(ip_addr, AF_INET6, sw_op,
+                                                 NULL, lflows, lflow_ref);
             }
         }
     }
@@ -9830,23 +9955,37 @@ build_lswitch_rport_arp_req_flows_for_lbnats(
             continue;
         }
 
+        struct ds json_key = DS_EMPTY_INITIALIZER;
+        char *nat_logical_port;
+        if (nat_entry->is_distributed) {
+            json_string_escape(nat->logical_port, &json_key);
+            nat_logical_port = ds_steal_cstr(&json_key);
+        } else if (nat_entry->l3dgw_port) {
+           nat_logical_port = nat_entry->l3dgw_port->cr_port->json_key;
+        } else {
+            nat_logical_port = NULL;
+        }
+
         /* Check if the ovn port has a network configured on which we could
          * expect ARP requests/NS for the DNAT external_ip.
          */
         if (nat_entry_is_v6(nat_entry)) {
             if (!sset_contains(&lr_stateful_rec->lb_ips->ips_v6,
                                nat->external_ip)) {
-                build_lswitch_rport_arp_req_flow(
-                    nat->external_ip, AF_INET6, sw_op, sw_od, 80, lflows,
-                    stage_hint, lflow_ref);
+                build_lswitch_rport_arp_req_flow(nat->external_ip, AF_INET6,
+                                                 sw_op, nat_logical_port,
+                                                 lflows, lflow_ref);
             }
         } else {
             if (!sset_contains(&lr_stateful_rec->lb_ips->ips_v4,
                                nat->external_ip)) {
-                build_lswitch_rport_arp_req_flow(
-                    nat->external_ip, AF_INET, sw_op, sw_od, 80, lflows,
-                    stage_hint, lflow_ref);
+                build_lswitch_rport_arp_req_flow(nat->external_ip, AF_INET,
+                                                 sw_op, nat_logical_port,
+                                                 lflows, lflow_ref);
             }
+        }
+        if (nat_entry->is_distributed) {
+            free(nat_logical_port);
         }
     }
 
@@ -9869,23 +10008,25 @@ build_lswitch_rport_arp_req_flows_for_lbnats(
         }
 
         const struct nbrec_nat *nat = nat_entry->nb;
-
+        char *nat_logical_port = nat_entry->l3dgw_port ?
+                                 nat_entry->l3dgw_port->cr_port->json_key :
+                                 NULL;
         /* Check if the ovn port has a network configured on which we could
          * expect ARP requests/NS for the SNAT external_ip.
          */
         if (nat_entry_is_v6(nat_entry)) {
             if (!sset_contains(&lr_stateful_rec->lb_ips->ips_v6,
                                nat->external_ip)) {
-                build_lswitch_rport_arp_req_flow(
-                    nat->external_ip, AF_INET6, sw_op, sw_od, 80, lflows,
-                    stage_hint, lflow_ref);
+                build_lswitch_rport_arp_req_flow(nat->external_ip, AF_INET6,
+                                                 sw_op, nat_logical_port,
+                                                 lflows, lflow_ref);
             }
         } else {
             if (!sset_contains(&lr_stateful_rec->lb_ips->ips_v4,
                                nat->external_ip)) {
-                build_lswitch_rport_arp_req_flow(
-                    nat->external_ip, AF_INET, sw_op, sw_od, 80, lflows,
-                    stage_hint, lflow_ref);
+                build_lswitch_rport_arp_req_flow(nat->external_ip, AF_INET,
+                                                 sw_op, nat_logical_port,
+                                                 lflows, lflow_ref);
             }
         }
     }
@@ -10286,6 +10427,58 @@ build_lswitch_lflows_l2_unknown(struct ovn_datapath *od,
                   "output;", lflow_ref);
 }
 
+static void
+build_lswitch_arp_restrictions_default_flows(struct ovn_datapath *od,
+                                             struct lflow_table *lflows,
+                                             struct lflow_ref *lflow_ref)
+{
+    struct sset ha_ports = SSET_INITIALIZER(&ha_ports);
+
+    struct ovn_port *switch_op;
+    VECTOR_FOR_EACH (&od->router_ports, switch_op) {
+        if (is_peer_router_with_centralized_routing(switch_op)) {
+            continue;
+        }
+
+        if (switch_op->peer->cr_port) {
+            sset_add(&ha_ports, switch_op->peer->cr_port->json_key);
+        }
+    }
+
+    if (sset_is_empty(&ha_ports)) {
+        sset_destroy(&ha_ports);
+        return;
+    }
+
+    struct ds match = DS_EMPTY_INITIALIZER;
+    ds_put_cstr(&match, "flags.localnet == 1 && arp.op == 1 && ");
+
+    size_t n_ports = sset_count(&ha_ports);
+    if (n_ports > 1) {
+        ds_put_cstr(&match, "(");
+    }
+
+    const char *cr_port;
+    bool first = true;
+    SSET_FOR_EACH (cr_port, &ha_ports) {
+        if (!first) {
+            ds_put_cstr(&match, " && ");
+        }
+        ds_put_format(&match, "!is_chassis_resident(%s)", cr_port);
+        first = false;
+    }
+
+    if (n_ports > 1) {
+        ds_put_cstr(&match, ")");
+    }
+
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 75,
+                  ds_cstr(&match), "drop;", lflow_ref);
+
+    ds_destroy(&match);
+    sset_destroy(&ha_ports);
+}
+
 /* Build LB, ACL, QOS related flows for logical switch pipeline stages:
  * - Ingress: tables 5-12, 17-19, 23
  * - Egress: tables 2-8, 10-11
@@ -10399,7 +10592,7 @@ build_lswitch_from_localnet_op(struct ovn_port *op,
                                struct ds *match)
 {
     ovs_assert(op->nbsp);
-    if (!lsp_is_localnet(op->nbsp)) {
+    if (!lsp_is_localnet(op->nbsp) && !lsp_is_l2gw(op->nbsp)) {
         return;
     }
     ds_clear(match);
@@ -10422,9 +10615,8 @@ build_lswitch_arp_nd_local_resp_match(struct ds *match,
         return;
     }
 
-    ds_put_format(match,
-        " && ((flags.localnet == 1 && is_chassis_resident(%s))"
-            " || flags.localnet == 0)", op->json_key);
+    ds_put_format(match, " && " LOCALNET_CHASSIS_RESIDENT_MATCH,
+                  op->json_key);
 }
 
 /* Ingress table 24: ARP/ND responder, reply for known IPs.
@@ -11427,8 +11619,7 @@ build_lswitch_ip_unicast_lookup(struct ovn_port *op,
          * broadcast flooding of ARP/ND requests in table 22. We direct the
          * requests only to the router port that owns the IP address.
          */
-        build_lswitch_rport_arp_req_flows(op->peer, op->od, op, lflows,
-                                          &op->nbsp->header_);
+        build_lswitch_rport_arp_req_flows(op->peer, op, lflows);
 
         ds_clear(match);
         if (!eth_addr_is_zero(op->proxy_arp_addrs.ea)) {
@@ -14221,7 +14412,7 @@ build_lrouter_port_nat_arp_nd_flow(struct ovn_port *op,
         return;
     }
 
-    if (op->peer && op->peer->cr_port) {
+    if (is_router_with_centralized_routing(op)) {
         /* We don't add the below flows if the router port's peer has
          * a chassisredirect port.  That's because routing is centralized on
          * the gateway chassis for the router port networks/subnets.
@@ -14735,6 +14926,12 @@ build_gateway_mtu_flow(struct lflow_table *lflows, struct ovn_port *op,
 }
 
 static bool
+l3dgw_port_has_associated_evpn_vni(const struct ovn_port *op)
+{
+    return lrp_is_l3dgw (op) && op->peer && op->peer->od->has_evpn_vni;
+}
+
+static bool
 consider_l3dgw_port_is_centralized(struct ovn_port *op)
 {
     if (!od_is_centralized(op->od)) {
@@ -14742,6 +14939,10 @@ consider_l3dgw_port_is_centralized(struct ovn_port *op)
     }
 
     if (l3dgw_port_has_associated_vtep_lports(op)) {
+        return false;
+    }
+
+    if (l3dgw_port_has_associated_evpn_vni(op)) {
         return false;
     }
 
@@ -14982,10 +15183,6 @@ build_neigh_learning_flows_for_lrouter_port(
                           op->lrp_networks.ipv4_addrs[i].network_s,
                           op->lrp_networks.ipv4_addrs[i].plen,
                           op->lrp_networks.ipv4_addrs[i].addr_s);
-            if (lrp_is_l3dgw(op)) {
-                ds_put_format(match, " && is_chassis_resident(%s)",
-                              op->cr_port->json_key);
-            }
             const char *actions_s = REGBIT_LOOKUP_NEIGHBOR_RESULT
                               " = lookup_arp(inport, arp.spa, arp.sha); "
                               REGBIT_LOOKUP_NEIGHBOR_IP_RESULT" = 1;"
@@ -15000,10 +15197,6 @@ build_neigh_learning_flows_for_lrouter_port(
                       op->json_key,
                       op->lrp_networks.ipv4_addrs[i].network_s,
                       op->lrp_networks.ipv4_addrs[i].plen);
-        if (lrp_is_l3dgw(op)) {
-            ds_put_format(match, " && is_chassis_resident(%s)",
-                          op->cr_port->json_key);
-        }
         ds_clear(actions);
         ds_put_format(actions, REGBIT_LOOKUP_NEIGHBOR_RESULT
                       " = lookup_arp(inport, arp.spa, arp.sha); %snext;",
@@ -17481,7 +17674,6 @@ build_lrouter_ipv4_ip_input_for_lbnats(
             ds_put_format(match, "is_chassis_resident(%s)",
                           op->cr_port->json_key);
         }
-
         /* Create a single ARP rule for all IPs that are used as VIPs. */
         char *lb_ips_v4_as = lr_lb_address_set_ref(op->od->tunnel_key,
                                                    AF_INET);
@@ -18825,8 +19017,7 @@ build_lsp_lflows_for_lbnats(struct ovn_port *lsp,
     ovs_assert(lsp->nbsp);
     ovs_assert(lsp->peer);
     build_lswitch_rport_arp_req_flows_for_lbnats(
-        lsp->peer, lr_stateful_rec, lsp->od, lsp,
-        lflows, &lsp->nbsp->header_, lflow_ref);
+        lsp->peer, lr_stateful_rec, lsp->od, lsp, lflows, lflow_ref);
     build_lswitch_ip_unicast_lookup_for_nats(lsp, lr_stateful_rec, lflows,
                                              match, actions, lflow_ref);
 }
@@ -19675,6 +19866,7 @@ build_lswitch_and_lrouter_iterate_by_ls(struct ovn_datapath *od,
         build_lswitch_lflows_l2_unknown(od, lsi->lflows, NULL);
     }
     build_mcast_flood_lswitch(od, lsi->lflows, &lsi->actions, NULL);
+    build_lswitch_arp_restrictions_default_flows(od, lsi->lflows, NULL);
 }
 
 /* Helper function to combine all lflow generation which is iterated by
