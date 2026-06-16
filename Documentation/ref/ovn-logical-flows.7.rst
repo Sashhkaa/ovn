@@ -2011,9 +2011,9 @@ Ethernet headers.  It contains the following flows:
   For the gateway port on a distributed logical router (where one of the logical
   router ports specifies a gateway chassis), the above flow matching ``eth.dst
   == E`` is only programmed on the gateway port instance on the gateway chassis.
-  If LRP's logical switch has attached LSP of ``vtep`` type, the
-  ``is_chassis_resident()`` part is not added to lflow to allow traffic
-  originated from logical switch to reach LR services (LBs, NAT).
+  If LRP's logical switch has attached LSP of ``vtep`` type or logical switch has
+  EVPN vni configured, the ``is_chassis_resident()`` part is not added to lflow
+  to allow traffic originated from logical switch to reach LR services (LBs, NAT).
 
   For each gateway port *GW* on a distributed logical router a priority-120 flow
   that matches 'recirculated' icmp{4,6} error 'packet too big' and ``eth.dst ==

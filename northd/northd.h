@@ -398,6 +398,10 @@ enum dynamic_routing_redistribute_mode {
 DRR_MODES
 #undef DRR_MODE
 
+
+#define LOCALNET_CHASSIS_RESIDENT_MATCH \
+    "((flags.localnet == 1 && is_chassis_resident(%s)) || flags.localnet == 0)"
+
 /* The 'key' comes from nbs->header_.uuid or nbr->header_.uuid or
  * sb->header_.uuid. */
 struct ovn_datapath {
@@ -1209,6 +1213,18 @@ static inline bool
 od_is_centralized(const struct ovn_datapath *od)
 {
     return !od->is_distributed;
+}
+
+static inline bool
+is_router_with_centralized_routing(struct ovn_port *router_op)
+{
+   return router_op->peer && router_op->peer->cr_port;
+}
+
+static inline bool
+is_peer_router_with_centralized_routing(struct ovn_port *switch_op)
+{
+    return switch_op->cr_port;
 }
 
 struct ovn_port *ovn_port_find(const struct hmap *ports, const char *name);
