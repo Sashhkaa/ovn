@@ -94,6 +94,13 @@ Post v26.03.0
    - Added a new "ovn-debug lflow-pipeline-oftable-start-list" command that
      prints the starting OpenFlow table number of the logical ingress and
      egress pipelines.
+   - Add other_config "dynamic-routing-maintain-evpn" option for Logical
+     Switche. When set to "mvd", ovn-controller creates and maintains
+     Linux kernel interfaces required for EVPN/VXLAN itself: VRF, bridge,
+     VXLAN device per VNI, for FDB redistribution, a dummy interface.
+     Other_config "dynamic-routing-maintain-evpn-lrp" option names a Logical
+     Router Port whose MAC applied to the bridge interface for router port
+     MAC-IP redistribution support.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------

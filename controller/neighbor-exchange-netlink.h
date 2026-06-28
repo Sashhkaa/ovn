@@ -50,6 +50,17 @@ struct ne_table_msg {
     struct ne_nl_received_neigh nd; /* Data parsed from this message. */
 };
 
+int32_t ne_nl_ifindex_get(const char *ifname);
+int ne_nl_create_vxlan(const char *ifname, uint32_t vni,
+                       const struct in6_addr *local_ip, uint16_t dst_port,
+                       int32_t link_ifindex);
+int ne_nl_create_bridge(const char *ifname);
+int ne_nl_create_lo(const char *ifname);
+int ne_nl_create_vrf(const char *ifname, uint32_t table_id);
+int ne_nl_set_master(const char *slave, const char *master);
+int ne_nl_set_iface_mac_addr(const char *ifname, const struct eth_addr *mac);
+int ne_nl_delete_iface(const char *ifname);
+
 int ne_nl_sync_neigh(uint8_t family, int32_t if_index,
                      const struct hmap *neighbors,
                      struct vector *learned_neighbors);

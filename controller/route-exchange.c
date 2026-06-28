@@ -34,6 +34,7 @@
 #include "route.h"
 #include "route-exchange.h"
 #include "route-exchange-netlink.h"
+#include "netlink-utils.h"
 
 VLOG_DEFINE_THIS_MODULE(route_exchange);
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
