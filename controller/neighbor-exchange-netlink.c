@@ -14,8 +14,11 @@
  */
 
 #include <config.h>
+#include <errno.h>
 #include <stdbool.h>
+
 #include <linux/if_ether.h>
+#include <linux/if_link.h>
 #include <linux/rtnetlink.h>
 
 #include "hmapx.h"
@@ -23,19 +26,12 @@
 #include "lib/netlink-socket.h"
 #include "lib/packets.h"
 #include "openvswitch/vlog.h"
+#include "netlink-utils.h"
 
 #include "neighbor-exchange-netlink.h"
 #include "neighbor.h"
 
 VLOG_DEFINE_THIS_MODULE(neighbor_exchange_netlink);
-
-#define NETNL_REQ_BUFFER_SIZE 128
-
-/* NTF_EXT_LEARNED was introduced in Linux v3.19, define it if
- * not available. */
-#ifndef NTF_EXT_LEARNED
-#define NTF_EXT_LEARNED (1 << 4)
-#endif
 
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
 
@@ -535,3 +531,93 @@ ne_table_parse(struct ofpbuf *buf, void *change)
     return ne_table_parse__(buf, NLMSG_HDRLEN + sizeof *nd,
                             nlmsg, nd, change);
 }
+
+int32_t
+ne_nl_ifindex_get(const char *ifname)
+{
+    return nl_ifindex_get(ifname);
+}
+
+int
+ne_nl_create_bridge(const char *ifname)
+{
+    return nl_create_device(ifname, "bridge");
+}
+
+int
+ne_nl_create_lo(const char *ifname)
+{
+    return nl_create_device(ifname, "dummy");
+}
+
+int
+ne_nl_create_vxlan(const char *ifname, uint32_t vni,
+                   const struct in6_addr *local_ip, uint16_t dst_port,
+                   int32_t link_ifindex)
+{
+    int err = 0;
+    struct ifinfomsg *ifinfo;
+    struct ofpbuf request;
+    ofpbuf_init(&request, 0);
+
+    nl_msg_put_nlmsghdr(&request, 0, RTM_NEWLINK,
+                        NLM_F_REQUEST | NLM_F_ACK | NLM_F_CREATE | NLM_F_EXCL);
+    ifinfo = ofpbuf_put_zeros(&request, sizeof *ifinfo);
+    nl_msg_put_string(&request, IFLA_IFNAME, ifname);
+
+    ifinfo->ifi_change = ifinfo->ifi_flags = IFF_UP;
+    size_t linkinfo_off = nl_msg_start_nested(&request, IFLA_LINKINFO);
+    nl_msg_put_string(&request, IFLA_INFO_KIND, "vxlan");
+    size_t infodata_off = nl_msg_start_nested(&request, IFLA_INFO_DATA);
+
+    nl_msg_put_u32(&request, IFLA_VXLAN_ID, vni);
+    nl_msg_put_u32(&request, IFLA_VXLAN_LINK, link_ifindex);
+    nl_msg_put_u8(&request, IFLA_VXLAN_LEARNING, 0);
+    nl_msg_put_be16(&request, IFLA_VXLAN_PORT, htons(dst_port));
+
+    if (IN6_IS_ADDR_V4MAPPED(local_ip)) {
+        ovs_be32 ipv4 = in6_addr_get_mapped_ipv4(local_ip);
+        nl_msg_put_be32(&request, IFLA_VXLAN_LOCAL, ipv4);
+    } else {
+        nl_msg_put_in6_addr(&request, IFLA_VXLAN_LOCAL6, local_ip);
+    }
+
+    nl_msg_end_nested(&request, infodata_off);
+    nl_msg_end_nested(&request, linkinfo_off);
+
+    err = nl_transact(NETLINK_ROUTE, &request, NULL);
+    ofpbuf_uninit(&request);
+    return err;
+}
+
+int
+ne_nl_set_master(const char *slave, const char *master)
+{
+    return nl_set_master(slave, master);
+}
+
+int
+ne_nl_set_iface_mac_addr(const char *ifname, const struct eth_addr *mac)
+{
+    return nl_set_iface_mac(ifname, mac);
+}
+
+int
+ne_nl_delete_iface(const char *ifname)
+{
+    return nl_delete_device(ifname);
+}
+
+int
+ne_nl_create_vrf(const char *ifname, uint32_t table_id)
+{
+    if (!TABLE_ID_VALID(table_id)) {
+        VLOG_WARN_RL(&rl,
+                     "attempt to create VRF using invalid table id %"PRIu32,
+                     table_id);
+        return EINVAL;
+    }
+
+    return nl_create_vrf(ifname, table_id);
+}
+

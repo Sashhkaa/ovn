@@ -29,11 +29,6 @@
 #define RTPROT_OVN 84
 #endif
 
-#define TABLE_ID_VALID(table_id) (table_id != RT_TABLE_UNSPEC &&              \
-                                  table_id != RT_TABLE_COMPAT &&              \
-                                  table_id != RT_TABLE_LOCAL &&               \
-                                  table_id != RT_TABLE_MAX)
-
 struct in6_addr;
 struct hmap;
 struct vector;
@@ -49,7 +44,6 @@ struct re_nl_received_route_node {
 
 int re_nl_create_vrf(const char *ifname, uint32_t table_id);
 int re_nl_delete_vrf(const char *ifname);
-
 int re_nl_add_route(uint32_t table_id, const struct advertise_route_entry *);
 int re_nl_delete_route(uint32_t table_id,
                        const struct advertise_route_entry *);

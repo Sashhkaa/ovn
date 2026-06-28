@@ -1894,3 +1894,160 @@ port_contains_duplicate_ip(struct lport_addresses *laddrs1,
 
     return false;
 }
+
+const struct in6_addr *
+evpn_local_ip_lookup(const struct hmap *map, uint32_t vni)
+{
+    struct vni_local_ip *e;
+    HMAP_FOR_EACH_WITH_HASH (e, hmap_node, hash_add(vni, 0), map) {
+        if (e->vni == vni) {
+            return &e->ip;
+        }
+    }
+    return NULL;
+}
+
+ovs_be32
+evpn_local_ip_find_v4(const struct evpn_local_ip_map *vni_ip_map,
+                      uint32_t vni)
+{
+    const struct in6_addr *addr = evpn_local_ip_lookup(&vni_ip_map->vni_ip4,
+                                                       vni);
+    if (addr) {
+        return in6_addr_get_mapped_ipv4(addr);
+    }
+
+    if (ipv6_addr_is_set(&vni_ip_map->default_ip4)) {
+        return in6_addr_get_mapped_ipv4(&vni_ip_map->default_ip4);
+    }
+
+    return 0;
+}
+
+const struct in6_addr *
+evpn_local_ip_find_v6(const struct evpn_local_ip_map *vni_ip_map,
+                      uint32_t vni)
+{
+    const struct in6_addr *addr = evpn_local_ip_lookup(&vni_ip_map->vni_ip6,
+                                                       vni);
+    if (addr) {
+        return addr;
+    }
+
+    if (ipv6_addr_is_set(&vni_ip_map->default_ip6)) {
+        return &vni_ip_map->default_ip6;
+    }
+
+    return NULL;
+}
+
+const struct in6_addr *
+evpn_local_ip_map_lookup(const struct evpn_local_ip_map *map,
+                         uint32_t vni, bool ipv4)
+{
+    const struct hmap *hmap = ipv4 ? &map->vni_ip4 : &map->vni_ip6;
+    const struct in6_addr *addr = evpn_local_ip_lookup(hmap, vni);
+    if (addr) {
+        return addr;
+    }
+    const struct in6_addr *def = ipv4 ? &map->default_ip4 : &map->default_ip6;
+    return ipv6_addr_is_set(def) ? def : NULL;
+}
+
+void
+evpn_local_ip_map_init(struct evpn_local_ip_map *vni_ip_map,
+                       const struct smap *config)
+{
+    char *tokstr, *token, *ptr0 = NULL;
+
+    const char *local_ip_str = smap_get_def(config, "ovn-evpn-local-ip", "");
+    tokstr = xstrdup(local_ip_str);
+    for (token = strtok_r(tokstr, ",", &ptr0); token;
+         token = strtok_r(NULL, ",", &ptr0)) {
+        char *ptr1 = NULL, *vni_str = strtok_r(token, "-", &ptr1);
+        char *ip_str = strtok_r(NULL, "-", &ptr1);
+        struct in6_addr ip;
+        uint32_t vni;
+
+        if (ptr1 && *ptr1) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+            VLOG_WARN_RL(&rl, "Malformed 'ovn-evpn-local-ip': %s", tokstr);
+            break;
+        }
+
+        if (!ip_str) { /* default IP */
+            if (!ip46_parse(vni_str, &ip)) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+                VLOG_WARN_RL(&rl, "Invalid IP %s in 'ovn-evpn-local-ip'",
+                             vni_str);
+                continue;
+            }
+            struct in6_addr *ip_ptr = IN6_IS_ADDR_V4MAPPED(&ip)
+                                      ? &vni_ip_map->default_ip4
+                                      : &vni_ip_map->default_ip6;
+            if (ipv6_addr_is_set(ip_ptr)) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+                VLOG_WARN_RL(&rl, "Default ovn-evpn-local-ip IP%d "
+                                  "already configured",
+                             IN6_IS_ADDR_V4MAPPED(&ip) ? 4 : 6);
+                continue;
+            }
+            *ip_ptr = ip;
+        } else {
+            if (!ip46_parse(ip_str, &ip)) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+                VLOG_WARN_RL(&rl,
+                             "EVPN enabled, but required 'ovn-evpn-local-ip' "
+                             "is missing or invalid for vni %s", vni_str);
+                continue;
+            }
+
+            if (!vni_str) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+                VLOG_WARN_RL(&rl, "Required 'ovn-evpn-local-ip' VNI not "
+                                  "configured for IP %s",
+                             ip_str);
+                continue;
+            }
+
+            if (!ovs_scan(vni_str, "%u", &vni) || !ovn_is_valid_vni(vni)) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+                VLOG_WARN_RL(&rl, "Invalid VNI %s in 'ovn-evpn-local-ip'",
+                             vni_str);
+                continue;
+            }
+
+            struct hmap *map = IN6_IS_ADDR_V4MAPPED(&ip)
+                               ? &vni_ip_map->vni_ip4
+                               : &vni_ip_map->vni_ip6;
+            if (evpn_local_ip_lookup(map, vni)) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+                VLOG_WARN_RL(&rl, "Duplicated VNI entry: %s", vni_str);
+                continue;
+            }
+
+            struct vni_local_ip *e = xmalloc(sizeof *e);
+            *e = (struct vni_local_ip) {
+                .vni = vni,
+                .ip = ip,
+            };
+            hmap_insert(map, &e->hmap_node, hash_add(vni, 0));
+        }
+    }
+    free(tokstr);
+}
+
+void
+evpn_local_ip_map_destroy(struct evpn_local_ip_map *map)
+{
+    struct vni_local_ip *e;
+    HMAP_FOR_EACH_POP (e, hmap_node, &map->vni_ip4) {
+        free(e);
+    }
+    hmap_destroy(&map->vni_ip4);
+
+    HMAP_FOR_EACH_POP (e, hmap_node, &map->vni_ip6) {
+        free(e);
+    }
+    hmap_destroy(&map->vni_ip6);
+}

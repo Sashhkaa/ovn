@@ -27,6 +27,9 @@ struct unixctl_conn;
 struct neighbor_exchange_ctx_in {
     /* Contains struct neighbor_interface_monitor pointers. */
     const struct vector *monitored_interfaces;
+    /* Contains struct neighbor_ovn_maintain_entry for VNIs whose kernel
+     * interfaces OVN must create/maintain.  May be NULL. */
+    const struct vector *maintain_evpn;
 };
 
 struct neighbor_exchange_ctx_out {
@@ -72,5 +75,10 @@ void evpn_remote_vteps_clear(struct hmap *remote_vteps);
 void evpn_remote_vtep_list(struct unixctl_conn *, int argc,
                            const char *argv[], void *data_);
 void evpn_static_entries_clear(struct hmap *static_entries);
+
+/* EVPN kernel interface lifecycle.  Call cleanup_all on graceful shutdown,
+ * destroy to release module-level state. */
+void neighbor_exchange_maintain_evpn_cleanup_all(void);
+void neighbor_exchange_maintain_evpn_destroy(void);
 
 #endif  /* NEIGHBOR_EXCHANGE_H */
