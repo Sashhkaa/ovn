@@ -831,4 +831,29 @@ parse_neigh_dynamic_redistribute(const struct smap *options);
 
 size_t *shuffled_range(size_t n);
 
+struct vni_local_ip {
+    struct hmap_node hmap_node;
+    struct in6_addr ip;
+    uint32_t vni;
+};
+
+struct evpn_local_ip_map {
+    struct hmap vni_ip4;         /* Per VNI local IPv4 vni_local_ips. */
+    struct hmap vni_ip6;         /* Per VNI local IPv6 vni_local_ips. */
+    struct in6_addr default_ip4; /* Default local IPv4. */
+    struct in6_addr default_ip6; /* Default local IPv6. */
+};
+
+const struct in6_addr *evpn_local_ip_lookup(const struct hmap *map,
+                                            uint32_t vni);
+ovs_be32 evpn_local_ip_find_v4(const struct evpn_local_ip_map *vni_ip_map,
+                               uint32_t vni);
+const struct in6_addr *evpn_local_ip_find_v6(
+    const struct evpn_local_ip_map *vni_ip_map, uint32_t vni);
+void evpn_local_ip_map_init(struct evpn_local_ip_map *vni_ip_map,
+                            const struct smap *config);
+const struct in6_addr *
+evpn_local_ip_map_lookup(const struct evpn_local_ip_map *map,
+                         uint32_t vni, bool ipv4);
+void evpn_local_ip_map_destroy(struct evpn_local_ip_map *map);
 #endif /* OVN_UTIL_H */

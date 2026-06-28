@@ -73,6 +73,8 @@ controller_ovn_controller_SOURCES = \
 
 if HAVE_NETLINK
 controller_ovn_controller_SOURCES += \
+	controller/netlink-utils.h \
+	controller/netlink-utils.c \
 	controller/host-if-monitor.c \
 	controller/ovn-netlink-notifier.c \
 	controller/neighbor-exchange-netlink.h \
