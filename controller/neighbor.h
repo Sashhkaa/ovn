@@ -24,6 +24,7 @@
 #include "hmapx.h"
 #include "lib/sset.h"
 #include "openvswitch/hmap.h"
+#include "lib/ovn-util.h"
 
 #include "vec.h"
 
@@ -54,6 +55,7 @@ struct neighbor_ctx_in {
     /* Index for FDB by dp_key. */
     struct ovsdb_idl_index *sbrec_fdb_by_dp_key;
     const struct sbrec_chassis *chassis;
+    struct evpn_local_ip_map *evpn_local_ip_map;
 };
 
 struct neighbor_ctx_out {
@@ -64,12 +66,44 @@ struct neighbor_ctx_out {
     /* Contains 'struct local_datapath' pointers for datapaths with FDB
      * advertisement enabled. */
     struct hmapx *fdb_datapaths;
+    /* Contains struct neighbor_ovn_maintain_entry for VNIs that need
+     * maintained interfaces.  May be NULL if caller does not need this. */
+    struct vector *maintain_evpn;
+    struct evpn_local_ip_map *evpn_ip_map;
 };
 
 enum neighbor_interface_type {
     NEIGH_IFACE_BRIDGE,
     NEIGH_IFACE_VXLAN,
     NEIGH_IFACE_LOOPBACK,
+};
+
+enum neighbor_mainatain_mode {
+    NEIGH_MAINTAIN_NONE,
+    NEIGH_MAINTAIN_MVD,
+};
+
+/* IP/MAC to configure on the bridge interface so BGP can use it as next-hop.
+ * Filled from the LRP named by dynamic-routing-evpn-lrp. */
+struct neighbor_bridge_iface_config {
+    bool has_addr;
+    struct eth_addr lladdr;
+    struct in6_addr addr;    /* IPv4 stored as mapped IPv4-in-IPv6. */
+    uint8_t prefix_len;
+};
+
+struct neighbor_ovn_maintain_entry {
+    enum neigh_redistribute_mode redistribute_mode;
+    enum neighbor_mainatain_mode mainatain_mode;
+    char vxlan_if_name[IFNAMSIZ + 1];
+    char vrf_if_name[IFNAMSIZ + 1];
+    char br_if_name[IFNAMSIZ + 1];
+    char lo_if_name[IFNAMSIZ + 1];
+    struct neighbor_bridge_iface_config br_config;
+    struct in6_addr local_ip;
+    uint32_t vni;
+    /* Formula: 60000 + vni (valid for VNI <= 5535). */
+    uint16_t fake_vxlan_port;
 };
 
 struct neighbor_interface_monitor {
