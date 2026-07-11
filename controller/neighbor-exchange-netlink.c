@@ -31,6 +31,12 @@
 #include "neighbor-exchange-netlink.h"
 #include "neighbor.h"
 
+/* NDA_NH_ID was added in Linux 5.13 and might be missing on older kernel
+ * headers. */
+#ifndef HAVE_NDA_NH_ID
+#define NDA_NH_ID 13
+#endif
+
 VLOG_DEFINE_THIS_MODULE(neighbor_exchange_netlink);
 
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
