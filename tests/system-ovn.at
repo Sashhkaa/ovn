@@ -22276,6 +22276,8 @@ AT_CHECK([ip a | grep -q ovnbr100], [1])
 AT_CHECK([ip a | grep -q ovnvxlan100], [1])
 AT_CHECK([ip a | grep -q ovnlo100], [1])
 
+ip link del vxlan_sys_4789
+
 OVN_CLEANUP_CONTROLLER([hv1])
 OVN_CLEANUP_NORTHD
 as
