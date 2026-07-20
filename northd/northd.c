@@ -1817,22 +1817,30 @@ create_cr_port(struct ovn_port *op, struct hmap *ports,
  * op's peer logical switch.  False otherwise.
  *
  * Chassis resident port needs to be created if the following
- * conditionsd are met:
+ * conditions are met:
  *   - op is a distributed gateway port
- *   - op is the only distributed gateway port attached to its
- *     router
- *   - op's peer logical switch has no localnet ports.
+ *   - op's peer is a logical switch port
+ *   - either
+ *     - op is excluded from centralized routing, in which case the
+ *       chassis resident port is not used for routing, but ovn-controller
+ *       still needs it to add the router to its local datapaths, or
+ *     - op is the only distributed gateway port attached to its router
+ *       and op's peer logical switch has no localnet ports.
  */
 static bool
 peer_needs_cr_port_creation(struct ovn_port *op)
 {
-    if ((op->nbrp->n_gateway_chassis || op->nbrp->ha_chassis_group)
-        && vector_len(&op->od->l3dgw_ports) == 1 && op->peer && op->peer->nbsp
-        && !ls_has_localnet_port(op->peer->od)) {
+    if (!op->peer || !op->peer->nbsp ||
+        (!op->nbrp->n_gateway_chassis && !op->nbrp->ha_chassis_group)) {
+        return false;
+    }
+
+    if (lrp_has_no_centralized_routing_option(op)) {
         return true;
     }
 
-    return false;
+    return vector_len(&op->od->l3dgw_ports) == 1 &&
+           !ls_has_localnet_port(op->peer->od);
 }
 
 static void
@@ -4198,7 +4206,8 @@ sync_pb_for_lrp(struct ovn_port *op,
         bool always_redirect =
             !lr_stateful_rec->has_distributed_lb &&
             !lr_stateful_rec->lrnat_rec->has_distributed_nat &&
-            !l3dgw_port_has_associated_vtep_lports(op->primary_port);
+            !l3dgw_port_has_associated_vtep_lports(op->primary_port) &&
+            !lrp_has_no_centralized_routing_option(op->primary_port);
 
         const char *redirect_type = smap_get(&op->nbrp->options,
                                             "redirect-type");
@@ -4224,6 +4233,9 @@ sync_pb_for_lrp(struct ovn_port *op,
             if (op->cr_port && (op->nbrp->ha_chassis_group ||
                 op->nbrp->n_gateway_chassis)) {
                 smap_add(&new, "chassis-redirect-port", op->cr_port->key);
+            }
+            if (lrp_has_no_centralized_routing_option(op)) {
+                smap_add(&new, "no-centralized-routing", "true");
             }
         }
         if (chassis_name) {
@@ -11725,7 +11737,7 @@ build_lswitch_ip_unicast_lookup(struct ovn_port *op,
             !vector_is_empty(&op->peer->od->l3dgw_ports) &&
             ls_has_localnet_port(op->od)) {
             add_lrp_chassis_resident_check(op->peer, match);
-        } else if (op->cr_port) {
+        } else if (lsp_has_centralized_routing(op)) {
             /* If the op has a chassis resident port, it means
              *   - its peer is a distributed gateway port (DGP) and
              *   - routing is centralized for the DGP's networks on
@@ -15023,6 +15035,10 @@ build_gateway_mtu_flow(struct lflow_table *lflows, struct ovn_port *op,
 static bool
 consider_l3dgw_port_is_centralized(struct ovn_port *op)
 {
+    if (!lrp_is_l3dgw(op)) {
+        return false;
+    }
+
     if (!od_is_centralized(op->od)) {
         return false;
     }
@@ -15031,13 +15047,11 @@ consider_l3dgw_port_is_centralized(struct ovn_port *op)
         return false;
     }
 
-    if (lrp_is_l3dgw(op)) {
-        /* Traffic with eth.dst = l3dgw_port->lrp_networks.ea_s
-         * should only be received on the gateway chassis. */
-        return true;
+    if (lrp_has_no_centralized_routing_option(op)) {
+        return false;
     }
 
-    return false;
+    return true;
 }
 
 /* Logical router ingress Table 0: L2 Admission Control
@@ -16682,8 +16696,10 @@ build_gateway_redirect_flows_for_lrouter(
     ovs_assert(od->nbr);
     const struct ovn_port *dgp;
     VECTOR_FOR_EACH (&od->l3dgw_ports, dgp) {
-        if (l3dgw_port_has_associated_vtep_lports(dgp)) {
-            /* Skip adding redirect lflow for vtep-enabled l3dgw ports.
+        if (l3dgw_port_has_associated_vtep_lports(dgp) ||
+            lrp_has_no_centralized_routing_option(dgp)) {
+            /* Skip adding redirect lflow for vtep-enabled l3dgw ports and
+             * for l3dgw ports excluded from centralized routing.
              * Traffic from hypervisor to VTEP (ramp) switch should go in
              * distributed manner. Only returning routed traffic must go
              * through centralized gateway (or ha-chassis-group).
@@ -16726,8 +16742,10 @@ build_lr_gateway_redirect_flows_for_nats(
     ovs_assert(od->nbr);
     const struct ovn_port *dgp;
     VECTOR_FOR_EACH (&od->l3dgw_ports, dgp) {
-        if (l3dgw_port_has_associated_vtep_lports(dgp)) {
-            /* Skip adding redirect lflow for vtep-enabled l3dgw ports.
+        if (l3dgw_port_has_associated_vtep_lports(dgp) ||
+            lrp_has_no_centralized_routing_option(dgp)) {
+            /* Skip adding redirect lflow for vtep-enabled l3dgw ports and
+             * for l3dgw ports excluded from centralized routing.
              * Traffic from hypervisor to VTEP (ramp) switch should go in
              * distributed manner. Only returning routed traffic must go
              * through centralized gateway (or ha-chassis-group).
