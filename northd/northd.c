@@ -1827,22 +1827,22 @@ create_cr_port(struct ovn_port *op, struct hmap *ports,
  * op's peer logical switch.  False otherwise.
  *
  * Chassis resident port needs to be created if the following
- * conditionsd are met:
+ * conditions are met:
  *   - op is a distributed gateway port
- *   - op is the only distributed gateway port attached to its
- *     router
+ *   - op is the only distributed gateway port attached to its router
+ *   - op's peer is a logical switch port
  *   - op's peer logical switch has no localnet ports.
+ *
+ * Keep port creation independent of the routing mode.  Binding a switch-side
+ * redirect port can add its chassis to HA chassis groups' ref_chassis sets.
  */
 static bool
 peer_needs_cr_port_creation(struct ovn_port *op)
 {
-    if ((op->nbrp->n_gateway_chassis || op->nbrp->ha_chassis_group)
-        && vector_len(&op->od->l3dgw_ports) == 1 && op->peer && op->peer->nbsp
-        && !ls_has_localnet_port(op->peer->od)) {
-        return true;
-    }
-
-    return false;
+    return (op->nbrp->n_gateway_chassis || op->nbrp->ha_chassis_group) &&
+           vector_len(&op->od->l3dgw_ports) == 1 &&
+           op->peer && op->peer->nbsp &&
+           !ls_has_localnet_port(op->peer->od);
 }
 
 static void
@@ -2738,14 +2738,6 @@ sbrec_port_binding_update_mirror_rules(
 {
     check_and_do_sb_mirror_deletion(op);
     check_and_do_sb_mirror_addition(sbrec_mirror_table, op);
-}
-
-/* Return true if given ovn_port has peer and this peer's ovn_datapath
- * has_vtep_lports set to true. False otherwise. */
-static bool
-l3dgw_port_has_associated_vtep_lports(const struct ovn_port *op)
-{
-    return op->peer && op->peer->od->has_vtep_lports;
 }
 
 static void
@@ -4232,7 +4224,7 @@ sync_pb_for_lrp(struct ovn_port *op,
         bool always_redirect =
             !lr_stateful_rec->has_distributed_lb &&
             !lr_stateful_rec->lrnat_rec->has_distributed_nat &&
-            !l3dgw_port_has_associated_vtep_lports(op->primary_port);
+            !lrp_has_no_centralized_routing(op->primary_port);
 
         const char *redirect_type = smap_get(&op->nbrp->options,
                                             "redirect-type");
@@ -4314,6 +4306,10 @@ sync_pb_for_lrp(struct ovn_port *op,
     const char *ipv6_pd_list = smap_get(&op->sb->options, "ipv6_ra_pd_list");
     if (ipv6_pd_list) {
         smap_add(&new, "ipv6_ra_pd_list", ipv6_pd_list);
+    }
+
+    if (!is_cr_port(op) && lrp_has_no_centralized_routing(op)) {
+        smap_add(&new, "no-centralized-routing", "true");
     }
 
     sbrec_port_binding_set_options(op->sb, &new);
@@ -11886,10 +11882,9 @@ build_lswitch_ip_unicast_lookup(struct ovn_port *op,
                          : debug_drop_action();
 
     if (lsp_is_router(op->nbsp) && op->peer && op->peer->nbrp) {
-        /* Distributed gateway ports default to centralized mode.
-         * They operate in distributed mode only when configured
-         * on their bound router. */
-        bool peer_lrp_is_centralized = od_is_centralized(op->peer->od);
+        bool peer_lrp_is_centralized =
+            od_is_centralized(op->peer->od) &&
+            !lrp_has_no_centralized_routing(op->peer);
 
         /* For ports connected to logical routers add flows to bypass the
          * broadcast flooding of ARP/ND requests in table 22. We direct the
@@ -11911,15 +11906,9 @@ build_lswitch_ip_unicast_lookup(struct ovn_port *op,
             !vector_is_empty(&op->peer->od->l3dgw_ports) &&
             ls_has_localnet_port(op->od)) {
             add_lrp_chassis_resident_check(op->peer, match);
-        } else if (op->cr_port) {
-            /* If the op has a chassis resident port, it means
-             *   - its peer is a distributed gateway port (DGP) and
-             *   - routing is centralized for the DGP's networks on
-             *     the configured gateway chassis.
-             *
-             * If that's the case, make sure that the packets destined to
-             * the DGP's MAC are sent to the chassis where the DGP resides.
-             * */
+        } else if (lsp_has_centralized_routing(op)) {
+            /* Send packets destined to the DGP's MAC to the chassis
+             * where the DGP resides. */
             ds_clear(actions);
             ds_put_format(actions, action, op->cr_port->json_key);
 
@@ -14688,7 +14677,7 @@ build_lrouter_nat_arp_nd_flow(const struct ovn_datapath *od,
 {
     struct lport_addresses *ext_addrs = &nat_entry->ext_addrs;
     const struct nbrec_nat *nat = nat_entry->nb;
-    if (op && lrp_is_l3dgw(op) && (!op->peer || !op->peer->cr_port)) {
+    if (op && lrp_is_l3dgw(op) && !lrp_has_centralized_routing(op)) {
         return;
     }
 
@@ -14726,10 +14715,7 @@ build_lrouter_port_nat_arp_nd_flow(struct ovn_port *op,
     }
 
     if (lrp_has_centralized_routing(op)) {
-        /* We don't add the below flows if the router port's peer has
-         * a chassisredirect port.  That's because routing is centralized on
-         * the gateway chassis for the router port networks/subnets.
-         */
+        /* Centralized routing uses the router-wide NAT ARP/ND flows. */
         return;
     }
 
@@ -15239,23 +15225,10 @@ build_gateway_mtu_flow(struct lflow_table *lflows, struct ovn_port *op,
 }
 
 static bool
-consider_l3dgw_port_is_centralized(struct ovn_port *op)
+consider_l3dgw_port_is_centralized(const struct ovn_port *op)
 {
-    if (!od_is_centralized(op->od)) {
-        return false;
-    }
-
-    if (l3dgw_port_has_associated_vtep_lports(op)) {
-        return false;
-    }
-
-    if (lrp_is_l3dgw(op)) {
-        /* Traffic with eth.dst = l3dgw_port->lrp_networks.ea_s
-         * should only be received on the gateway chassis. */
-        return true;
-    }
-
-    return false;
+    return lrp_is_l3dgw(op) && od_is_centralized(op->od) &&
+           !lrp_has_no_centralized_routing(op);
 }
 
 /* Logical router ingress Table 0: L2 Admission Control
@@ -16900,14 +16873,7 @@ build_gateway_redirect_flows_for_lrouter(
     ovs_assert(od->nbr);
     const struct ovn_port *dgp;
     VECTOR_FOR_EACH (&od->l3dgw_ports, dgp) {
-        if (l3dgw_port_has_associated_vtep_lports(dgp)) {
-            /* Skip adding redirect lflow for vtep-enabled l3dgw ports.
-             * Traffic from hypervisor to VTEP (ramp) switch should go in
-             * distributed manner. Only returning routed traffic must go
-             * through centralized gateway (or ha-chassis-group).
-             * This assumes that attached logical switch with vtep lport(s) has
-             * no localnet port(s) for NAT. Otherwise centralized NAT will not
-             * work. */
+        if (lrp_has_no_centralized_routing(dgp)) {
             continue;
         }
 
@@ -16944,14 +16910,7 @@ build_lr_gateway_redirect_flows_for_nats(
     ovs_assert(od->nbr);
     const struct ovn_port *dgp;
     VECTOR_FOR_EACH (&od->l3dgw_ports, dgp) {
-        if (l3dgw_port_has_associated_vtep_lports(dgp)) {
-            /* Skip adding redirect lflow for vtep-enabled l3dgw ports.
-             * Traffic from hypervisor to VTEP (ramp) switch should go in
-             * distributed manner. Only returning routed traffic must go
-             * through centralized gateway (or ha-chassis-group).
-             * This assumes that attached logical switch with vtep lport(s) has
-             * no localnet port(s) for NAT. Otherwise centralized NAT will not
-             * work. */
+        if (lrp_has_no_centralized_routing(dgp)) {
             continue;
         }
 
@@ -17727,7 +17686,7 @@ build_ipv6_input_flows_for_lrouter_port(
      * router's own IP address. */
     for (int i = 0; i < op->lrp_networks.n_ipv6_addrs; i++) {
         ds_clear(match);
-        if (lrp_is_l3dgw(op) && od_is_centralized(op->od)) {
+        if (consider_l3dgw_port_is_centralized(op)) {
             /* Traffic with eth.src = l3dgw_port->lrp_networks.ea_s
              * should only be sent from the gateway chassi, so that
              * upstream MAC learning points to the gateway chassis.
@@ -17942,7 +17901,7 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
                       op->lrp_networks.ipv4_addrs[i].network_s,
                       op->lrp_networks.ipv4_addrs[i].plen);
 
-        if (od_is_centralized(op->od) &&
+        if (od_is_centralized(op->od) && !lrp_has_no_centralized_routing(op) &&
             !vector_is_empty(&op->od->l3dgw_ports) && op->peer
             && ls_has_localnet_port(op->peer->od)) {
             add_lrp_chassis_resident_check(op, match);

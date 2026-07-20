@@ -4043,6 +4043,17 @@ tcp.flags = RST;
         The name of the chassis redirect port derived from this port if this
         port is a distributed parent of a chassis redirect port.
       </column>
+
+      <column name="options" key="no-centralized-routing"
+              type='{"type": "boolean"}'>
+        A boolean option that is set to true if this distributed gateway port
+        is excluded from centralized routing.  This applies if the peer
+        logical switch has a <code>vtep</code> port or if
+        <ref table="Logical_Router_Port" column="options"
+        key="no-centralized-routing" db="OVN_Northbound"/> is true.
+        <code>ovn-controller</code> adds the logical router datapath to its
+        local datapaths on chassis where the peer logical switch is local.
+      </column>
     </group>
 
     <group title="Chassis Redirect Options">

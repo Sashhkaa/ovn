@@ -142,7 +142,8 @@ local_datapath_destroy(struct local_datapath *ld)
  * Note that if 'pb' belongs to a logical switch and 'peer' to a
  * logical router datapath and if 'peer' has a chassis-redirect port,
  * then we add the 'peer' to the local datapaths only if the
- * chassis-redirect port is local.
+ * chassis-redirect port is local or if 'peer' is excluded from
+ * centralized routing.
  * */
 bool
 need_add_peer_to_local(
@@ -160,6 +161,13 @@ need_add_peer_to_local(
     /* If pb is not a patch port, no peer to add. */
     if (strcmp(pb->type, "patch")) {
         return false;
+    }
+
+    /* The router pipeline must run on chassis hosting this switch. */
+    if (datapath_is_switch(pb->datapath) &&
+        !datapath_is_switch(peer->datapath) &&
+        smap_get_bool(&peer->options, "no-centralized-routing", false)) {
+        return true;
     }
 
     const char *cr_pb_name = smap_get(&pb->options,
