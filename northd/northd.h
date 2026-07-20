@@ -1222,10 +1222,24 @@ lrp_has_centralized_routing(struct ovn_port *router_op)
    return router_op->peer && router_op->peer->cr_port;
 }
 
+/* Returns true if the logical router port 'router_op' is excluded from
+ * centralized routing by the "no-centralized-routing" option. */
+static inline bool
+lrp_has_no_centralized_routing_option(const struct ovn_port *router_op)
+{
+    return router_op && router_op->nbrp &&
+           smap_get_bool(&router_op->nbrp->options,
+                         "no-centralized-routing", false);
+}
+
+/* Returns true if routing is centralized on the gateway chassis for the
+ * networks of the distributed gateway port peered with the logical switch
+ * port 'switch_op'. */
 static inline bool
 lsp_has_centralized_routing(struct ovn_port *switch_op)
 {
-    return switch_op->cr_port;
+    return switch_op->cr_port && switch_op->peer &&
+           !lrp_has_no_centralized_routing_option(switch_op->peer);
 }
 
 struct ovn_port *ovn_port_find(const struct hmap *ports, const char *name);
