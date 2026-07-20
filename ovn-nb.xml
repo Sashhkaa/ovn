@@ -5060,6 +5060,43 @@ or
           router version of this option.
         </p>
       </column>
+
+      <column name="options" key="no-centralized-routing"
+              type='{"type": "boolean"}'>
+        <p>
+          By default, when a logical router has a single distributed gateway
+          port (DGP) and the switch attached to it has no
+          <code>localnet</code> port, OVN centralizes routing for that
+          router port on the gateway chassis: traffic destined to the DGP
+          is redirected to the gateway chassis already in the logical
+          switch pipeline.
+        </p>
+
+        <p>
+          Set this option to <code>true</code> on a DGP to exclude it from
+          centralized routing.  Traffic destined to this router port is then
+          processed locally on the chassis where it originates, instead of
+          being redirected to the gateway chassis, and ARP/ND for its
+          addresses is no longer restricted to the gateway chassis. The
+          chassis redirect port of the attached logical switch is still
+          created, because <code>ovn-controller</code> needs it to add the
+          router to its local datapaths, but it is not used for routing.
+        </p>
+
+        <p>
+          This is useful, for example, for a router that has a DGP for a
+          ramp switch or an EVPN-attached private subnet -- which has no
+          <code>localnet</code> port of its own -- alongside another DGP
+          used for unrelated purposes. Without this option, the private
+          subnet would lose L3 routing entirely.
+        </p>
+
+        <p>
+          This option is only expected to work correctly if the logical
+          router does not perform stateful processing for this port, that
+          is, plain routing and stateless NAT only.
+        </p>
+      </column>
     </group>
 
     <group title="Attachment">

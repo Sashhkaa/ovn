@@ -22218,3 +22218,86 @@ AT_CHECK([ovn-sbctl lflow-list ls1 | grep 'ls_in_l2_lkup' | grep -E 'priority=75
 OVN_CLEANUP_NORTHD
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([DGP "no-centralized-routing" option])
+ovn_start
+
+# lr0 has two DGPs, each facing its own localnet-less subnet:
+#  - lr0-sw0: no "no-centralized-routing" -- routing for it stays
+#    centralized on the gateway chassis.  Note that its peer switch gets
+#    no chassis redirect port, because lr0 has more than one DGP.
+#  - lr0-sw1: "no-centralized-routing" set -- opts out of centralized
+#    routing, but its peer switch still gets a chassis redirect port, so
+#    that ovn-controller can add lr0 to its local datapaths.
+check ovn-nbctl ls-add sw0
+check ovn-nbctl ls-add sw1
+check ovn-nbctl lsp-add sw0 sw0-port1
+check ovn-nbctl lsp-add sw1 sw1-port1
+
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lrp-add lr0 lr0-sw0 00:00:00:00:ff:01 10.0.1.1/24
+check ovn-nbctl lsp-add-router-port sw0 sw0-lr0 lr0-sw0
+check ovn-nbctl lrp-add lr0 lr0-sw1 00:00:00:00:ff:02 10.0.2.1/24
+check ovn-nbctl lsp-add-router-port sw1 sw1-lr0 lr0-sw1
+
+check ovn-nbctl lrp-set-gateway-chassis lr0-sw0 gw1
+check ovn-nbctl lrp-set-gateway-chassis lr0-sw1 gw1
+check ovn-nbctl set logical_router_port lr0-sw1 options:no-centralized-routing=true
+
+check ovn-nbctl --wait=sb sync
+
+check_row_count Port_Binding 0 logical_port=cr-sw0-lr0
+check_row_count Port_Binding 1 logical_port=cr-sw1-lr0
+
+check_row_count Port_Binding 1 logical_port=cr-lr0-sw0 options:always-redirect=true
+check_row_count Port_Binding 0 logical_port=cr-lr0-sw1 options:always-redirect=true
+
+# The option is synced to the SB port binding of the DGP, ovn-controller
+# uses it to decide whether the router has to be added to the local
+# datapaths.
+check_row_count Port_Binding 0 logical_port=lr0-sw0 options:no-centralized-routing=true
+check_row_count Port_Binding 1 logical_port=lr0-sw1 options:no-centralized-routing=true
+
+# build_gateway_redirect_flows_for_lrouter(): lr0-sw1 must not get a
+# GW_REDIRECT flow at all -- traffic destined to it is processed
+# locally instead of being redirected to its cr-port.
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep "lr_in_gw_redirect" | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_gw_redirect  ), priority=0    , match=(1), action=(next;)
+  table=??(lr_in_gw_redirect  ), priority=50   , match=(outport == "lr0-sw0"), action=(outport = "cr-lr0-sw0"; next;)
+])
+
+# consider_l3dgw_port_is_centralized(): lr_in_admission for lr0-sw0
+# (centralized) must require residency on its own cr-port; lr0-sw1
+# (opted out) must not.
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep "lr_in_admission" | grep "lr0-sw0" | grep 'priority=50' | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_admission    ), priority=50   , match=(eth.dst == 00:00:00:00:ff:01 && inport == "lr0-sw0" && is_chassis_resident("cr-lr0-sw0")), action=(xreg0[[0..47]] = 00:00:00:00:ff:01; next;)
+  table=??(lr_in_admission    ), priority=50   , match=(eth.mcast && inport == "lr0-sw0"), action=(xreg0[[0..47]] = 00:00:00:00:ff:01; next;)
+])
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep "lr_in_admission" | grep "lr0-sw1" | grep 'priority=50' | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_admission    ), priority=50   , match=(eth.dst == 00:00:00:00:ff:02 && inport == "lr0-sw1"), action=(xreg0[[0..47]] = 00:00:00:00:ff:02; next;)
+  table=??(lr_in_admission    ), priority=50   , match=(eth.mcast && inport == "lr0-sw1"), action=(xreg0[[0..47]] = 00:00:00:00:ff:02; next;)
+])
+
+# build_lswitch_ip_unicast_lookup() and build_lswitch_rport_arp_req_flow():
+# neither switch may redirect traffic to a chassis redirect port, and the
+# cr-port created for sw1 must not be used for routing.
+AT_CHECK([ovn-sbctl dump-flows sw0 | grep "ls_in_l2_lkup" | grep -c 'cr-sw0-lr0'], [1], [dnl
+0
+])
+AT_CHECK([ovn-sbctl dump-flows sw1 | grep "ls_in_l2_lkup" | grep -c 'cr-sw1-lr0'], [1], [dnl
+0
+])
+
+# A DGP with the option set and no peer logical switch port must not make
+# ovn-northd crash while creating the chassis redirect port of the peer.
+check ovn-nbctl lrp-add lr0 lr0-noswitch 00:00:00:00:ff:03 10.0.3.1/24
+check ovn-nbctl lrp-set-gateway-chassis lr0-noswitch gw1
+check ovn-nbctl set logical_router_port lr0-noswitch \
+    options:no-centralized-routing=true
+check ovn-nbctl --wait=sb sync
+check_row_count Port_Binding 1 logical_port=cr-lr0-noswitch
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])

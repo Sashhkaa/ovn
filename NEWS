@@ -99,6 +99,12 @@ Post v26.03.0
      "ovn-ct-lb-related" feature flags. At the same time mark
      "mac-binding-timestamp", "fdb-timestamp" and "ls-dpg-column" feature
      flags as deprecated.
+   - Added the logical router port option "no-centralized-routing", which
+     excludes a distributed gateway port from centralized routing.  It is
+     intended for routers with more than one distributed gateway port,
+     where routing for such a port has to stay distributed. Note that the
+     router must not perform stateful processing (stateful NAT or load
+     balancing) for that port.  See ovn-nb(5) for more information.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
