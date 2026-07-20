@@ -189,8 +189,16 @@ need_add_peer_to_local(
         !datapath_is_switch(peer->datapath)) {
         /* pb belongs to logical switch and peer  belongs to logical router.
          * Add the peer to local datapaths only if its chassis-redirect-port
-         * is local. */
-        return ha_chassis_group_contains(cr_peer->ha_chassis_group, chassis);
+         * is local or if chassis-redirect-port exists but is not local
+         * but there is no-centralized-routing option on router port */
+        if (ha_chassis_group_contains(cr_peer->ha_chassis_group, chassis)) {
+            return true;
+        } else if (smap_get_bool(&peer->options,
+                                 "no-centralized-routing", false)) {
+            return true;
+        } else {
+            return false;
+        }
     }
 
     /* Check if cr-pb is configured as "always-redirect". If not, then we will

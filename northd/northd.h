@@ -1211,7 +1211,6 @@ od_is_centralized(const struct ovn_datapath *od)
 }
 
 struct ovn_port *ovn_port_find(const struct hmap *ports, const char *name);
-
 void build_igmp_lflows(struct hmap *igmp_groups,
                        const struct hmap *ls_datapaths,
                        struct lflow_table *lflows,
