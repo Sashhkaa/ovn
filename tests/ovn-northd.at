@@ -23843,3 +23843,55 @@ AT_CHECK([as northd ovn-appctl -t ovn-northd inc-engine/enable-stopwatch nonexis
 OVN_CLEANUP_NORTHD
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([DGP "no-centralized-routing" option])
+ovn_start
+
+check ovn-nbctl ls-add sw0
+check ovn-nbctl ls-add sw1
+check ovn-nbctl lsp-add sw0 sw0-port1
+check ovn-nbctl lsp-add sw1 sw1-port1
+
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lrp-add lr0 lr0-sw0 00:00:00:00:ff:01 10.0.1.1/24
+check ovn-nbctl lsp-add-router-port sw0 sw0-lr0 lr0-sw0
+check ovn-nbctl lrp-add lr0 lr0-sw1 00:00:00:00:ff:02 10.0.2.1/24
+check ovn-nbctl lsp-add-router-port sw1 sw1-lr0 lr0-sw1
+
+check ovn-nbctl lrp-set-gateway-chassis lr0-sw0 gw1
+check ovn-nbctl lrp-set-gateway-chassis lr0-sw1 gw1
+check ovn-nbctl set logical_router_port lr0-sw1 options:no-centralized-routing=true
+
+check ovn-nbctl --wait=sb sync
+
+check_row_count Port_Binding 1 logical_port=cr-sw0-lr0
+check_row_count Port_Binding 1 logical_port=cr-sw1-lr0
+
+check_row_count Port_Binding 0 logical_port=lr0-sw0 options:no-centralized-routing=true
+check_row_count Port_Binding 1 logical_port=lr0-sw1 options:no-centralized-routing=true
+
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep "lr_in_gw_redirect" | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_gw_redirect  ), priority=0    , match=(1), action=(next;)
+  table=??(lr_in_gw_redirect  ), priority=50   , match=(outport == "lr0-sw0"), action=(outport = "cr-lr0-sw0"; next;)
+])
+
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep "lr_in_admission" | grep "lr0-sw0" | grep 'priority=50' | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_admission    ), priority=50   , match=(eth.dst == 00:00:00:00:ff:01 && inport == "lr0-sw0" && is_chassis_resident("cr-lr0-sw0")), action=(xreg0[[0..47]] = 00:00:00:00:ff:01; next;)
+  table=??(lr_in_admission    ), priority=50   , match=(eth.mcast && inport == "lr0-sw0"), action=(xreg0[[0..47]] = 00:00:00:00:ff:01; next;)
+])
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep "lr_in_admission" | grep "lr0-sw1" | grep 'priority=50' | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_admission    ), priority=50   , match=(eth.dst == 00:00:00:00:ff:02 && inport == "lr0-sw1"), action=(xreg0[[0..47]] = 00:00:00:00:ff:02; next;)
+  table=??(lr_in_admission    ), priority=50   , match=(eth.mcast && inport == "lr0-sw1"), action=(xreg0[[0..47]] = 00:00:00:00:ff:02; next;)
+])
+
+AT_CHECK([ovn-sbctl dump-flows sw0 | grep "ls_in_l2_lkup" | grep -c 'cr-sw0-lr0'], [0], [dnl
+6
+])
+AT_CHECK([ovn-sbctl dump-flows sw1 | grep "ls_in_l2_lkup" | grep -c 'cr-sw1-lr0'], [1], [dnl
+0
+])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
