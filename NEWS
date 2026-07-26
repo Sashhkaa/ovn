@@ -76,7 +76,6 @@ Post v26.03.0
      "ovn-ct-lb-related" feature flags. At the same time mark
      "mac-binding-timestamp", "fdb-timestamp" and "ls-dpg-column" feature
      flags as deprecated.
-   - Removed the deprecated "ct_lb" action.
    - Added a new "icmp4.inner_ip4.src" action that rewrites the source
      IPv4 address embedded in an ICMPv4 error's inner packet.  ovn-northd
      uses it for stateless "dnat_and_snat" rules, controlled by the new
