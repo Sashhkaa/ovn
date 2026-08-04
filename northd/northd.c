@@ -13074,8 +13074,14 @@ build_lb_rules_direct_nat(struct lrouter_nat_lb_flows_ctx *ctx,
     struct ds match_router_in_ct_extract = DS_EMPTY_INITIALIZER;
     struct ds action_router_in_ct_extract = DS_EMPTY_INITIALIZER;
 
+    bool incremental_groups =
+        lb->nlb && smap_get_bool(&lb->nlb->options, "direct-nat",
+                                 false);
+
     ds_put_format(&action_router_in_ct_extract, REG_IDX_LB_STATELESS" = select(");
-    if (lb->selection_fields) {
+    /* "group_key" is only accepted with the "values=(...)" spelling, so use
+     * it whenever either modifier is needed. */
+    if (lb->selection_fields || incremental_groups) {
         ds_put_format(&action_router_in_ct_extract, "values=(");
     }
 
@@ -13140,8 +13146,15 @@ build_lb_rules_direct_nat(struct lrouter_nat_lb_flows_ctx *ctx,
     }
 
     ds_truncate(&action_router_in_ct_extract, action_router_in_ct_extract.length - 1);
+    if (lb->selection_fields || incremental_groups) {
+        ds_put_cstr(&action_router_in_ct_extract, ")");
+    }
+    if (incremental_groups) {
+        ds_put_format(&action_router_in_ct_extract, "; group_key=\"%s:%s:%d\"",
+                      lb->nlb->name, lb_vip->vip_str, lb_vip->vip_port);
+    }
     if (lb->selection_fields) {
-        ds_put_format(&action_router_in_ct_extract, "); hash_fields=\"%s\"",
+        ds_put_format(&action_router_in_ct_extract, "; hash_fields=\"%s\"",
                       lb->selection_fields);
     }
     ds_put_format(&action_router_in_ct_extract, ");");

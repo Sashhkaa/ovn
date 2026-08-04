@@ -2604,6 +2604,16 @@
       </column>
     </group>
     <group title="Load_Balancer options">
+      <column name="options" key="incremental_groups"
+              type='{"type": "boolean"}'>
+        If set to <code>true</code>, <code>ovn-controller</code> keeps the
+        OpenFlow select group backing this load balancer at a stable
+        group_id and updates it one bucket at a time as backends are added
+        or removed, instead of deleting the group and creating a new one
+        whenever the backend set changes.  This avoids disturbing the
+        buckets that did not change.  Defaults to <code>false</code>.
+      </column>
+
       <column name="options" key="reject" type='{"type": "boolean"}'>
         If the load balancer is created with <code>--reject</code> option and
         it has no active backends, a TCP reset segment (for tcp) or an ICMP

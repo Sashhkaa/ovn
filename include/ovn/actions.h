@@ -356,6 +356,7 @@ struct ovnact_select {
     size_t n_dsts;
     uint8_t ltable;             /* Logical table ID of next table. */
     char *hash_fields;
+    char *group_key;
     struct expr_field res_field;
 };
 

@@ -21496,3 +21496,98 @@ OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
 /connection dropped.*/d"])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([load-balancing - incremental group bucket update on backend disable])
+AT_KEYWORDS([ovnlb])
+
+
+CHECK_CONNTRACK()
+CHECK_CONNTRACK_NAT()
+ovn_start
+OVS_TRAFFIC_VSWITCHD_START()
+ADD_BR([br-int])
+ovs-vsctl \
+        -- set Open_vSwitch . external-ids:system-id=hv1 \
+        -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
+        -- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
+        -- set Open_vSwitch . external-ids:ovn-encap-ip=169.0.0.1 \
+        -- set bridge br-int fail-mode=secure other-config:disable-in-band=true
+start_daemon ovn-controller
+
+check ovn-nbctl lr-add lr1
+check ovn-nbctl lrp-add lr1 lr1-down 00:00:00:00:00:01 42.42.42.1/24
+
+check ovn-nbctl ls-add ls1
+
+check ovn-nbctl lsp-add ls1 backend1
+check ovn-nbctl lsp-add ls1 backend2
+check ovn-nbctl lsp-add ls1 backend3
+check ovn-nbctl lsp-set-addresses backend1 "f0:00:00:01:02:04 42.42.42.3"
+check ovn-nbctl lsp-set-addresses backend2 "f0:00:00:01:02:05 42.42.42.4"
+check ovn-nbctl lsp-set-addresses backend3 "f0:00:00:01:02:06 42.42.42.5"
+
+check ovn-nbctl lsp-add-router-port ls1 ls1-lr lr1-down
+
+check ovn-nbctl lb-add lb0 30.0.0.1:80 42.42.42.3:10880,42.42.42.4:10880,42.42.42.5:10880
+check_uuid ovn-nbctl --id=@hc create \
+Load_Balancer_Health_Check vip="30.0.0.1\:80" -- add Load_Balancer . \
+health_check @hc
+
+check ovn-nbctl set Load_Balancer_Health_Check . options:interval=1 options:timeout=1 options:success_count=2 options:failure_count=2 
+check ovn-nbctl set load_balancer lb0 ip_port_mappings:42.42.42.3=backend1:42.42.42.2
+check ovn-nbctl set load_balancer lb0 ip_port_mappings:42.42.42.4=backend2:42.42.42.2
+check ovn-nbctl set load_balancer lb0 ip_port_mappings:42.42.42.5=backend3:42.42.42.2
+
+check ovn-nbctl ls-lb-add ls1 lb0
+check ovn-nbctl lr-lb-add lr1 lb0
+
+ADD_NAMESPACES(backend1)
+ADD_VETH(backend1, backend1, br-int, "42.42.42.3/24", "f0:00:00:01:02:04", \
+         "42.42.42.1")
+ADD_NAMESPACES(backend2)
+ADD_VETH(backend2, backend2, br-int, "42.42.42.4/24", "f0:00:00:01:02:05", \
+         "42.42.42.1")
+ADD_NAMESPACES(backend3)
+ADD_VETH(backend3, backend3, br-int, "42.42.42.5/24", "f0:00:00:01:02:06", \
+         "42.42.42.1")
+
+NETNS_DAEMONIZE([backend1], [nc -l -k 42.42.42.3 10880], [lsp0.pid])
+NETNS_DAEMONIZE([backend2], [nc -l -k 42.42.42.4 10880], [lsp1.pid])
+NETNS_DAEMONIZE([backend3], [nc -l -k 42.42.42.5 10880], [lsp2.pid])
+
+check ovn-nbctl --wait=hv sync
+
+OVS_WAIT_UNTIL([test $(ovn-sbctl --bare --columns=status find service_monitor | grep -c online) -eq 3])
+
+ovn-sbctl list service_monitor
+
+ovs-ofctl dump-groups br-int
+
+ovn-nbctl list load_balancer
+
+check ovn-nbctl set logical_switch_port backend1 enable=false
+OVS_WAIT_UNTIL([test $(ovn-sbctl --bare --columns=status find service_monitor | grep -c online) -eq 2])
+check ovn-nbctl --wait=hv sync
+
+ovs-ofctl dump-groups br-int
+
+check ovn-nbctl set logical_switch_port backend1 enable=true
+
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_UNTIL([test $(ovn-sbctl --bare --columns=status find service_monitor | grep -c online) -eq 3])
+
+ovs-ofctl dump-groups br-int
+
+check sosoidosi
+
+
+OVN_CLEANUP_CONTROLLER([hv1])
+
+OVN_CLEANUP_NORTHD
+
+as
+OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
+/connection dropped.*/d"])
+AT_CLEANUP
+])
