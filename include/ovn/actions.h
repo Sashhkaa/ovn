@@ -916,6 +916,15 @@ struct ovnact_encode_params {
     /* A struct to figure out the group_id for group actions. */
     struct ovn_extend_table *group_table;
 
+    /* Non-NULL => use this as the stable group-identity key (e.g. an LB's
+     * stage-hint) for CT_LB/CT_LB_MARK group encoding, via
+     * ovn_extend_table_assign_group_id(), instead of the default
+     * whole-content-hash ovn_extend_table_assign_id(). This enables
+     * incremental INSERT_BUCKET/REMOVE_BUCKET group updates in ofctrl.c
+     * instead of a whole-group replace when backends change. NULL keeps
+     * the legacy behavior unchanged. */
+    const char *lb_group_key;
+
     /* A struct to figure out the meter_id for meter actions. */
     struct ovn_extend_table *meter_table;
 

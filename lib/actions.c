@@ -1479,12 +1479,27 @@ encode_ct_lb(const struct ovnact_ct_lb *cl,
             break;
     }
 
-    struct ds ds = DS_EMPTY_INITIALIZER;
-    ds_put_format(&ds, "type=select,selection_method=%s",
+    bool incremental = ep->lb_group_key != NULL;
+
+    struct ds group_header = DS_EMPTY_INITIALIZER;
+    ds_put_format(&group_header, "type=select,selection_method=%s",
                   cl->hash_fields ? "hash": "dp_hash");
     if (cl->hash_fields) {
-        ds_put_format(&ds, ",fields(%s)", cl->hash_fields);
+        ds_put_format(&group_header, ",fields(%s)", cl->hash_fields);
     }
+
+    /* Legacy path: one flat string with every bucket inlined, hashed
+     * whole to derive the group_id (ovn_extend_table_assign_id()).
+     * Incremental path (ep->lb_group_key set): same per-bucket action
+     * text, but collected as separate {key, content} specs so
+     * ovn_extend_table_assign_group_id() can diff them against what's
+     * already installed and emit incremental bucket updates. */
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    if (!incremental) {
+        ds_put_cstr(&ds, ds_cstr(&group_header));
+    }
+    struct ovn_extend_table_bucket_spec *bucket_specs =
+        incremental ? xmalloc(cl->n_dsts * sizeof *bucket_specs) : NULL;
 
     /* Make sure that all the used registers are within the NXM_NX class. */
     BUILD_ASSERT(OVN_FLOW_N_REGS_SUPPORTED == 16);
@@ -1505,42 +1520,71 @@ encode_ct_lb(const struct ovnact_ct_lb *cl,
             inet_ntop(AF_INET6, &dst->ipv6, ip_addr, sizeof ip_addr);
         }
 
-        ds_put_format(&ds, ",bucket=bucket_id=%"PRIuSIZE",weight:100,actions=",
-                      bucket_id);
+        struct ds bucket_action = DS_EMPTY_INITIALIZER;
+        struct ds *action = incremental ? &bucket_action : &ds;
+        if (!incremental) {
+            ds_put_format(action, ",bucket=bucket_id=%"PRIuSIZE
+                          ",weight:100,actions=", bucket_id);
+        }
 
         bool is_ipv6_address = (dst->family == AF_INET6 && dst->port);
-        ds_put_format(&ds, "ct(nat(dst=");
+        ds_put_format(action, "ct(nat(dst=");
         if (is_ipv6_address) {
-            ds_put_format(&ds, "[%s]", ip_addr);
+            ds_put_format(action, "[%s]", ip_addr);
         } else {
-            ds_put_format(&ds, "%s", ip_addr);
+            ds_put_format(action, "%s", ip_addr);
         }
 
         if (dst->port) {
-            ds_put_format(&ds, ":%"PRIu16, dst->port);
+            ds_put_format(action, ":%"PRIu16, dst->port);
         }
-        ds_put_format(&ds, "),commit,table=%d,zone=NXM_NX_REG%d[0..15],"
+        ds_put_format(action, "),commit,table=%d,zone=NXM_NX_REG%d[0..15],"
                       "exec(set_field:"
                         OVN_CT_MASKED_STR(OVN_CT_NATTED)
                       "->%s",
                       recirc_table, zone_reg, flag_reg);
         if (ct_flag_value) {
-            ds_put_format(&ds, ",set_field:%s->%s", ct_flag_value, flag_reg);
+            ds_put_format(action, ",set_field:%s->%s", ct_flag_value,
+                          flag_reg);
         }
 
-        ds_put_cstr(&ds, "))");
+        ds_put_cstr(action, "))");
+
+        if (incremental) {
+            char *key = xasprintf(is_ipv6_address ? "[%s]:%"PRIu16
+                                                    : "%s:%"PRIu16,
+                                  ip_addr, dst->port);
+            bucket_specs[n_active_backends].key = key;
+            bucket_specs[n_active_backends].content =
+                ds_steal_cstr(&bucket_action);
+        }
 
         n_active_backends++;
     }
 
-    if (!n_active_backends) {
-        return;
+    if (n_active_backends) {
+        if (incremental) {
+            table_id = ovn_extend_table_assign_group_id(
+                ep->group_table, ep->lb_group_key, ds_cstr(&group_header),
+                bucket_specs, n_active_backends, ep->lflow_uuid);
+        } else {
+            table_id = ovn_extend_table_assign_id(ep->group_table,
+                                                  ds_cstr(&ds),
+                                                  ep->lflow_uuid);
+        }
     }
 
-    table_id = ovn_extend_table_assign_id(ep->group_table, ds_cstr(&ds),
-                                          ep->lflow_uuid);
+    if (incremental) {
+        for (size_t i = 0; i < n_active_backends; i++) {
+            free(CONST_CAST(char *, bucket_specs[i].key));
+            free(CONST_CAST(char *, bucket_specs[i].content));
+        }
+        free(bucket_specs);
+    }
+    ds_destroy(&group_header);
     ds_destroy(&ds);
-    if (table_id == EXT_TABLE_ID_INVALID) {
+
+    if (!n_active_backends || table_id == EXT_TABLE_ID_INVALID) {
         return;
     }
 

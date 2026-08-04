@@ -901,6 +901,10 @@ add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
         .aux = &aux,
         .is_switch = ldp->is_switch,
         .group_table = l_ctx_out->group_table,
+        .lb_group_key = smap_get(&lflow->external_ids,
+                                 "incremental-group-modify")
+                        ? smap_get(&lflow->external_ids, "stage-hint")
+                        : NULL,
         .meter_table = l_ctx_out->meter_table,
         .collector_ids = l_ctx_in->collector_ids,
         .lflow_uuid = lflow->header_.uuid,

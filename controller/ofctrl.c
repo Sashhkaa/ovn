@@ -2857,9 +2857,24 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
         /* Create and install new group. */
         struct ofputil_group_mod gm;
         enum ofputil_protocol usable_protocols;
-        char *group_string = xasprintf("group_id=%"PRIu32",%s",
-                                       desired->table_id,
-                                       desired->name);
+        char *group_string;
+        if (desired->group_header) {
+            struct ds group_ds = DS_EMPTY_INITIALIZER;
+            ds_put_format(&group_ds, "group_id=%"PRIu32",%s",
+                          desired->table_id, desired->group_header);
+            struct ovn_extend_table_bucket *b;
+            HMAP_FOR_EACH (b, hmap_node, &desired->desired_buckets) {
+                ds_put_format(&group_ds, ",bucket=bucket_id=%"PRIu32
+                              ",weight:100,actions=%s",
+                              b->bucket_id, b->content);
+            }
+            group_string = ds_steal_cstr(&group_ds);
+            ds_destroy(&group_ds);
+        } else {
+            group_string = xasprintf("group_id=%"PRIu32",%s",
+                                     desired->table_id,
+                                     desired->name);
+        }
         char *error = parse_ofp_group_mod_str(&gm, OFPGC15_ADD, group_string,
                                               NULL, NULL, &usable_protocols);
         if (!error) {
@@ -2871,6 +2886,99 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
         }
         free(group_string);
         ofputil_uninit_group_mod(&gm);
+    }
+
+    /* Iterate through desired groups that already have a matching group_id
+     * installed (so they were skipped by the loop above) but were created
+     * via ovn_extend_table_assign_group_id() and may need incremental
+     * bucket updates (e.g. an LB backend was added/removed). Diff against
+     * what's actually installed (existing->existing_buckets) and send only
+     * the bucket-level changes, instead of a whole-group replace.
+     *
+     * A bucket whose content changed under the same key (e.g. a weight or
+     * health-check flip) has no direct "modify" verb in OF1.5: it's
+     * removed and re-inserted under the same bucket_id
+     * (ovn_extend_table_assign_group_id() keeps ids stable per key), so
+     * REMOVE_BUCKET is sent before INSERT_BUCKET. */
+    HMAP_FOR_EACH (desired, hmap_node, &groups->desired) {
+        if (!desired->group_header) {
+            continue;
+        }
+        struct ovn_extend_table_info *existing =
+            ovn_extend_table_lookup(&groups->existing, desired);
+        if (!existing) {
+            continue;
+        }
+
+        struct ovn_extend_table_bucket *e;
+        HMAP_FOR_EACH (e, hmap_node, &existing->existing_buckets) {
+            struct ovn_extend_table_bucket *d;
+            bool unchanged = false;
+            HMAP_FOR_EACH (d, hmap_node, &desired->desired_buckets) {
+                if (!strcmp(d->key, e->key)) {
+                    unchanged = !strcmp(d->content, e->content);
+                    break;
+                }
+            }
+            if (unchanged) {
+                continue;
+            }
+
+            struct ofputil_group_mod gm;
+            enum ofputil_protocol usable_protocols;
+            char *group_string = xasprintf(
+                "group_id=%"PRIu32",command_bucket_id=%"PRIu32,
+                desired->table_id, e->bucket_id);
+            char *error = parse_ofp_group_mod_str(
+                &gm, OFPGC15_REMOVE_BUCKET, group_string, NULL, NULL,
+                &usable_protocols);
+            if (!error) {
+                add_group_mod(&gm, &bc, &msgs);
+            } else {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+                VLOG_ERR_RL(&rl, "remove bucket %s %s", error, group_string);
+                free(error);
+            }
+            free(group_string);
+            ofputil_uninit_group_mod(&gm);
+        }
+
+        struct ds insert_ds = DS_EMPTY_INITIALIZER;
+        struct ovn_extend_table_bucket *d;
+        HMAP_FOR_EACH (d, hmap_node, &desired->desired_buckets) {
+            bool unchanged = false;
+            HMAP_FOR_EACH (e, hmap_node, &existing->existing_buckets) {
+                if (!strcmp(e->key, d->key)) {
+                    unchanged = !strcmp(e->content, d->content);
+                    break;
+                }
+            }
+            if (!unchanged) {
+                ds_put_format(&insert_ds, ",bucket=bucket_id=%"PRIu32
+                              ",weight:100,actions=%s",
+                              d->bucket_id, d->content);
+            }
+        }
+        if (insert_ds.length) {
+            struct ofputil_group_mod gm;
+            enum ofputil_protocol usable_protocols;
+            char *group_string = xasprintf("group_id=%"PRIu32"%s",
+                                           desired->table_id,
+                                           ds_cstr(&insert_ds));
+            char *error = parse_ofp_group_mod_str(
+                &gm, OFPGC15_INSERT_BUCKET, group_string, NULL, NULL,
+                &usable_protocols);
+            if (!error) {
+                add_group_mod(&gm, &bc, &msgs);
+            } else {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+                VLOG_ERR_RL(&rl, "insert bucket %s %s", error, group_string);
+                free(error);
+            }
+            free(group_string);
+            ofputil_uninit_group_mod(&gm);
+        }
+        ds_destroy(&insert_ds);
     }
 
     /* If skipped last time, then process the flow table
