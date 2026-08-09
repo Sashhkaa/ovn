@@ -212,6 +212,8 @@ init_backend:
         backend_nb->remote_backend = is_remote;
         backend_nb->svc_mon_lrp = NULL;
         backend_nb->distributed_backend = lb->is_distributed;
+        backend_nb->deferred_nat_backend = lb->is_deferred_nat;
+
 cleanup:
         free(port_name);
     }
@@ -334,6 +336,13 @@ validate_snap_ip_address(const char *snat_ip)
     return ip_parse(snat_ip, &ip);
 }
 
+static bool
+lb_vip_needs_port_mappings(const struct ovn_northd_lb *lb)
+{
+    return lb->health_checks || lb->is_distributed
+           || lb->is_deferred_nat;
+}
+
 static void
 ovn_northd_lb_init(struct ovn_northd_lb *lb,
                    const struct nbrec_load_balancer *nbrec_lb)
@@ -386,7 +395,7 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
     lb->is_distributed = smap_get_bool(&nbrec_lb->options, "distributed",
                                        false);
 
-    lb->is_direct_nat = smap_get_bool(&nbrec_lb->options, "direct-nat",
+    lb->is_deferred_nat = smap_get_bool(&nbrec_lb->options, "deferred-nat",
                                       false);
 
     sset_init(&lb->ips_v4);
@@ -428,7 +437,7 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
         }
         n_vips++;
 
-        if (lb_vip_nb->lb_health_check || lb->is_distributed) {
+        if (lb_vip_needs_port_mappings(lb)) {
             ovn_lb_vip_backends_ip_port_mappings_init(lb, lb_vip, lb_vip_nb);
         }
     }
