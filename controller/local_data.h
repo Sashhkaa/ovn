@@ -146,7 +146,6 @@ struct chassis_tunnel {
     ofp_port_t ofport;
     enum chassis_tunnel_type type;
     bool is_ipv6;
-    bool is_ramp_tunnel;
 };
 
 /* Flow-based tunnel that consolidates multiple endpoints into a single

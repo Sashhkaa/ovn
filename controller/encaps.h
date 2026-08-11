@@ -17,7 +17,6 @@
 #define OVN_ENCAPS_H 1
 
 #include <stdbool.h>
-#include "smap.h"
 
 /*
  * Given there could be multiple tunnels with different IPs to the same
@@ -68,11 +67,5 @@ bool  encaps_tunnel_id_match(const char *tunnel_id, const char *chassis_id,
                              const char *local_encap_ip);
 
 void encaps_destroy(void);
-
-static inline bool
-is_ramp_tunnel(const struct smap *other_config)
-{
-    return smap_get_bool(other_config, "is-vtep", false);
-}
 
 #endif /* controller/encaps.h */
