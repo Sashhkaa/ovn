@@ -2425,6 +2425,30 @@ ct_lb_mark_local(backends="lsp1":[[fd0f::2]]:80);
     uses group: id(23), name(type=select,selection_method=dp_hash,bucket=bucket_id=0,weight:100,actions=ct(nat(dst=[[fd0f::2]]:80),commit,table=oflow_in_table,zone=NXM_NX_REG13[[0..15]],exec(set_field:2/2->ct_mark)))
     has prereqs ip
 
+# "select" takes a group_key, and accepts it as the only modifier.
+reg0 = select(values=(1, 2); group_key="lb0:30.0.0.1:80");
+    formats as reg0 = select(values=(1=100, 2=100); group_key="lb0:30.0.0.1:80");
+    encodes as group:30
+    uses group: id(30), name(lb0:30.0.0.1:80|type=select,selection_method=dp_hash|table=oflow_in_table|xxreg0[[96..127]])
+
+reg0 = select(values=(1, 2); group_key="lb1:30.0.0.2:80"; hash_fields="ip_dst,ip_src");
+    formats as reg0 = select(values=(1=100, 2=100); group_key="lb1:30.0.0.2:80"; hash_fields="ip_dst,ip_src");
+    encodes as group:31
+    uses group: id(31), name(lb1:30.0.0.2:80|type=select,selection_method=hash,fields(ip_dst,ip_src)|table=oflow_in_table|xxreg0[[96..127]])
+
+reg0 = select(values=(1, 2); group_key=);
+    Syntax error at `)' invalid group_key.
+
+reg0 = select(values=(42.42.42.3, 42.42.42.4); group_key="lb3:30.0.0.4:80");
+    formats as reg0 = select(values=(42.42.42.3=100, 42.42.42.4=100); group_key="lb3:30.0.0.4:80");
+    encodes as group:32
+    uses group: id(32), name(lb3:30.0.0.4:80|type=select,selection_method=dp_hash|table=oflow_in_table|xxreg0[[96..127]])
+
+reg0 = select(1, 2; group_key="lb2:30.0.0.3:80");
+    formats as reg0 = select(values=(1=100, 2=100); group_key="lb2:30.0.0.3:80");
+    encodes as group:33
+    uses group: id(33), name(lb2:30.0.0.3:80|type=select,selection_method=dp_hash|table=oflow_in_table|xxreg0[[96..127]]
+
 # Miscellaneous negative tests.
 ;
     Syntax error at `;'.
