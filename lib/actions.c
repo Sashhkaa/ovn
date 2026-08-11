@@ -1641,7 +1641,28 @@ parse_select_action(struct action_context *ctx, struct expr_field *res_field)
         }
 
         struct ovnact_select_dst dst;
-        if (!action_parse_uint16(ctx, &dst.id, "id")) {
+        /* A member value is either a plain integer or an IPv4 address; the
+         * latter lets a caller name its members by something that does not
+         * shift as the membership changes. */
+        dst.ipv4 = false;
+        if (lexer_is_int(ctx->lexer)
+            && ntohll(ctx->lexer->token.value.integer) <= UINT32_MAX) {
+            dst.id = ntohll(ctx->lexer->token.value.integer);
+            lexer_get(ctx->lexer);
+        } else if (ctx->lexer->token.type == LEX_T_INTEGER
+                   && ctx->lexer->token.format == LEX_F_IPV4) {
+            dst.id = htonl(ctx->lexer->token.value.ipv4);
+            dst.ipv4 = true;
+            lexer_get(ctx->lexer);
+        } else {
+            lexer_syntax_error(ctx->lexer, "expecting id");
+            vector_destroy(&dsts);
+            return;
+        }
+        if (res_field->n_bits < 32
+            && dst.id >= (UINT32_C(1) << res_field->n_bits)) {
+            lexer_error(ctx->lexer, "value %"PRIu32" does not fit in the "
+                        "%d-bit result field.", dst.id, res_field->n_bits);
             vector_destroy(&dsts);
             return;
         }
@@ -1734,7 +1755,11 @@ format_SELECT(const struct ovnact_select *select, struct ds *s)
         }
 
         const struct ovnact_select_dst *dst = &select->dsts[i];
-        ds_put_format(s, "%"PRIu16, dst->id);
+        if (dst->ipv4) {
+            ds_put_format(s, IP_FMT, IP_ARGS(htonl(dst->id)));
+        } else {
+            ds_put_format(s, "%"PRIu32, dst->id);
+        }
         ds_put_format(s, "=%"PRIu16, dst->weight);
     }
     ds_put_char(s, ')');
@@ -1783,7 +1808,7 @@ encode_SELECT(const struct ovnact_select *select,
      * bucket loads into the result field, which is what identifies a member
      * for as long as northd numbers them consistently. */
     bool incremental = select->group_key != NULL;
-
+    VLOG_WARN("incremental = %d", incremental);
     struct ds group_key = DS_EMPTY_INITIALIZER;
     struct ovn_extend_table_bucket_spec *bucket_specs = NULL;
     if (incremental) {
@@ -1796,7 +1821,8 @@ encode_SELECT(const struct ovnact_select *select,
     for (size_t bucket_id = 0; bucket_id < select->n_dsts; bucket_id++) {
         const struct ovnact_select_dst *dst = &select->dsts[bucket_id];
         if (incremental) {
-            bucket_specs[bucket_id].key = xasprintf("%"PRIu16, dst->id);
+            /* подумать тут над тем что dst->id может меняться на стороне northd */
+            bucket_specs[bucket_id].key = xasprintf("%"PRIu32, dst->id);
             /* All buckets carry the same weight, so ofctrl.c supplies it
              * and the content only needs to describe the actions. */
             bucket_specs[bucket_id].content =

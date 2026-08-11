@@ -547,6 +547,7 @@ ovn_extend_table_assign_group_id(struct ovn_extend_table *table,
         ovn_extend_table_desired_lookup_by_name(table, group_key);
     ovs_assert(info);
 
+    /* зачем ? */
     free(info->group_header);
     info->group_header = xstrdup(group_header);
 
