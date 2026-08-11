@@ -1,0 +1,8 @@
+#
+# Unit tests for the lib/extend-table.c module.
+#
+AT_BANNER([OVN unit tests - extend table])
+
+AT_SETUP([unit test -- group_id/bucket_id stable across LB backend churn])
+AT_CHECK([ovstest test-extend-table run], [0], [])
+AT_CLEANUP

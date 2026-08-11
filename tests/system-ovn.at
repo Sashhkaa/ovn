@@ -21539,8 +21539,14 @@ check ovn-nbctl set load_balancer lb0 ip_port_mappings:42.42.42.3=backend1:42.42
 check ovn-nbctl set load_balancer lb0 ip_port_mappings:42.42.42.4=backend2:42.42.42.2
 check ovn-nbctl set load_balancer lb0 ip_port_mappings:42.42.42.5=backend3:42.42.42.2
 
-check ovn-nbctl ls-lb-add ls1 lb0
 check ovn-nbctl lr-lb-add lr1 lb0
+check ovn-nbctl set load_balancer lb0 options:deferred-nat=true
+check ovn-nbctl --wait=sb sync
+
+check ovn-nbctl lrp-set-gateway-chassis lr1-down hv1
+
+
+ovn-sbctl lflow-list lr1
 
 ADD_NAMESPACES(backend1)
 ADD_VETH(backend1, backend1, br-int, "42.42.42.3/24", "f0:00:00:01:02:04", \

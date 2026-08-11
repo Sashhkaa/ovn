@@ -19966,12 +19966,12 @@ check ovn-nbctl set load_balancer lb1 ip_port_mappings:172.16.0.103=lport1:192.1
 check ovn-nbctl set load_balancer lb1 ip_port_mappings:172.16.0.102=lport2:192.168.0.99
 check ovn-nbctl set load_balancer lb1 ip_port_mappings:172.16.0.101=lport3:192.168.0.99
 
-check ovn-nbctl set load_balancer lb1 options:direct-nat=true
+check ovn-nbctl set load_balancer lb1 options:deferred-nat=true
 
 check ovn-nbctl lsp-add-router-port ls1 ls1-up lr1-down
 
 AT_CHECK([ovn-sbctl lflow-list lr1 | grep "lr_in_ct_extract" | ovn_strip_lflows | grep "30.0.0.1"], [0], [dnl
-  table=??(lr_in_ct_extract   ), priority=130  , match=(ip && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(reg1[[0..15]] = select(0,1,2);)
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(reg4 = select(values=(172.16.0.103,172.16.0.102,172.16.0.101); group_key="lb1:30.0.0.1:80");)
 ])
 
 AT_CHECK([ovn-sbctl lflow-list lr1 | grep "lr_in_dnat" | ovn_strip_lflows | grep "30.0.0.1" | grep "priority=130"], [0], [dnl
@@ -19979,9 +19979,9 @@ AT_CHECK([ovn-sbctl lflow-list lr1 | grep "lr_in_dnat" | ovn_strip_lflows | grep
 ])
 
 AT_CHECK([ovn-sbctl lflow-list lr1 | grep "lr_in_ip_routing" | ovn_strip_lflows| grep "priority=600"], [0], [dnl
-  table=??(lr_in_ip_routing   ), priority=600  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && reg1[[0..15]] == 0), action=(ip.ttl--; reg8[[0..15]] = 0; reg0 = 172.16.0.103; reg5 = 172.31.0.1; eth.src = 00:00:01:02:03:04; outport = "lr1-down"; reg9[[9]] =  1; next;)
-  table=??(lr_in_ip_routing   ), priority=600  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && reg1[[0..15]] == 1), action=(ip.ttl--; reg8[[0..15]] = 0; reg0 = 172.16.0.102; reg5 = 172.31.0.1; eth.src = 00:00:01:02:03:04; outport = "lr1-down"; reg9[[9]] =  1; next;)
-  table=??(lr_in_ip_routing   ), priority=600  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && reg1[[0..15]] == 2), action=(ip.ttl--; reg8[[0..15]] = 0; reg0 = 172.16.0.101; reg5 = 172.31.0.1; eth.src = 00:00:01:02:03:04; outport = "lr1-down"; reg9[[9]] =  1; next;)
+  table=??(lr_in_ip_routing   ), priority=600  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && reg4 == 172.16.0.101), action=(ip.ttl--; reg8[[0..15]] = 0; reg0 = 172.16.0.101; reg5 = 172.31.0.1; eth.src = 00:00:01:02:03:04; outport = "lr1-down"; reg9[[9]] =  1; next;)
+  table=??(lr_in_ip_routing   ), priority=600  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && reg4 == 172.16.0.102), action=(ip.ttl--; reg8[[0..15]] = 0; reg0 = 172.16.0.102; reg5 = 172.31.0.1; eth.src = 00:00:01:02:03:04; outport = "lr1-down"; reg9[[9]] =  1; next;)
+  table=??(lr_in_ip_routing   ), priority=600  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && reg4 == 172.16.0.103), action=(ip.ttl--; reg8[[0..15]] = 0; reg0 = 172.16.0.103; reg5 = 172.31.0.1; eth.src = 00:00:01:02:03:04; outport = "lr1-down"; reg9[[9]] =  1; next;)
 ])
 
 AT_CHECK([ovn-sbctl lflow-list ls1 | grep "ls_out_lb" | ovn_strip_lflows], [0], [dnl
@@ -19998,8 +19998,31 @@ AT_CHECK([ovn-sbctl lflow-list ls1 | grep "ls_in_pre_stateful" | ovn_strip_lflow
 check ovn-nbctl set logical_switch_port lport1 enable=false
 
 AT_CHECK([ovn-sbctl lflow-list lr1 | grep "lr_in_ct_extract" | ovn_strip_lflows | grep "30.0.0.1"], [0], [dnl
-  table=??(lr_in_ct_extract   ), priority=130  , match=(ip && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(reg1[[0..15]] = select(1,2);)
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(reg4 = select(values=(172.16.0.102,172.16.0.101); group_key="lb1:30.0.0.1:80");)
 ])
+
+# Without a health check every backend is usable, so all of them are back.
+check ovn-nbctl set logical_switch_port lport1 enable=true
+check ovn-nbctl --wait=sb clear load_balancer lb1 health_check
+
+AT_CHECK([ovn-sbctl lflow-list lr1 | grep "lr_in_ct_extract" | ovn_strip_lflows | grep "30.0.0.1"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(reg4 = select(values=(172.16.0.103,172.16.0.102,172.16.0.101); group_key="lb1:30.0.0.1:80");)
+])
+
+# "select" needs at least two members, so a lone backend is named directly.
+check ovn-nbctl --wait=sb set load_balancer lb1 \
+    vips:'"30.0.0.1:80"'='"172.16.0.101:10880"'
+
+AT_CHECK([ovn-sbctl lflow-list lr1 | grep "lr_in_ct_extract" | ovn_strip_lflows | grep "30.0.0.1"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(reg4 = 172.16.0.101; next;)
+])
+
+# With no backend left to steer to, the stage is left alone rather than
+# carrying an empty "select".
+check ovn-nbctl --wait=sb clear load_balancer lb1 ip_port_mappings
+
+AT_CHECK([ovn-sbctl lflow-list lr1 | grep "lr_in_ct_extract" | ovn_strip_lflows | grep "30.0.0.1"], [1], [])
 
 OVN_CLEANUP_NORTHD
 AT_CLEANUP
+
