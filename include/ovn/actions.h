@@ -344,7 +344,13 @@ struct ovnact_ct_lb {
 };
 
 struct ovnact_select_dst {
-    uint16_t id;
+    /* Value loaded into the result field when this member is picked.  It is
+     * opaque to the action itself; a caller that needs a stable identity per
+     * member (e.g. a load balancer naming its backends) can use something
+     * like the backend's IPv4 address, which does not shift as other members
+     * come and go. */
+    uint32_t id;
+    bool ipv4;                  /* 'id' was spelled as an IPv4 address. */
     uint16_t weight;
 };
 
@@ -355,6 +361,7 @@ struct ovnact_select {
     size_t n_dsts;
     uint8_t ltable;             /* Logical table ID of next table. */
     char *hash_fields;
+    char *group_key;
     struct expr_field res_field;
 };
 

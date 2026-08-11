@@ -1598,8 +1598,9 @@ parse_select_action(struct action_context *ctx, struct expr_field *res_field)
     }
 
     struct vector dsts = VECTOR_EMPTY_INITIALIZER(struct ovnact_select_dst);
-    bool requires_hash_fields = false;
+    bool values_form = false;
     char *hash_fields = NULL;
+    char *group_key = NULL;
 
     lexer_get(ctx->lexer); /* Skip "select". */
     lexer_get(ctx->lexer); /* Skip '('. */
@@ -1607,12 +1608,42 @@ parse_select_action(struct action_context *ctx, struct expr_field *res_field)
     if (lexer_match_id(ctx->lexer, "values")) {
         lexer_force_match(ctx->lexer, LEX_T_EQUALS);
         lexer_force_match(ctx->lexer, LEX_T_LPAREN);
-        requires_hash_fields = true;
+        values_form = true;
     }
 
+    /* The "values=(...)" spelling always continues with ";" and at least one
+     * modifier.  The bare spelling may also carry modifiers, in which case
+     * the member list ends at the ";" rather than at the closing ")". */
+    bool has_modifiers = values_form;
     while (!lexer_match(ctx->lexer, LEX_T_RPAREN)) {
+        if (!values_form && ctx->lexer->token.type == LEX_T_SEMICOLON) {
+            has_modifiers = true;
+            break;
+        }
+
         struct ovnact_select_dst dst;
-        if (!action_parse_uint16(ctx, &dst.id, "id")) {
+        /* A member value is either a plain integer or an IPv4 address; the
+         * latter lets a caller name its members by something that does not
+         * shift as the membership changes. */
+        dst.ipv4 = false;
+        if (lexer_is_int(ctx->lexer)
+            && ntohll(ctx->lexer->token.value.integer) <= UINT32_MAX) {
+            dst.id = ntohll(ctx->lexer->token.value.integer);
+            lexer_get(ctx->lexer);
+        } else if (ctx->lexer->token.type == LEX_T_INTEGER
+                   && ctx->lexer->token.format == LEX_F_IPV4) {
+            dst.id = ntohl(ctx->lexer->token.value.ipv4);
+            dst.ipv4 = true;
+            lexer_get(ctx->lexer);
+        } else {
+            lexer_syntax_error(ctx->lexer, "expecting id");
+            vector_destroy(&dsts);
+            return;
+        }
+        if (res_field->n_bits < 32
+            && dst.id >= (UINT32_C(1) << res_field->n_bits)) {
+            lexer_error(ctx->lexer, "value %"PRIu32" does not fit in the "
+                        "%d-bit result field.", dst.id, res_field->n_bits);
             vector_destroy(&dsts);
             return;
         }
@@ -1642,22 +1673,41 @@ parse_select_action(struct action_context *ctx, struct expr_field *res_field)
         return;
     }
 
-    if (requires_hash_fields) {
+    if (has_modifiers) {
         lexer_force_match(ctx->lexer, LEX_T_SEMICOLON);
-        if (!lexer_match_id(ctx->lexer, "hash_fields")) {
-            lexer_syntax_error(ctx->lexer, "expecting hash_fields");
-            vector_destroy(&dsts);
-            return;
+
+        /* Optional "group_key", which may be the only modifier. */
+        bool expect_hash_fields = true;
+        if (lexer_match_id(ctx->lexer, "group_key")) {
+            if (!lexer_match(ctx->lexer, LEX_T_EQUALS) ||
+                ctx->lexer->token.type != LEX_T_STRING) {
+                lexer_syntax_error(ctx->lexer, "invalid group_key");
+                vector_destroy(&dsts);
+                return;
+            }
+            group_key = xstrdup(ctx->lexer->token.s);
+            lexer_get(ctx->lexer);
+            expect_hash_fields = lexer_match(ctx->lexer, LEX_T_SEMICOLON);
         }
-        if (!lexer_match(ctx->lexer, LEX_T_EQUALS) ||
-            ctx->lexer->token.type != LEX_T_STRING ||
-            lexer_lookahead(ctx->lexer) != LEX_T_RPAREN) {
-            lexer_syntax_error(ctx->lexer, "invalid hash_fields");
-            vector_destroy(&dsts);
-            return;
+
+        if (expect_hash_fields) {
+            if (!lexer_match_id(ctx->lexer, "hash_fields")) {
+                lexer_syntax_error(ctx->lexer, "expecting hash_fields");
+                vector_destroy(&dsts);
+                free(group_key);
+                return;
+            }
+            if (!lexer_match(ctx->lexer, LEX_T_EQUALS) ||
+                ctx->lexer->token.type != LEX_T_STRING ||
+                lexer_lookahead(ctx->lexer) != LEX_T_RPAREN) {
+                lexer_syntax_error(ctx->lexer, "invalid hash_fields");
+                vector_destroy(&dsts);
+                free(group_key);
+                return;
+            }
+            hash_fields = xstrdup(ctx->lexer->token.s);
+            lexer_get(ctx->lexer);
         }
-        hash_fields = xstrdup(ctx->lexer->token.s);
-        lexer_get(ctx->lexer);
         lexer_force_match(ctx->lexer, LEX_T_RPAREN);
     }
 
@@ -1667,6 +1717,7 @@ parse_select_action(struct action_context *ctx, struct expr_field *res_field)
     select->dsts = vector_steal_array(&dsts);
     select->res_field = *res_field;
     select->hash_fields = hash_fields;
+    select->group_key = group_key;
 }
 
 static void
@@ -1676,7 +1727,7 @@ format_SELECT(const struct ovnact_select *select, struct ds *s)
     ds_put_cstr(s, " = ");
     ds_put_cstr(s, "select");
     ds_put_char(s, '(');
-    if (select->hash_fields) {
+    if (select->hash_fields || select->group_key) {
         ds_put_format(s, "values=(");
     }
     for (size_t i = 0; i < select->n_dsts; i++) {
@@ -1685,12 +1736,22 @@ format_SELECT(const struct ovnact_select *select, struct ds *s)
         }
 
         const struct ovnact_select_dst *dst = &select->dsts[i];
-        ds_put_format(s, "%"PRIu16, dst->id);
+        if (dst->ipv4) {
+            ds_put_format(s, IP_FMT, IP_ARGS(htonl(dst->id)));
+        } else {
+            ds_put_format(s, "%"PRIu32, dst->id);
+        }
         ds_put_format(s, "=%"PRIu16, dst->weight);
     }
     ds_put_char(s, ')');
+    if (select->group_key) {
+        ds_put_format(s, "; group_key=\"%s\"", select->group_key);
+    }
     if (select->hash_fields) {
-      ds_put_format(s, "; hash_fields=\"%s\")", select->hash_fields);
+        ds_put_format(s, "; hash_fields=\"%s\"", select->hash_fields);
+    }
+    if (select->hash_fields || select->group_key) {
+        ds_put_char(s, ')');
     }
     ds_put_char(s, ';');
 }
@@ -1721,8 +1782,35 @@ encode_SELECT(const struct ovnact_select *select,
 
     struct mf_subfield sf = expr_resolve_field(&select->res_field);
 
+    /* With a group_key the group is identified by that key plus the parts
+     * of the group that do not depend on its members, so
+     * that its group_id survives members coming and going and ofctrl.c can
+     * update it a bucket at a time.  Each bucket is keyed by the value the
+     * bucket loads into the result field, which is what identifies a member
+     * for as long as northd numbers them consistently. */
+    bool incremental = select->group_key != NULL;
+
+    struct ds group_key = DS_EMPTY_INITIALIZER;
+    struct ovn_extend_table_bucket_spec *bucket_specs = NULL;
+    if (incremental) {
+        ds_put_format(&group_key, "%s|%s|table=%d|%s[%u..%u]",
+                      select->group_key, ds_cstr(&ds), resubmit_table,
+                      sf.field->name, sf.ofs, sf.ofs + sf.n_bits - 1);
+        bucket_specs = xmalloc(select->n_dsts * sizeof *bucket_specs);
+    }
+
     for (size_t bucket_id = 0; bucket_id < select->n_dsts; bucket_id++) {
         const struct ovnact_select_dst *dst = &select->dsts[bucket_id];
+        if (incremental) {
+            bucket_specs[bucket_id].key = xasprintf("%"PRIu32, dst->id);
+            /* All buckets carry the same weight, so ofctrl.c supplies it
+             * and the content only needs to describe the actions. */
+            bucket_specs[bucket_id].content =
+                xasprintf("load:%u->%s[%u..%u],resubmit(,%d)", dst->id,
+                          sf.field->name, sf.ofs, sf.ofs + sf.n_bits - 1,
+                          resubmit_table);
+            continue;
+        }
         ds_put_format(&ds, ",bucket=bucket_id=%"PRIuSIZE",weight:%"PRIu16
                       ",actions=", bucket_id, dst->weight);
         ds_put_format(&ds, "load:%u->%s[%u..%u],", dst->id, sf.field->name,
@@ -1730,8 +1818,20 @@ encode_SELECT(const struct ovnact_select *select,
         ds_put_format(&ds, "resubmit(,%d)", resubmit_table);
     }
 
-    table_id = ovn_extend_table_assign_id(ep->group_table, ds_cstr(&ds),
-                                          ep->lflow_uuid);
+    if (incremental) {
+        table_id = ovn_extend_table_assign_group_id(
+            ep->group_table, ds_cstr(&group_key), ds_cstr(&ds), bucket_specs,
+            select->n_dsts, ep->lflow_uuid);
+        for (size_t i = 0; i < select->n_dsts; i++) {
+            free(CONST_CAST(char *, bucket_specs[i].key));
+            free(CONST_CAST(char *, bucket_specs[i].content));
+        }
+        free(bucket_specs);
+    } else {
+        table_id = ovn_extend_table_assign_id(ep->group_table, ds_cstr(&ds),
+                                              ep->lflow_uuid);
+    }
+    ds_destroy(&group_key);
     ds_destroy(&ds);
     if (table_id == EXT_TABLE_ID_INVALID) {
         return;
@@ -1747,6 +1847,7 @@ ovnact_select_free(struct ovnact_select *select)
 {
     free(select->dsts);
     free(select->hash_fields);
+    free(select->group_key);
 }
 
 static void
