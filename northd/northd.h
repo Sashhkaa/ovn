@@ -203,6 +203,7 @@ struct northd_data {
     struct hmap lb_datapaths_map;
     struct hmap lb_group_datapaths_map;
     struct sset svc_monitor_lsps;
+    struct sset deferred_nat_lsps;
     struct hmap local_svc_monitors_map;
     struct hmapx monitored_ports_map;
 
@@ -440,6 +441,13 @@ struct ovn_datapath {
      * on the logical switch. */
     bool lb_with_stateless_mode;
 
+    /* Set to true if the logical switch hosts a backend of a load balancer
+     * with the 'deferred-nat' option set. Such a switch does the SNAT/unSNAT
+     * of that load balancer even though it does not carry it in its own
+     * 'load_balancer' column, so it needs the same conntrack handling as a
+     * switch that does. */
+    bool has_deferred_nat_lb;
+
     /* IPAM data. */
     struct ipam_info ipam_info;
     bool ipam_info_initialized;
@@ -578,19 +586,20 @@ ls_has_localnet_port(const struct ovn_datapath *od)
     PIPELINE_STAGE(SWITCH, OUT, PRE_ACL,         2, "ls_out_pre_acl")        \
     PIPELINE_STAGE(SWITCH, OUT, PRE_LB,          3, "ls_out_pre_lb")         \
     PIPELINE_STAGE(SWITCH, OUT, PRE_STATEFUL,    4, "ls_out_pre_stateful")   \
-    PIPELINE_STAGE(SWITCH, OUT, ACL_HINT,        5, "ls_out_acl_hint")       \
-    PIPELINE_STAGE(SWITCH, OUT, ACL_EVAL,        6, "ls_out_acl_eval")       \
-    PIPELINE_STAGE(SWITCH, OUT, ACL_SAMPLE,      7, "ls_out_acl_sample")     \
-    PIPELINE_STAGE(SWITCH, OUT, ACL_ACTION,      8, "ls_out_acl_action")     \
-    PIPELINE_STAGE(SWITCH, OUT, MIRROR,          9, "ls_out_mirror")         \
-    PIPELINE_STAGE(SWITCH, OUT, QOS,            10, "ls_out_qos")            \
-    PIPELINE_STAGE(SWITCH, OUT, PRE_NF,         11,                          \
+    PIPELINE_STAGE(SWITCH, OUT, ACL_HINT,        6, "ls_out_acl_hint")       \
+    PIPELINE_STAGE(SWITCH, OUT, ACL_EVAL,        7, "ls_out_acl_eval")       \
+    PIPELINE_STAGE(SWITCH, OUT, LB,              5, "ls_out_lb")             \
+    PIPELINE_STAGE(SWITCH, OUT, ACL_SAMPLE,      8, "ls_out_acl_sample")     \
+    PIPELINE_STAGE(SWITCH, OUT, ACL_ACTION,      9, "ls_out_acl_action")     \
+    PIPELINE_STAGE(SWITCH, OUT, MIRROR,         10, "ls_out_mirror")         \
+    PIPELINE_STAGE(SWITCH, OUT, QOS,            11, "ls_out_qos")            \
+    PIPELINE_STAGE(SWITCH, OUT, PRE_NF,         12,                          \
                    "ls_out_pre_network_function")                            \
-    PIPELINE_STAGE(SWITCH, OUT, STATEFUL,       12, "ls_out_stateful")       \
-    PIPELINE_STAGE(SWITCH, OUT, NF,             13,                          \
+    PIPELINE_STAGE(SWITCH, OUT, STATEFUL,       13, "ls_out_stateful")       \
+    PIPELINE_STAGE(SWITCH, OUT, NF,             14,                          \
                    "ls_out_network_function")                                \
-    PIPELINE_STAGE(SWITCH, OUT, CHECK_PORT_SEC, 14, "ls_out_check_port_sec") \
-    PIPELINE_STAGE(SWITCH, OUT, APPLY_PORT_SEC, 15, "ls_out_apply_port_sec")
+    PIPELINE_STAGE(SWITCH, OUT, CHECK_PORT_SEC, 15, "ls_out_check_port_sec") \
+    PIPELINE_STAGE(SWITCH, OUT, APPLY_PORT_SEC, 16, "ls_out_apply_port_sec")
 
 /* Logical router ingress stages. */
 #define ROUTER_IN_PIPELINE_STAGES                                         \

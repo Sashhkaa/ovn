@@ -394,6 +394,12 @@ static const char *reg_ct_state[] = {
 #define ROUTE_PRIO_BASE_SHIFT ((MAX_PREFIX_LEN + 1) * \
                               ROUTE_PRIO_OFFSET_MULTIPLIER)
 
+/* Deferred-NAT load balancing picks the backend in lr_in_ip_routing and must
+ * win over any route. The highest priority a route can get is
+ * (128 * ROUTE_PRIO_OFFSET_MULTIPLIER) + 7 + 1 == 1032
+ */
+#define LB_DEFERRED_NAT_ROUTING_PRIO 1050
+
 /* ovn_stages used by northd for logical switches and logical routers.
  * The first three components are combined to form the constant stage's
  * struct name, e.g. S_SWITCH_IN_PORT_SEC_L2, S_ROUTER_OUT_DELIVERY.
@@ -1370,7 +1376,21 @@ ovn_port_get_peer(const struct hmap *lr_ports, struct ovn_port *op)
     return ovn_port_find(lr_ports, peer_name);
 }
 
+static struct ovn_port *
+get_directly_connected_switch_for_op(struct ovn_port *op,
+                                     struct ovn_datapath *lr)
+{
+    struct ovn_datapath *od = op->od;
+    struct ovn_port *lrp;
 
+    VECTOR_FOR_EACH (&od->router_ports, lrp) {
+        if (lrp->peer && lrp->peer->od == lr) {
+            return lrp->peer;
+        }
+    }
+
+    return NULL;
+}
 
 /* Returns true if the given router port 'op' (assumed to be a distributed
  * gateway port) is the relevant DGP where the NAT rule of the router needs to
@@ -3859,6 +3879,37 @@ ovn_lsp_svc_monitors_process_port(
 }
 
 static void
+build_deferred_nat_backends(struct hmap *lb_dps_map,
+                            const struct hmap *ls_ports,
+                            struct sset *deferred_nat_lsps)
+{
+    struct ovn_lb_datapaths *lb_dps;
+    HMAP_FOR_EACH (lb_dps, hmap_node, lb_dps_map) {
+        const struct ovn_northd_lb *lb = lb_dps->lb;
+        if (!lb->is_deferred_nat) {
+            continue;
+        }
+        for (size_t i = 0; i < lb->n_vips; i++) {
+            const struct ovn_northd_lb_vip *lb_vip_nb = &lb->vips_nb[i];
+            for (size_t j = 0; j < lb_vip_nb->n_backends; j++) {
+                const char *lsp = lb_vip_nb->backends_nb[j].logical_port;
+                if (!lsp) {
+                    continue;
+                }
+                sset_add(deferred_nat_lsps, lsp);
+
+                /* The switch of the backend does this load balancer's NAT,
+                 * so mark it for ls_stateful. */
+                struct ovn_port *op = ovn_port_find(ls_ports, lsp);
+                if (op && op->od) {
+                    op->od->has_deferred_nat_lb = true;
+                }
+            }
+        }
+    }
+}
+
+static void
 build_svc_monitors_data(
     struct ovsdb_idl_txn *ovnsb_txn,
     struct ovsdb_idl_index *sbrec_service_monitor_by_learned_type,
@@ -5032,6 +5083,9 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                 if (!lsp_can_be_inc_processed(new_nbsp)) {
                     goto fail;
                 }
+                if (sset_contains(&nd->deferred_nat_lsps, new_nbsp->name)) {
+                    goto fail;
+                }
                 op = ls_port_create(ovnsb_idl_txn, &nd->ls_ports,
                                     new_nbsp->name, new_nbsp, od,
                                     ni->sbrec_mirror_table,
@@ -5054,6 +5108,9 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                 if (sset_contains(&nd->svc_monitor_lsps, new_nbsp->name)) {
                     /* This port is used for svc monitor, which may be impacted
                      * by this change. Fallback to recompute. */
+                    goto fail;
+                }
+                if (sset_contains(&nd->deferred_nat_lsps, new_nbsp->name)) {
                     goto fail;
                 }
                 if (!lsp_handle_mirror_rules_changes(op) ||
@@ -5118,6 +5175,9 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                  * that couldn't be satisfied due to a conflict.  Now
                  * that a port is being deleted the conflict may be
                  * resolved; fall back to recompute. */
+                goto fail;
+            }
+            if (sset_contains(&nd->deferred_nat_lsps, op->key)) {
                 goto fail;
             }
             add_op_to_northd_tracked_ports(&trk_lsps->deleted, op);
@@ -5807,6 +5867,13 @@ northd_handle_lb_data_changes(struct tracked_lb_data *trk_lb_data,
     if (trk_lb_data->has_health_checks) {
         /* Fall back to recompute since a tracked load balancer
          * has health checks configured and I-P is not yet supported
+         * for such load balancers. */
+        return false;
+    }
+
+    if (trk_lb_data->has_deferred_nat_lb) {
+        /* Fall back to recompute since the tracked load balancer has the
+         * deferred-nat option configured and I-P is not yet supported
          * for such load balancers. */
         return false;
     }
@@ -6982,7 +7049,7 @@ build_ls_stateful_rec_pre_lb(const struct ls_stateful_record *ls_stateful_rec,
      * ingress pipeline if a load balancer is configured. We can now
      * add a lflow to drop ct.inv packets.
      */
-    if (ls_stateful_rec->has_lb_vip) {
+    if (ls_stateful_rec_needs_lb_conntrack(ls_stateful_rec)) {
         ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB,
                       100, "ip", REGBIT_CONNTRACK_NAT" = 1; next;",
                       lflow_ref);
@@ -8554,6 +8621,81 @@ build_qos(struct ovn_datapath *od, struct lflow_table *lflows,
 }
 
 static void
+build_lb_pre_stateful_ct_flow(const struct ovn_northd_lb *lb,
+                              const struct ovn_lb_vip *lb_vip,
+                              struct ds *match, struct ds *action)
+{
+    bool ipv4 = lb_vip->address_family == AF_INET;
+    const char *ip_match = ipv4 ? "ip4" : "ip6";
+
+    ds_clear(match);
+    ds_clear(action);
+
+    ds_put_format(action, ipv4 ? REG_LB_IPV4 " = %s; " : REG_LB_IPV6 " = %s; ",
+                  lb_vip->vip_str);
+    if (lb_vip->port_str) {
+        ds_put_format(action, REG_LB_PORT " = %s; ", lb_vip->port_str);
+    }
+    ds_put_cstr(action, "ct_lb_mark;");
+    ds_put_cstr(match, REGBIT_CONNTRACK_NAT" == 1 && ");
+    ds_put_format(match, "%s.dst == %s", ip_match, lb_vip->vip_str);
+    if (lb_vip->port_str) {
+        ds_put_format(match, " && %s.dst == %s", lb->proto, lb_vip->port_str);
+    }
+}
+
+static void
+build_ls_lb_with_stateless_acl_ingress_flow(struct ovn_datapath *od,
+                                            const struct ovn_northd_lb *lb,
+                                            const struct ovn_lb_vip *lb_vip,
+                                            struct lflow_table *lflows,
+                                            struct lflow_ref *lflow_ref,
+                                            struct ds *match,
+                                            struct ds *action)
+{
+    bool ipv4 = lb_vip->address_family == AF_INET;
+    const char *ip_match = ipv4 ? "ip4" : "ip6";
+
+    ds_clear(match);
+    ds_clear(action);
+
+    ds_put_format(match, "%s.dst == %s", ip_match, lb_vip->vip_str);
+
+    if (lb_vip->port_str) {
+        ds_put_format(match, " && %s.dst == %s", lb->proto,
+                      lb_vip->port_str);
+    }
+
+    if (ipv4) {
+        ds_put_format(action, REG_LB_IPV4 " = %s; ", lb_vip->vip_str);
+    } else {
+        ds_put_format(action, REG_LB_IPV6 " = %s; ", lb_vip->vip_str);
+    }
+    if (lb_vip->port_str) {
+        ds_put_format(action, REG_LB_PORT " = %s; ", lb_vip->port_str);
+    }
+
+    ds_put_cstr(action, "ct_lb_mark;");
+
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_STATEFUL, 150,
+                  ds_cstr(match), ds_cstr(action), lflow_ref);
+
+    if (lb->hairpin_snat_ip || lb_vip->port_str) {
+        ds_clear(action);
+        ds_clear(match);
+
+        ds_put_format(match, "%s && %s.dst == %s", lb->proto, ip_match,
+                      lb->hairpin_snat_ip
+                      ? lb->hairpin_snat_ip
+                      : lb_vip->vip_str);
+        ds_put_cstr(action, "ct_lb_mark;");
+
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_STATEFUL, 105,
+                      ds_cstr(match), ds_cstr(action), lflow_ref);
+    }
+}
+
+static void
 build_lb_rules_pre_stateful(struct lflow_table *lflows,
                             struct ovn_lb_datapaths *lb_dps,
                             const struct ovn_datapaths *ls_datapaths,
@@ -8566,38 +8708,7 @@ build_lb_rules_pre_stateful(struct lflow_table *lflows,
     const struct ovn_northd_lb *lb = lb_dps->lb;
     for (size_t i = 0; i < lb->n_vips; i++) {
         struct ovn_lb_vip *lb_vip = &lb->vips[i];
-        ds_clear(action);
-        ds_clear(match);
-        const char *ip_match = NULL;
-
-        /* Store the original destination IP to be used when generating
-         * hairpin flows.
-         */
-        if (lb->vips[i].address_family == AF_INET) {
-            ip_match = "ip4";
-            ds_put_format(action, REG_LB_IPV4 " = %s; ",
-                          lb_vip->vip_str);
-        } else {
-            ip_match = "ip6";
-            ds_put_format(action, REG_LB_IPV6 " = %s; ",
-                          lb_vip->vip_str);
-        }
-
-        if (lb_vip->port_str) {
-            /* Store the original destination port to be used when generating
-             * hairpin flows.
-             */
-            ds_put_format(action, REG_LB_PORT " = %s; ",
-                          lb_vip->port_str);
-        }
-        ds_put_cstr(action, "ct_lb_mark;");
-
-        ds_put_format(match, REGBIT_CONNTRACK_NAT" == 1 && %s.dst == %s",
-                      ip_match, lb_vip->vip_str);
-        if (lb_vip->port_str) {
-            ds_put_format(match, " && %s.dst == %s", lb->proto,
-                          lb_vip->port_str);
-        }
+        build_lb_pre_stateful_ct_flow(lb, lb_vip, match, action);
 
         ovn_lflow_add_with_dp_group(lflows, lb_dps->nb_ls_map.map,
                                     ods_size(ls_datapaths),
@@ -8606,7 +8717,6 @@ build_lb_rules_pre_stateful(struct lflow_table *lflows,
                                     lb_dps->lflow_ref,
                                     WITH_HINT(&lb->nlb->header_));
 
-        struct lflow_ref *lflow_ref = lb_dps->lflow_ref;
         struct hmapx_node *hmapx_node;
         struct ovn_datapath *od;
         HMAPX_FOR_EACH (hmapx_node, &lb_dps->ls_lb_with_stateless_mode) {
@@ -8614,41 +8724,9 @@ build_lb_rules_pre_stateful(struct lflow_table *lflows,
 
             ds_clear(action);
             ds_clear(match);
-
-            ds_put_format(match, "%s.dst == %s", ip_match, lb_vip->vip_str);
-
-            if (lb_vip->port_str) {
-                ds_put_format(match, " && %s.dst == %s", lb->proto,
-                              lb_vip->port_str);
-            }
-
-            if (lb->vips[i].address_family == AF_INET) {
-                ds_put_format(action, REG_LB_IPV4 " = %s; ", lb_vip->vip_str);
-            } else {
-                ds_put_format(action, REG_LB_IPV6 " = %s; ", lb_vip->vip_str);
-            }
-            if (lb_vip->port_str) {
-                ds_put_format(action, REG_LB_PORT " = %s; ", lb_vip->port_str);
-            }
-
-            ds_put_cstr(action, "ct_lb_mark;");
-
-            ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_STATEFUL, 150,
-                          ds_cstr(match), ds_cstr(action), lflow_ref);
-
-            if (lb->hairpin_snat_ip || lb_vip->port_str) {
-                ds_clear(action);
-                ds_clear(match);
-
-                ds_put_format(match, "%s && %s.dst == %s", lb->proto, ip_match,
-                                     lb->hairpin_snat_ip
-                                     ? lb->hairpin_snat_ip
-                                     : lb_vip->vip_str);
-                ds_put_cstr(action, "ct_lb_mark;");
-
-                ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_STATEFUL, 105,
-                              ds_cstr(match), ds_cstr(action), lflow_ref);
-            }
+            build_ls_lb_with_stateless_acl_ingress_flow(od, lb, lb_vip, lflows,
+                                                        lb_dps->lflow_ref,
+                                                        match, action);
         }
     }
 }
@@ -11829,6 +11907,14 @@ build_lswitch_ip_unicast_lookup_for_nats(
     }
 }
 
+static void
+build_lswitch_default_egress_lb_flows(struct ovn_datapath *od,
+                                      struct lflow_table *lflows,
+                                      struct lflow_ref *lflow_ref)
+{
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_LB, 0, "1", "next;", lflow_ref);
+}
+
 struct bfd_entry {
     struct hmap_node hmap_node;
 
@@ -13638,6 +13724,203 @@ build_lrouter_flows_for_lb_stateless(struct lrouter_nat_lb_flows_ctx *ctx,
 }
 
 static void
+build_lb_rules_deferred_nat_ls_skip_flow(struct ovn_datapath *od,
+                                         struct ovn_lb_vip *lb_vip,
+                                         const struct ovn_northd_lb *lb,
+                                         struct lflow_table *lflows,
+                                         struct lflow_ref *lflow_ref)
+{
+    bool ipv4 = lb_vip->address_family == AF_INET;
+    const char *ip_match = ipv4 ? "ip4" : "ip6";
+    struct ds match = DS_EMPTY_INITIALIZER;
+
+    struct ovn_datapath *ls;
+    VECTOR_FOR_EACH (&od->ls_peers, ls) {
+        const struct ovn_port *sw_rp;
+        VECTOR_FOR_EACH (&ls->router_ports, sw_rp) {
+            ds_clear(&match);
+            ds_put_format(&match, "%s.dst == %s", ip_match, lb_vip->vip_str);
+            if (lb_vip->port_str) {
+                ds_put_format(&match, " && %s.dst == %s", lb->proto,
+                              lb_vip->port_str);
+            }
+            ds_put_format(&match, " && inport == %s", sw_rp->json_key);
+            ovn_lflow_add(lflows, ls, S_SWITCH_IN_PRE_STATEFUL, 200,
+                          ds_cstr(&match), "next;", lflow_ref,
+                          WITH_HINT(&lb->nlb->header_));
+        }
+    }
+    ds_destroy(&match);
+}
+
+static void
+build_lb_rules_deferred_nat(struct lrouter_nat_lb_flows_ctx *ctx,
+                            const struct ovn_northd_lb *lb,
+                            struct ovn_lb_vip *lb_vip,
+                            const struct ovn_northd_lb_vip *lb_vip_nb,
+                            struct ovn_datapath *od,
+                            struct lflow_ref *lflow_ref,
+                            const struct hmap *ls_ports,
+                            const struct svc_monitors_map_data *svc_mons_data)
+{
+    struct ds match = DS_EMPTY_INITIALIZER;
+    struct ds action = DS_EMPTY_INITIALIZER;
+    struct ds members = DS_EMPTY_INITIALIZER;
+    size_t n_members = 0;
+
+    bool ipv4 = lb_vip->address_family == AF_INET;
+    const char *ip_match = ipv4 ? "ip4" : "ip6";
+
+    const struct ovn_lb_backend *backend;
+    size_t i = 0;
+    VECTOR_FOR_EACH_PTR (&lb_vip->backends, backend) {
+        struct ovn_northd_lb_backend *backend_nb =
+            &lb_vip_nb->backends_nb[i++];
+
+        if (!backend_nb->deferred_nat_backend) {
+            continue;
+        }
+
+        struct ovn_port *op = ovn_port_find(ls_ports,
+                                            backend_nb->logical_port);
+        if (!op || !op->n_lsp_addrs || !lsp_is_enabled(op->nbsp)) {
+            continue;
+        }
+
+        struct ovn_port *lrp = get_directly_connected_switch_for_op(op, od);
+        if (!lrp) {
+            continue;
+        }
+
+        if (!lrp->lrp_networks.n_ipv4_addrs) {
+            continue;
+        }
+
+        if (backend_nb->health_check
+            && !backend_is_available(lb, backend, backend_nb, svc_mons_data)) {
+            continue;
+        }
+
+        ds_put_format(&members, "%s,", backend->ip_str);
+        n_members++;
+
+        ds_clear(&match);
+        ds_clear(&action);
+
+        ds_put_format(&match, "%s && %s.dst == %s && %s",
+                      ip_match, ip_match, lb_vip->vip_str, lb->proto);
+        if (lb_vip->port_str) {
+            ds_put_format(&match, " && %s.dst == %s", lb->proto,
+                          lb_vip->port_str);
+        }
+        ds_put_format(&match, " && "REG_LB_IPV4 " == %s", backend->ip_str);
+
+        ds_put_format(&action, "ip.ttl--; "
+                      REG_ECMP_GROUP_ID " = 0; "
+                      REG_NEXT_HOP_IPV4 " = %s; "
+                      REG_SRC_IPV4 " = %s; "
+                      "eth.src = %s; outport = %s; "
+                      REGBIT_NEXTHOP_IS_IPV4 " = 1; "
+                      "flags.loopback = 1; next;",
+                      backend->ip_str, lrp->lrp_networks.ipv4_addrs[0].addr_s,
+                      lrp->lrp_networks.ea_s, lrp->json_key);
+        ovn_lflow_add(ctx->lflows, od, S_ROUTER_IN_IP_ROUTING,
+                      LB_DEFERRED_NAT_ROUTING_PRIO, ds_cstr(&match),
+                      ds_cstr(&action), lflow_ref,
+                      WITH_HINT(&lb->nlb->header_));
+
+        ds_clear(&match);
+        ds_clear(&action);
+        ds_put_format(&match, "eth.dst == %s && %s.dst == %s",
+                      op->lsp_addrs->ea_s, ip_match, lb_vip->vip_str);
+        if (lb_vip->port_str) {
+            ds_put_format(&match, " && %s.dst == %s", lb->proto,
+                          lb_vip->port_str);
+        }
+        ds_put_cstr(&action, "ct_lb_mark(backends=");
+        if (backend->port) {
+            ds_put_format(&action, ipv4 ? "%s:%"PRIu16 : "[%s]:%"PRIu16,
+                          backend->ip_str, backend->port);
+        } else {
+            ds_put_cstr(&action, backend->ip_str);
+        }
+        ds_put_cstr(&action, ");");
+        ovn_lflow_add(ctx->lflows, op->od, S_SWITCH_OUT_LB, 130,
+                      ds_cstr(&match), ds_cstr(&action), lflow_ref,
+                      WITH_HINT(&lb->nlb->header_));
+
+        build_lb_pre_stateful_ct_flow(lb, lb_vip, &match, &action);
+        ovn_lflow_add(ctx->lflows, op->od, S_SWITCH_IN_PRE_STATEFUL, 120,
+                      ds_cstr(&match), ds_cstr(&action), lflow_ref,
+                      WITH_HINT(&lb->nlb->header_));
+
+        if (op->od->lb_with_stateless_mode) {
+            build_ls_lb_with_stateless_acl_ingress_flow(op->od, lb, lb_vip,
+                                                        ctx->lflows, lflow_ref,
+                                                        &match, &action);
+        }
+    }
+
+    build_lb_rules_deferred_nat_ls_skip_flow(od,lb_vip, lb,
+                                             ctx->lflows, lflow_ref);
+
+    ds_chomp(&members, ',');
+
+    ds_clear(&match);
+    ds_clear(&action);
+    ds_put_format(&match, "%s && %s.dst == %s && %s",
+                  ip_match, ip_match, lb_vip->vip_str, lb->proto);
+    if (lb_vip->port_str) {
+        ds_put_format(&match, " && %s.dst == %s", lb->proto,
+                      lb_vip->port_str);
+    }
+
+    if (!n_members) {
+        ds_put_cstr(&action, "drop;");
+        ovn_lflow_add(ctx->lflows, od, S_ROUTER_IN_CT_EXTRACT, 130,
+                      ds_cstr(&match), ds_cstr(&action), lflow_ref,
+                      WITH_HINT(&lb->nlb->header_));
+        goto out;
+    }
+
+    if (n_members > 1) {
+        ds_put_format(&action, REG_LB_IPV4 " = select(values=(%s)",
+                      ds_cstr(&members));
+        ds_put_format(&action, "; group_key=\"%s:%s:%s:%d\"",
+                      ovn_datapath_name(od->sdp->sb_dp),
+                      lb->nlb->name, lb_vip->vip_str, lb_vip->vip_port);
+        if (lb->selection_fields) {
+            ds_put_format(&action, "; hash_fields=\"%s\"",
+                          lb->selection_fields);
+        }
+        ds_put_cstr(&action, ");");
+    } else {
+        ds_put_format(&action, REG_LB_IPV4 " = %s; next;", ds_cstr(&members));
+    }
+    ovn_lflow_add(ctx->lflows, od, S_ROUTER_IN_CT_EXTRACT, 130,
+                  ds_cstr(&match), ds_cstr(&action), lflow_ref,
+                  WITH_HINT(&lb->nlb->header_));
+
+    ds_clear(&match);
+    ds_clear(&action);
+    ds_put_format(&match, "%s && %s.dst == %s && %s",
+                  ip_match, ip_match, lb_vip->vip_str, lb->proto);
+    if (lb_vip->port_str) {
+        ds_put_format(&match, " && %s.dst == %s", lb->proto,
+                      lb_vip->port_str);
+    }
+    ds_put_cstr(&action, "next;");
+    ovn_lflow_add(ctx->lflows, od, S_ROUTER_IN_DNAT, 130,
+                  ds_cstr(&match), ds_cstr(&action), lflow_ref,
+                  WITH_HINT(&lb->nlb->header_));
+
+out:
+    ds_destroy(&action);
+    ds_destroy(&match);
+    ds_destroy(&members);
+}
+
+static void
 build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
                                      enum lrouter_nat_lb_flow_type type,
                                      struct ovn_datapath *od,
@@ -13787,7 +14070,8 @@ build_lrouter_nat_flows_for_lb(
     struct lflow_table *lflows,
     struct ds *match, struct ds *action,
     const struct shash *meter_groups,
-    const struct svc_monitors_map_data *svc_mons_data)
+    const struct svc_monitors_map_data *svc_mons_data,
+    const struct hmap *ls_ports)
 {
     const struct ovn_northd_lb *lb = lb_dps->lb;
     bool ipv4 = lb_vip->address_family == AF_INET;
@@ -13906,8 +14190,13 @@ build_lrouter_nat_flows_for_lb(
             type = LROUTER_NAT_LB_FLOW_NORMAL;
         }
 
+        bool deferred_nat = lb->is_deferred_nat;
         if (vector_is_empty(&od->l3dgw_ports)) {
             bitmap_set1(gw_dp_bitmap[type], index);
+        } else if (deferred_nat) {
+            build_lb_rules_deferred_nat(&ctx, lb, lb_vip,
+                                        vips_nb, od, lb_dps->lflow_ref,
+                                        ls_ports, svc_mons_data);
         } else {
             /* Create stateless LB NAT rules when using multiple DGPs and
              * use_stateless_nat is true.
@@ -14132,6 +14421,7 @@ build_lrouter_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
                            const struct ovn_datapaths *lr_datapaths,
                            const struct lr_stateful_table *lr_stateful_table,
                            const struct svc_monitors_map_data *svc_mons_data,
+                           const struct hmap *ls_ports,
                            struct ds *match, struct ds *action)
 {
     size_t index;
@@ -14147,7 +14437,7 @@ build_lrouter_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
         build_lrouter_nat_flows_for_lb(lb_vip, lb_dps, &lb->vips_nb[i],
                                        lr_datapaths, lr_stateful_table, lflows,
                                        match, action, meter_groups,
-                                       svc_mons_data);
+                                       svc_mons_data, ls_ports);
 
         build_lrouter_allow_vip_traffic_template(lflows, lb_dps, lb_vip, lb,
                                                  lr_datapaths);
@@ -19445,7 +19735,7 @@ build_ls_stateful_flows(const struct ls_stateful_record *ls_stateful_rec,
 
     /* Build CT extraction flows - only needed if this datapath has load
      * balancers. */
-    if (ls_stateful_rec->has_lb_vip) {
+    if (ls_stateful_rec_needs_lb_conntrack(ls_stateful_rec)) {
         ovn_lflow_add(lflows, od, S_SWITCH_IN_CT_EXTRACT, 100,
                       "ct.new && ip",
                       REG_CT_PROTO " = ct_proto(); "
@@ -20295,6 +20585,7 @@ build_lswitch_and_lrouter_iterate_by_ls(struct ovn_datapath *od,
     }
     build_mcast_flood_lswitch(od, lsi->lflows, &lsi->actions, NULL);
     build_lswitch_arp_restrictions_default_flows(od, lsi->lflows, NULL);
+    build_lswitch_default_egress_lb_flows(od, lsi->lflows, NULL);
 }
 
 /* Helper function to combine all lflow generation which is iterated by
@@ -20545,7 +20836,7 @@ build_lflows_thread(void *arg)
                                                lsi->meter_groups,
                                                lsi->lr_datapaths,
                                                lsi->lr_stateful_table,
-                                               &svc_mons_data,
+                                               &svc_mons_data, lsi->ls_ports,
                                                &lsi->match, &lsi->actions);
                     build_lswitch_flows_for_lb(lb_dps, lsi->lflows,
                                                lsi->meter_groups,
@@ -20788,7 +21079,7 @@ build_lswitch_and_lrouter_flows(
                                               lsi.lr_datapaths, &lsi.match);
             build_lrouter_flows_for_lb(lb_dps, lsi.lflows, lsi.meter_groups,
                                        lsi.lr_datapaths, lsi.lr_stateful_table,
-                                       svc_mons_data,
+                                       svc_mons_data, lsi.ls_ports,
                                        &lsi.match, &lsi.actions);
             build_lswitch_flows_for_lb(lb_dps, lsi.lflows, lsi.meter_groups,
                                        lsi.ls_datapaths,
@@ -21199,7 +21490,7 @@ lflow_handle_northd_lb_changes(struct ovsdb_idl_txn *ovnsb_txn,
                                    lflow_input->meter_groups,
                                    lflow_input->lr_datapaths,
                                    lflow_input->lr_stateful_table,
-                                   &svc_mons_data,
+                                   &svc_mons_data, lflow_input->ls_ports,
                                    &match, &actions);
         build_lswitch_flows_for_lb(lb_dps, lflows,
                                    lflow_input->meter_groups,
@@ -21765,6 +22056,7 @@ northd_init(struct northd_data *data)
     hmap_init(&data->lb_datapaths_map);
     hmap_init(&data->lb_group_datapaths_map);
     sset_init(&data->svc_monitor_lsps);
+    sset_init(&data->deferred_nat_lsps);
     hmap_init(&data->local_svc_monitors_map);
     hmapx_init(&data->monitored_ports_map);
     init_northd_tracked_data(data);
@@ -21855,6 +22147,7 @@ northd_destroy(struct northd_data *data)
                                 &data->ls_ports, &data->lr_ports);
 
     sset_destroy(&data->svc_monitor_lsps);
+    sset_destroy(&data->deferred_nat_lsps);
     hmapx_destroy(&data->monitored_ports_map);
     destroy_northd_tracked_data(data);
 }
@@ -21992,6 +22285,8 @@ ovnnb_db_run(struct northd_input *input_data,
         &data->svc_monitor_lsps, &data->local_svc_monitors_map,
         input_data->ic_learned_svc_monitors_map,
         &data->monitored_ports_map);
+    build_deferred_nat_backends(&data->lb_datapaths_map, &data->ls_ports,
+                                &data->deferred_nat_lsps);
     build_lb_count_dps(&data->lb_datapaths_map);
     build_network_function_active(
         input_data->nbrec_network_function_group_table,
