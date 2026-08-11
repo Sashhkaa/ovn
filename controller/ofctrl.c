@@ -2158,6 +2158,67 @@ add_group_mod(struct ofputil_group_mod *gm,
     ofputil_uninit_group_mod(&split);
 }
 
+/* Parses 'group_string' as a 'command' group_mod and queues it up in 'msgs'.
+ * 'descr' names the operation in the log message if parsing fails. */
+static void
+add_group_mod_str(uint16_t command, const char *group_string,
+                  const char *descr, struct ofputil_bundle_ctrl_msg *bc,
+                  struct ovs_list *msgs)
+{
+    struct ofputil_group_mod gm;
+    enum ofputil_protocol usable_protocols;
+    char *error = parse_ofp_group_mod_str(&gm, command, group_string, NULL,
+                                          NULL, &usable_protocols);
+    if (!error) {
+        add_group_mod(&gm, bc, msgs);
+    } else {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_ERR_RL(&rl, "%s %s %s", descr, error, group_string);
+        free(error);
+    }
+    ofputil_uninit_group_mod(&gm);
+}
+
+static int
+bucket_id_cmp(const void *a_, const void *b_)
+{
+    const struct ovn_extend_table_bucket *const *a = a_;
+    const struct ovn_extend_table_bucket *const *b = b_;
+
+    return ((*a)->bucket_id > (*b)->bucket_id)
+           - ((*a)->bucket_id < (*b)->bucket_id);
+}
+
+static struct ovn_extend_table_bucket **
+sorted_buckets(struct hmap *buckets, size_t *n_bucketsp)
+{
+    *n_bucketsp = hmap_count(buckets);
+    if (!*n_bucketsp) {
+        return NULL;
+    }
+
+    struct ovn_extend_table_bucket **bs = xmalloc(*n_bucketsp * sizeof *bs);
+    struct ovn_extend_table_bucket *b;
+    size_t i = 0;
+    HMAP_FOR_EACH (b, hmap_node, buckets) {
+        bs[i++] = b;
+    }
+    qsort(bs, *n_bucketsp, sizeof *bs, bucket_id_cmp);
+
+    return bs;
+}
+
+/* Returns true if 'b' is already installed in 'installed' exactly as it is
+ * wanted, so that it needs no group_mod at all. */
+static bool
+bucket_is_installed(struct hmap *installed,
+                    const struct ovn_extend_table_bucket *b)
+{
+    const struct ovn_extend_table_bucket *e =
+        ovn_extend_table_bucket_find(installed, b->key);
+
+    return e && !strcmp(e->content, b->content);
+}
 
 static struct ofpbuf *
 encode_meter_mod(const struct ofputil_meter_mod *mm)
@@ -2912,9 +2973,26 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
         /* Create and install new group. */
         struct ofputil_group_mod gm;
         enum ofputil_protocol usable_protocols;
-        char *group_string = xasprintf("group_id=%"PRIu32",%s",
-                                       desired->table_id,
-                                       desired->name);
+        char *group_string;
+        if (desired->group_header) {
+            struct ds group_ds = DS_EMPTY_INITIALIZER;
+            ds_put_format(&group_ds, "group_id=%"PRIu32",%s",
+                          desired->table_id, desired->group_header);
+            size_t n_buckets;
+            struct ovn_extend_table_bucket **bs =
+                sorted_buckets(&desired->desired_buckets, &n_buckets);
+            for (size_t i = 0; i < n_buckets; i++) {
+                ds_put_format(&group_ds, ",bucket=bucket_id=%"PRIu32",%s",
+                              bs[i]->bucket_id, bs[i]->content);
+            }
+            free(bs);
+            group_string = ds_steal_cstr(&group_ds);
+            ds_destroy(&group_ds);
+        } else {
+            group_string = xasprintf("group_id=%"PRIu32",%s",
+                                     desired->table_id,
+                                     desired->name);
+        }
         char *error = parse_ofp_group_mod_str(&gm, OFPGC15_ADD, group_string,
                                               NULL, NULL, &usable_protocols);
         if (!error) {
@@ -2926,6 +3004,98 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
         }
         free(group_string);
         ofputil_uninit_group_mod(&gm);
+    }
+
+    /* Iterate through desired groups that already have a matching group_id
+     * installed (so they were skipped by the loop above) but managed incrementally
+     * (without deleting the group) and may need incremental
+     * bucket updates. */
+    HMAP_FOR_EACH (desired, hmap_node, &groups->desired) {
+        if (!desired->group_header) {
+            continue;
+        }
+        struct ovn_extend_table_info *existing =
+            ovn_extend_table_lookup(&groups->existing, desired);
+        if (!existing) {
+            continue;
+        }
+
+        /* Remove old buckets */
+        struct ovn_extend_table_bucket *e;
+        HMAP_FOR_EACH (e, hmap_node, &existing->existing_buckets) {
+            const struct ovn_extend_table_bucket *d =
+                ovn_extend_table_bucket_find(&desired->desired_buckets,
+                                             e->key);
+            if (d && !strcmp(d->content, e->content)) {
+                 continue;
+            }
+
+            char *group_string = xasprintf(
+                "group_id=%"PRIu32",command_bucket_id=%"PRIu32,
+                desired->table_id, e->bucket_id);
+            add_group_mod_str(OFPGC15_REMOVE_BUCKET, group_string,
+                              "remove bucket", &bc, &msgs);
+            free(group_string);
+        }
+
+        size_t n_buckets;
+        struct ovn_extend_table_bucket **bs =
+            sorted_buckets(&desired->desired_buckets, &n_buckets);
+        struct ds insert_ds = DS_EMPTY_INITIALIZER;
+        struct ds anchor = DS_EMPTY_INITIALIZER;
+        ds_put_cstr(&anchor, "first");
+
+        /* After removing the old buckets, insert the new, desired ones
+         * into the group.
+         * Install the buckets that are not on the switch yet, keeping the
+         * group ordered by bucket id (see sorted_buckets()).
+         *
+         * OpenFlow 1.5 cannot insert a bucket *before* another one: an
+         * INSERT_BUCKET places its buckets right after 'command_bucket_id',
+         * or at the head of the group for "first". A position is therefore
+         * expressed through the bucket that has to precede it, so adjacent
+         * buckets to install are collected into a run and the run is sent
+         * anchored on the last bucket before it that is already in place
+         * ('anchor').  With the group ordered by bucket id, that is exactly
+         * where the run belongs.
+         *
+         * Only a bucket that stays untouched may anchor a run: the removals
+         * above skip it, so it is still in the group by the time the switch
+         * processes the insert, and the bundle is ordered.
+         *
+         * The extra iteration past the end of 'bs' carries no bucket. It
+         * stands in for the "next bucket already in place" that flushes a
+         * run, for the case where the run reaches the end of the list. */
+        for (size_t i = 0; i <= n_buckets; i++) {
+            struct ovn_extend_table_bucket *d = i < n_buckets ? bs[i] : NULL;
+
+            if (d && !bucket_is_installed(&existing->existing_buckets, d)) {
+                VLOG_DBG("group %"PRIu32": bucket %s (id %"PRIu32", position "
+                         "%"PRIuSIZE" of %"PRIuSIZE") queued to go after %s.",
+                         desired->table_id, d->key, d->bucket_id, i, n_buckets,
+                         ds_cstr(&anchor));
+                ds_put_format(&insert_ds, ",bucket=bucket_id=%"PRIu32",%s",
+                              d->bucket_id, d->content);
+                continue;
+            }
+
+            if (insert_ds.length) {
+                char *group_string = xasprintf(
+                    "group_id=%"PRIu32",command_bucket_id=%s%s",
+                    desired->table_id, ds_cstr(&anchor), ds_cstr(&insert_ds));
+                add_group_mod_str(OFPGC15_INSERT_BUCKET, group_string,
+                                  "insert bucket", &bc, &msgs);
+                free(group_string);
+                ds_clear(&insert_ds);
+            }
+            if (d) {
+                ds_clear(&anchor);
+                ds_put_format(&anchor, "%"PRIu32, d->bucket_id);
+            }
+        }
+        ds_destroy(&anchor);
+        ds_destroy(&insert_ds);
+        free(bs);
     }
 
     /* If skipped last time, then process the flow table

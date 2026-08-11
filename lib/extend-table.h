@@ -65,6 +65,28 @@ struct ovn_extend_table_info {
     struct hmap references; /* The lflows that are using this item, with
                              * ovn_extend_table_lflow_ref nodes. Only useful
                              * for items in ovn_extend_table.desired. */
+
+    /* The fields below are only populated for group entries created via
+     * ovn_extend_table_assign_group_id(), to support incremental
+     * INSERT_BUCKET/REMOVE_BUCKET updates instead of whole-group replace.
+     * 'group_header' is NULL for entries created via the regular
+     * ovn_extend_table_assign_id() (whole-content-hash) path. */
+    char *group_header;
+    struct hmap desired_buckets;
+    struct hmap existing_buckets;
+};
+
+struct ovn_extend_table_bucket {
+    struct hmap_node hmap_node;
+    char *key;
+    uint32_t bucket_id;
+    char *content;
+    struct ovn_extend_table_bucket *peer;
+};
+
+struct ovn_extend_table_bucket_spec {
+    const char *key;
+    const char *content;
 };
 
 /* Maintains the link between a lflow and an ovn_extend_table_info item in
@@ -108,9 +130,26 @@ uint32_t ovn_extend_table_assign_id(struct ovn_extend_table *,
                                     const char *name,
                                     struct uuid lflow_uuid);
 
+/* Like ovn_extend_table_assign_id(), but keyed by a caller-provided stable
+ * 'group_key' (independent of bucket content, e.g. an LB's stage-hint)
+ * instead of the full group content. The group's table_id therefore stays
+ * stable when 'buckets' changes across calls with the same 'group_key'.
+ *
+ * Replaces the info's desired bucket set with 'buckets' on every call, so
+ * that ofctrl.c can diff it against what's already installed
+ * (existing_buckets) and emit incremental INSERT_BUCKET/REMOVE_BUCKET
+ * instead of a whole-group replace. */
+uint32_t ovn_extend_table_assign_group_id(
+    struct ovn_extend_table *table, const char *group_key,
+    const char *group_header, const struct ovn_extend_table_bucket_spec *,
+    size_t n_buckets, struct uuid lflow_uuid);
+
 struct ovn_extend_table_info *
 ovn_extend_table_desired_lookup_by_name(struct ovn_extend_table * table,
                                         const char *name);
+
+struct ovn_extend_table_bucket *
+ovn_extend_table_bucket_find(struct hmap *buckets, const char *key);
 
 /* Iterates 'DESIRED' through all of the 'ovn_extend_table_info's in
  * 'TABLE'->desired that are not in 'TABLE'->existing.  (The loop body
