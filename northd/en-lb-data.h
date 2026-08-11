@@ -85,6 +85,12 @@ struct tracked_lb_data {
 
     /* Indicates if any lb (in the tracked data) has 'distibuted' flag set. */
     bool has_distributed_lb;
+
+    /* Indicates if any lb (in the tracked data) has 'deferred-nat' set.  Such
+     * a load balancer builds its lflows out of the backend ports, and the set
+     * of ports that a change has to fall back to a recompute for
+     * (northd_data.deferred_nat_lsps) is only rebuilt on a recompute. */
+    bool has_deferred_nat_lb;
 };
 
 /* Datapath (logical switch) to lb/lbgrp association data. */

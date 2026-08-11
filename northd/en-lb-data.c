@@ -167,6 +167,7 @@ lb_data_load_balancer_handler(struct engine_node *node, void *data)
                                              lb->health_checks);
             trk_lb_data->has_routable_lb |= lb->routable;
             trk_lb_data->has_distributed_lb |= lb->is_distributed;
+            trk_lb_data->has_deferred_nat_lb |= lb->is_deferred_nat;
             continue;
         }
 
@@ -182,6 +183,7 @@ lb_data_load_balancer_handler(struct engine_node *node, void *data)
                                            lb->health_checks);
             trk_lb_data->has_routable_lb |= lb->routable;
             trk_lb_data->has_distributed_lb |= lb->is_distributed;
+            trk_lb_data->has_deferred_nat_lb |= lb->is_deferred_nat;
         } else {
             /* Load balancer updated. */
             bool health_checks = lb->health_checks;
@@ -198,6 +200,7 @@ lb_data_load_balancer_handler(struct engine_node *node, void *data)
                 lb, trk_lb_data, health_checks);
             trk_lb_data->has_routable_lb |= lb->routable;
             trk_lb_data->has_distributed_lb |= lb->is_distributed;
+            trk_lb_data->has_deferred_nat_lb |= lb->is_deferred_nat;
 
             /* Determine the inserted and deleted vips and store them in
              * the tracked data. */
@@ -690,12 +693,14 @@ handle_od_lb_changes(struct nbrec_load_balancer **nbrec_lbs,
             /* Add this lb to the tracked data. */
             uuidset_insert(&codlb->assoc_lbs, lb_uuid);
 
-            if (!trk_lb_data->has_routable_lb) {
+            if (!trk_lb_data->has_routable_lb
+                || !trk_lb_data->has_deferred_nat_lb) {
                 struct ovn_northd_lb *lb = ovn_northd_lb_find(&lb_data->lbs,
                                                               lb_uuid);
                 ovs_assert(lb);
                 trk_lb_data->has_routable_lb |= lb->routable;
                 trk_lb_data->has_distributed_lb |= lb->is_distributed;
+                trk_lb_data->has_deferred_nat_lb |= lb->is_deferred_nat;
             }
         }
 
@@ -756,6 +761,7 @@ destroy_tracked_data(struct ed_type_lb_data *lb_data)
     lb_data->tracked_lb_data.has_dissassoc_lbs_from_od = false;
     lb_data->tracked_lb_data.has_dissassoc_lbgrps_from_od = false;
     lb_data->tracked_lb_data.has_routable_lb = false;
+    lb_data->tracked_lb_data.has_deferred_nat_lb = false;
 
     struct hmapx_node *node;
     HMAPX_FOR_EACH_SAFE (node, &lb_data->tracked_lb_data.deleted_lbs) {

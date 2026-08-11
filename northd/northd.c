@@ -3673,6 +3673,39 @@ ovn_lsp_svc_monitors_process_port(
     }
 }
 
+/* Collects the logical switch ports that 'deferred-nat' load balancers steer
+ * traffic to.
+ *
+ * The lflows of such a load balancer are built out of these ports -- their
+ * MAC ends up in the ls_out_lb match, their datapath is where the flows are
+ * added, and the router ports of that datapath decide the outport -- but the
+ * flows are owned by the load balancer's lflow_ref, which
+ * lflow_handle_northd_port_changes() does not touch.  A change to one of
+ * these ports therefore has to fall back to a recompute, the same way a
+ * change to a service monitor port does. */
+static void
+build_deferred_nat_lsps(struct hmap *lb_dps_map,
+                        struct sset *deferred_nat_lsps)
+{
+    struct ovn_lb_datapaths *lb_dps;
+    HMAP_FOR_EACH (lb_dps, hmap_node, lb_dps_map) {
+        const struct ovn_northd_lb *lb = lb_dps->lb;
+        if (!lb->is_deferred_nat) {
+            continue;
+        }
+
+        for (size_t i = 0; i < lb->n_vips; i++) {
+            const struct ovn_northd_lb_vip *lb_vip_nb = &lb->vips_nb[i];
+            for (size_t j = 0; j < lb_vip_nb->n_backends; j++) {
+                const char *lsp = lb_vip_nb->backends_nb[j].logical_port;
+                if (lsp) {
+                    sset_add(deferred_nat_lsps, lsp);
+                }
+            }
+        }
+    }
+}
+
 static void
 build_svc_monitors_data(
     struct ovsdb_idl_txn *ovnsb_txn,
@@ -4815,6 +4848,12 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                 if (!lsp_can_be_inc_processed(new_nbsp)) {
                     goto fail;
                 }
+                if (sset_contains(&nd->deferred_nat_lsps, new_nbsp->name)) {
+                    /* A deferred-nat load balancer is waiting for this port
+                     * to show up.  Its flows are not rebuilt by the port
+                     * handler, so fall back to recompute. */
+                    goto fail;
+                }
                 op = ls_port_create(ovnsb_idl_txn, &nd->ls_ports,
                                     new_nbsp->name, new_nbsp, od,
                                     ni->sbrec_mirror_table,
@@ -4836,6 +4875,12 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                 if (sset_contains(&nd->svc_monitor_lsps, new_nbsp->name)) {
                     /* This port is used for svc monitor, which may be impacted
                      * by this change. Fallback to recompute. */
+                    goto fail;
+                }
+                if (sset_contains(&nd->deferred_nat_lsps, new_nbsp->name)) {
+                    /* This port is a deferred-nat load balancer backend; its
+                     * mac and its datapath are baked into that load
+                     * balancer's flows.  Fallback to recompute. */
                     goto fail;
                 }
                 if (!lsp_handle_mirror_rules_changes(op) ||
@@ -4891,6 +4936,11 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
             if (sset_contains(&nd->svc_monitor_lsps, op->key)) {
                 /* This port was used for svc monitor, which may be
                  * impacted by this deletion. Fallback to recompute. */
+                goto fail;
+            }
+            if (sset_contains(&nd->deferred_nat_lsps, op->key)) {
+                /* This port was a deferred-nat load balancer backend, whose
+                 * flows would be left behind. Fallback to recompute. */
                 goto fail;
             }
             add_op_to_northd_tracked_ports(&trk_lsps->deleted, op);
@@ -5539,6 +5589,14 @@ northd_handle_lb_data_changes(struct tracked_lb_data *trk_lb_data,
         /* Fall back to recompute since a tracked load balancer
          * has health checks configured and I-P is not yet supported
          * for such load balancers. */
+        return false;
+    }
+
+    if (trk_lb_data->has_deferred_nat_lb) {
+        /* Fall back to recompute since a tracked load balancer uses deferred
+         * nat.  Its flows are built out of the backend ports, and the set of
+         * ports whose changes must fall back to a recompute
+         * (northd_data.deferred_nat_lsps) is only rebuilt then. */
         return false;
     }
 
@@ -20963,6 +21021,7 @@ northd_init(struct northd_data *data)
     hmap_init(&data->lb_datapaths_map);
     hmap_init(&data->lb_group_datapaths_map);
     sset_init(&data->svc_monitor_lsps);
+    sset_init(&data->deferred_nat_lsps);
     hmap_init(&data->local_svc_monitors_map);
     hmapx_init(&data->monitored_ports_map);
     init_northd_tracked_data(data);
@@ -21050,6 +21109,7 @@ northd_destroy(struct northd_data *data)
                                 &data->ls_ports, &data->lr_ports);
 
     sset_destroy(&data->svc_monitor_lsps);
+    sset_destroy(&data->deferred_nat_lsps);
     hmapx_destroy(&data->monitored_ports_map);
     destroy_northd_tracked_data(data);
 }
@@ -21171,6 +21231,8 @@ ovnnb_db_run(struct northd_input *input_data,
         &data->svc_monitor_lsps, &data->local_svc_monitors_map,
         input_data->ic_learned_svc_monitors_map,
         &data->monitored_ports_map);
+    build_deferred_nat_lsps(&data->lb_datapaths_map,
+                            &data->deferred_nat_lsps);
     build_lb_count_dps(&data->lb_datapaths_map);
     build_network_function_active(
         input_data->nbrec_network_function_group_table,

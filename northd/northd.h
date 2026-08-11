@@ -198,6 +198,11 @@ struct northd_data {
     struct hmap lb_datapaths_map;
     struct hmap lb_group_datapaths_map;
     struct sset svc_monitor_lsps;
+    /* Logical switch ports that 'deferred-nat' load balancers steer traffic
+     * to.  Their lflows are owned by the load balancer's lflow_ref but are
+     * built out of these ports, so a change to one of them cannot be
+     * processed incrementally; see build_deferred_nat_lsps(). */
+    struct sset deferred_nat_lsps;
     struct hmap local_svc_monitors_map;
     struct hmapx monitored_ports_map;
 
