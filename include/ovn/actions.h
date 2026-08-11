@@ -348,7 +348,8 @@ struct ovnact_ct_lb {
 };
 
 struct ovnact_select_dst {
-    uint16_t id;
+    uint32_t id;
+    bool ipv4;
     uint16_t weight;
 };
 
@@ -359,6 +360,7 @@ struct ovnact_select {
     size_t n_dsts;
     uint8_t ltable;             /* Logical table ID of next table. */
     char *hash_fields;
+    char *group_key;
     struct expr_field res_field;
 };
 
