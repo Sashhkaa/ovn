@@ -25,6 +25,7 @@
 #include "lib/ovn-sb-idl.h"
 #include "lib/ovsdb-idl.h"
 #include "ovn-controller.h"
+#include "smap.h"
 
 VLOG_DEFINE_THIS_MODULE(encaps);
 
@@ -43,7 +44,6 @@ encaps_register_ovs_idl(struct ovsdb_idl *ovs_idl)
     ovsdb_idl_track_add_column(ovs_idl, &ovsrec_interface_col_name);
     ovsdb_idl_track_add_column(ovs_idl, &ovsrec_interface_col_type);
     ovsdb_idl_track_add_column(ovs_idl, &ovsrec_interface_col_options);
-    ovsdb_idl_track_add_column(ovs_idl, &ovsrec_interface_col_other_config);
 }
 
 /* Enough context to create a new tunnel, using tunnel_add(). */
@@ -201,14 +201,12 @@ out:
 }
 
 static void
-tunnel_add(struct tunnel_ctx *tc,
-           const struct sbrec_sb_global *sbg,
-           const struct sbrec_chassis *chassis_rec,
-           const struct sbrec_encap *encap, const char *local_ip,
+tunnel_add(struct tunnel_ctx *tc, const struct sbrec_sb_global *sbg,
+           const char *new_chassis_id, const struct sbrec_encap *encap,
+           const char *local_ip,
            const struct ovsrec_open_vswitch_table *ovs_table)
 {
     struct smap options = SMAP_INITIALIZER(&options);
-    struct smap other_config = SMAP_INITIALIZER(&other_config);
     smap_add(&options, "remote_ip", encap->ip);
     smap_add(&options, "local_ip", local_ip);
     smap_add(&options, "key", "flow");
@@ -223,9 +221,9 @@ tunnel_add(struct tunnel_ctx *tc,
      * combination of the chassis_name and the remote and local encap-ips to
      * identify a specific tunnel to the remote chassis.
      */
-    tunnel_entry_id = encaps_tunnel_id_create(chassis_rec->name, encap->ip,
+    tunnel_entry_id = encaps_tunnel_id_create(new_chassis_id, encap->ip,
                                               local_ip);
-    tunnel_entry_id_old = encaps_tunnel_id_create_legacy(chassis_rec->name,
+    tunnel_entry_id_old = encaps_tunnel_id_create_legacy(new_chassis_id,
                                                          encap->ip);
     if (csum && (!strcmp(csum, "true") || !strcmp(csum, "false"))) {
         smap_add(&options, "csum", csum);
@@ -260,7 +258,7 @@ tunnel_add(struct tunnel_ctx *tc,
 
     /* Add auth info if ipsec is enabled. */
     if (sbg->ipsec) {
-        smap_add(&options, "remote_name", chassis_rec->name);
+        smap_add(&options, "remote_name", new_chassis_id);
 
         /* Force NAT-T traversal via configuration */
         /* Two ipsec backends are supported: libreswan and strongswan */
@@ -284,11 +282,6 @@ tunnel_add(struct tunnel_ctx *tc,
                 }
             }
         }
-    }
-
-    if (is_ramp_tunnel(&chassis_rec->other_config)) {
-        /* Propagate ramp switch flag from chassis to interface. */
-        smap_add(&other_config, "is-vtep", "true");
     }
 
     /* If there's an existing tunnel record that does not need any change,
@@ -327,10 +320,10 @@ tunnel_add(struct tunnel_ctx *tc,
      * its name, otherwise generate a new, unique name. */
     char *port_name = (tunnel
                        ? xstrdup(tunnel->port->name)
-                       : tunnel_create_name(tc, chassis_rec->name));
+                       : tunnel_create_name(tc, new_chassis_id));
     if (!port_name) {
         VLOG_WARN("Unable to allocate unique name for '%s' tunnel",
-                  chassis_rec->name);
+                  new_chassis_id);
         goto exit;
     }
 
@@ -338,7 +331,6 @@ tunnel_add(struct tunnel_ctx *tc,
     ovsrec_interface_set_name(iface, port_name);
     ovsrec_interface_set_type(iface, encap->type);
     ovsrec_interface_set_options(iface, &options);
-    ovsrec_interface_set_other_config(iface, &other_config);
 
     struct ovsrec_port *port = ovsrec_port_insert(tc->ovs_txn);
     ovsrec_port_set_name(port, port_name);
@@ -354,7 +346,6 @@ exit:
     free(tunnel_entry_id);
     free(tunnel_entry_id_old);
     smap_destroy(&options);
-    smap_destroy(&other_config);
 }
 
 static bool
@@ -420,7 +411,7 @@ chassis_tunnel_add(const struct sbrec_chassis *chassis_rec,
             }
             VLOG_DBG("tunnel_add: '%s', local ip: %s", chassis_rec->name,
                      this_chassis->encaps[j]->ip);
-            tunnel_add(tc, sbg, chassis_rec, chassis_rec->encaps[i],
+            tunnel_add(tc, sbg, chassis_rec->name, chassis_rec->encaps[i],
                        this_chassis->encaps[j]->ip, ovs_table);
             tuncnt++;
         }
