@@ -78,7 +78,44 @@ ovn_extend_table_info_alloc(const char *name, uint32_t id,
     }
     e->hmap_node.hash = hash;
     hmap_init(&e->references);
+    e->group_header = NULL;
+    hmap_init(&e->desired_buckets);
+    hmap_init(&e->existing_buckets);
     return e;
+}
+
+static void
+ovn_extend_table_buckets_clear(struct hmap *buckets)
+{
+    struct ovn_extend_table_bucket *b;
+    HMAP_FOR_EACH_SAFE (b, hmap_node, buckets) {
+        hmap_remove(buckets, &b->hmap_node);
+        if (b->peer) {
+            b->peer->peer = NULL;
+        }
+        free(b->key);
+        free(b->content);
+        free(b);
+    }
+}
+
+static void
+ovn_extend_table_desired_buckets_replace(struct ovn_extend_table_info *info,
+                                         struct hmap *new_desired)
+{
+    hmap_swap(&info->desired_buckets, new_desired);
+
+    struct ovn_extend_table_bucket *old;
+    HMAP_FOR_EACH_SAFE (old, hmap_node, new_desired) {
+        hmap_remove(new_desired, &old->hmap_node);
+        if (old->peer && old->peer->peer == old) {
+            old->peer->peer = NULL;
+        }
+        free(old->key);
+        free(old->content);
+        free(old);
+    }
+    hmap_destroy(new_desired);
 }
 
 static void
@@ -92,6 +129,13 @@ ovn_extend_table_info_destroy(struct ovn_extend_table_info *e)
         free(r);
     }
     hmap_destroy(&e->references);
+
+    free(e->group_header);
+    ovn_extend_table_buckets_clear(&e->desired_buckets);
+    hmap_destroy(&e->desired_buckets);
+    ovn_extend_table_buckets_clear(&e->existing_buckets);
+    hmap_destroy(&e->existing_buckets);
+
     free(e);
 }
 
@@ -292,6 +336,85 @@ ovn_extend_table_remove_desired(struct ovn_extend_table *table,
     ovn_extend_table_delete_desired(table, l);
 }
 
+static struct ovn_extend_table_bucket *
+ovn_extend_table_bucket_lookup(struct hmap *buckets, const char *key,
+                               uint32_t hash)
+{
+    struct ovn_extend_table_bucket *b;
+    HMAP_FOR_EACH_WITH_HASH (b, hmap_node, hash, buckets) {
+        if (!strcmp(b->key, key)) {
+            return b;
+        }
+    }
+    return NULL;
+}
+
+struct ovn_extend_table_bucket *
+ovn_extend_table_bucket_find(struct hmap *buckets, const char *key)
+{
+    return ovn_extend_table_bucket_lookup(buckets, key, hash_string(key, 0));
+}
+
+static struct ovn_extend_table_bucket *
+ovn_extend_table_bucket_alloc(const char *key, uint32_t id,
+                              const char *content,
+                              struct ovn_extend_table_bucket *peer,
+                              uint32_t hash)
+{
+    struct ovn_extend_table_bucket *b = xmalloc(sizeof *b);
+    b->key = xstrdup(key);
+    b->bucket_id = id;
+    b->content = xstrdup(content);
+    b->peer = peer;
+    if (peer) {
+        peer->peer = b;
+    }
+    b->hmap_node.hash = hash;
+    return b;
+}
+
+static void
+ovn_extend_table_sync_buckets(struct ovn_extend_table_info *desired,
+                              struct ovn_extend_table_info *existing)
+{
+    /* Drop existing buckets that are no longer desired. */
+    struct ovn_extend_table_bucket *b;
+    HMAP_FOR_EACH_SAFE (b, hmap_node, &existing->existing_buckets) {
+        uint32_t hash = hash_string(b->key, 0);
+        if (!ovn_extend_table_bucket_lookup(&desired->desired_buckets,
+                                            b->key, hash)) {
+            hmap_remove(&existing->existing_buckets, &b->hmap_node);
+            if (b->peer) {
+                b->peer->peer = NULL;
+            }
+            free(b->key);
+            free(b->content);
+            free(b);
+        }
+    }
+
+    /* Add or refresh existing buckets to match what's desired. */
+    struct ovn_extend_table_bucket *d;
+    HMAP_FOR_EACH (d, hmap_node, &desired->desired_buckets) {
+        uint32_t hash = hash_string(d->key, 0);
+        struct ovn_extend_table_bucket *e =
+            ovn_extend_table_bucket_lookup(&existing->existing_buckets,
+                                           d->key, hash);
+        if (e) {
+            /* Refresh content in case e.g. weight/health status changed. */
+            free(e->content);
+            e->content = xstrdup(d->content);
+            e->peer = d;
+            d->peer = e;
+        } else {
+            struct ovn_extend_table_bucket *new_e =
+                ovn_extend_table_bucket_alloc(d->key, d->bucket_id,
+                                              d->content, d, hash);
+            hmap_insert(&existing->existing_buckets, &new_e->hmap_node, hash);
+        }
+    }
+}
+
 void
 ovn_extend_table_sync(struct ovn_extend_table *table)
 {
@@ -299,14 +422,21 @@ ovn_extend_table_sync(struct ovn_extend_table *table)
 
     /* Copy the contents of desired to existing. */
     HMAP_FOR_EACH_SAFE (desired, hmap_node, &table->desired) {
-        if (!ovn_extend_table_lookup(&table->existing, desired)) {
-            struct ovn_extend_table_info *existing =
-                ovn_extend_table_info_alloc(desired->name,
-                                            desired->table_id,
-                                            desired,
-                                            desired->hmap_node.hash);
+        struct ovn_extend_table_info *existing =
+            ovn_extend_table_lookup(&table->existing, desired);
+        if (!existing) {
+            existing = ovn_extend_table_info_alloc(desired->name,
+                                                    desired->table_id,
+                                                    desired,
+                                                    desired->hmap_node.hash);
             hmap_insert(&table->existing, &existing->hmap_node,
                         existing->hmap_node.hash);
+        }
+
+        if (desired->group_header) {
+            free(existing->group_header);
+            existing->group_header = xstrdup(desired->group_header);
+            ovn_extend_table_sync_buckets(desired, existing);
         }
     }
 }
@@ -362,6 +492,139 @@ ovn_extend_table_assign_id(struct ovn_extend_table *table, const char *name,
                 &table_info->hmap_node, table_info->hmap_node.hash);
 
     ovn_extend_info_add_lflow_ref(table, table_info, &lflow_uuid);
+
+    return table_id;
+}
+
+struct ovn_extend_table_bucket_id_node {
+    struct hmap_node hmap_node;
+    uint32_t bucket_id;
+};
+
+static bool
+ovn_extend_table_bucket_id_claim(struct hmap *used, uint32_t id)
+{
+    uint32_t hash = hash_int(id, 0);
+    struct ovn_extend_table_bucket_id_node *n;
+
+    HMAP_FOR_EACH_WITH_HASH (n, hmap_node, hash, used) {
+        if (n->bucket_id == id) {
+            return false;
+        }
+    }
+
+    n = xmalloc(sizeof *n);
+    n->bucket_id = id;
+    hmap_insert(used, &n->hmap_node, hash);
+    return true;
+}
+
+static void
+ovn_extend_table_bucket_ids_destroy(struct hmap *used)
+{
+    struct ovn_extend_table_bucket_id_node *n;
+    HMAP_FOR_EACH_POP (n, hmap_node, used) {
+        free(n);
+    }
+    hmap_destroy(used);
+}
+
+/* OpenFlow 1.5 only allows bucket ids up to OFPG15_BUCKET_MAX (0xffffff00);
+ * everything above that is reserved (OFPG15_BUCKET_FIRST/LAST/ALL).  Masking
+ * to 31 bits stays well clear of the reserved range. */
+#define OVN_BUCKET_ID_MASK 0x7fffffff
+
+/* One desired bucket, while ovn_extend_table_assign_group_id() works out the
+ * bucket ids for the whole set. */
+struct ovn_extend_table_pending_bucket {
+    struct ovn_extend_table_bucket *peer;
+    uint32_t hash;
+    uint32_t bucket_id;
+    bool has_id;
+};
+
+uint32_t
+ovn_extend_table_assign_group_id(
+    struct ovn_extend_table *table,
+    const char *group_key, const char *group_header,
+    const struct ovn_extend_table_bucket_spec *buckets,
+    size_t n_buckets, struct uuid lflow_uuid)
+{
+    uint32_t table_id = ovn_extend_table_assign_id(table, group_key,
+                                                    lflow_uuid);
+    if (table_id == EXT_TABLE_ID_INVALID) {
+        return table_id;
+    }
+
+    struct ovn_extend_table_info *info =
+        ovn_extend_table_desired_lookup_by_name(table, group_key);
+    ovs_assert(info);
+
+    free(info->group_header);
+    info->group_header = xstrdup(group_header);
+
+    struct hmap *existing_buckets =
+        info->peer ? &info->peer->existing_buckets : NULL;
+
+    struct hmap used_ids = HMAP_INITIALIZER(&used_ids);
+    struct ovn_extend_table_pending_bucket *pending =
+        n_buckets ? xmalloc(n_buckets * sizeof *pending) : NULL;
+
+    for (size_t i = 0; i < n_buckets; i++) {
+        const struct ovn_extend_table_bucket_spec *spec = &buckets[i];
+        uint32_t hash = hash_string(spec->key, 0);
+        struct ovn_extend_table_bucket *old =
+            ovn_extend_table_bucket_lookup(&info->desired_buckets,
+                                           spec->key, hash);
+        struct ovn_extend_table_bucket *existing =
+            (!old && existing_buckets)
+            ? ovn_extend_table_bucket_lookup(existing_buckets,
+                                             spec->key, hash)
+            : NULL;
+
+        pending[i].peer = old ? old->peer : existing;
+        pending[i].hash = hash;
+        pending[i].has_id = false;
+
+        struct ovn_extend_table_bucket *known = old ? old : existing;
+        if (known) {
+            pending[i].bucket_id = known->bucket_id;
+            pending[i].has_id =
+                ovn_extend_table_bucket_id_claim(&used_ids, known->bucket_id);
+        }
+    }
+
+    if (existing_buckets) {
+        struct ovn_extend_table_bucket *b;
+        HMAP_FOR_EACH (b, hmap_node, existing_buckets) {
+            ovn_extend_table_bucket_id_claim(&used_ids, b->bucket_id);
+        }
+    }
+
+    for (size_t i = 0; i < n_buckets; i++) {
+        if (pending[i].has_id) {
+            continue;
+        }
+        uint32_t bucket_id = pending[i].hash & OVN_BUCKET_ID_MASK;
+        while (!ovn_extend_table_bucket_id_claim(&used_ids, bucket_id)) {
+            bucket_id = (bucket_id + 1) & OVN_BUCKET_ID_MASK;
+        }
+        pending[i].bucket_id = bucket_id;
+        pending[i].has_id = true;
+    }
+
+    struct hmap new_desired = HMAP_INITIALIZER(&new_desired);
+    for (size_t i = 0; i < n_buckets; i++) {
+        struct ovn_extend_table_bucket *b = ovn_extend_table_bucket_alloc(
+            buckets[i].key, pending[i].bucket_id, buckets[i].content,
+            pending[i].peer, pending[i].hash);
+        hmap_insert(&new_desired, &b->hmap_node, pending[i].hash);
+    }
+
+    ovn_extend_table_desired_buckets_replace(info, &new_desired);
+
+    ovn_extend_table_bucket_ids_destroy(&used_ids);
+    free(pending);
 
     return table_id;
 }
