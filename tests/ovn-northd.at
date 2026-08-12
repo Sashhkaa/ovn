@@ -21973,12 +21973,15 @@ AT_CLEANUP
 # 'options:deferred-nat' is deliberately left unset here, every test enables
 # it on its own so that the transition itself is covered as well.
 #
-# The macro also defines two shell helpers that dump only the logical flows
+# The macro also defines three shell helpers that dump only the logical flows
 # the deferred-nat path is responsible for:
 #     deferred_lr_flows LR VIP
 #     deferred_ls_flows LS VIP
-# Both always exit 0 and print nothing when there is no such flow, so an
-# empty expectation means "the feature emitted nothing".
+#     deferred_ls_backend_flows LS BACKEND_IP
+# The last one is separate because the flow that puts the backend's replies
+# through conntrack matches on the backend address, not on the VIP.
+# All of them always exit 0 and print nothing when there is no such flow, so
+# an empty expectation means "the feature emitted nothing".
 m4_define([DEFERRED_NAT_SETUP], [
 deferred_lr_flows() {
     ovn-sbctl lflow-list $[]1 | grep -E \
@@ -21989,6 +21992,11 @@ deferred_lr_flows() {
 deferred_ls_flows() {
     ovn-sbctl lflow-list $[]1 | grep -E \
         "ls_out_lb.*priority=130|ls_in_pre_stateful.*priority=200" \
+        | grep "$[]2" | ovn_strip_lflows
+}
+
+deferred_ls_backend_flows() {
+    ovn-sbctl lflow-list $[]1 | grep "ls_in_pre_lb.*priority=115" \
         | grep "$[]2" | ovn_strip_lflows
 }
 
@@ -22038,6 +22046,16 @@ AT_CHECK([deferred_ls_flows ls1 30.0.0.1], [0], [dnl
   table=??(ls_out_lb          ), priority=130  , match=(eth.dst == 00:00:00:00:00:03 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(ct_lb_mark(backends=172.16.0.103:8080); next;)
 ])
 
+dnl The DNAT above happens in the egress pipeline, so the backend's replies
+dnl have to be sent to conntrack on the way in for the un-DNAT to happen.
+dnl ls1 does not carry lb1 in its own 'load_balancer' column, so nothing else
+dnl in the pipeline would do that.
+AT_CHECK([deferred_ls_backend_flows ls1 172.16.0.101], [0], [dnl
+  table=??(ls_in_pre_lb       ), priority=115  , match=(inport == "lport1" && ip4.src == 172.16.0.101 && tcp.src == 8080), action=(reg0[[2]] = 1; next;)
+])
+AT_CHECK([deferred_ls_backend_flows ls1 172.16 | grep -c "ls_in_pre_lb"], [0], [3
+])
+
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -22047,6 +22065,7 @@ check ovn-nbctl --wait=sb remove load_balancer lb1 options deferred-nat
 
 AT_CHECK([deferred_lr_flows lr1 30.0.0.1], [0], [])
 AT_CHECK([deferred_ls_flows ls1 30.0.0.1], [0], [])
+AT_CHECK([deferred_ls_backend_flows ls1 172.16], [0], [])
 check_engine_compute lflow incremental
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -22629,6 +22648,52 @@ AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep "lr_in_ct_extract"], [0], [dnl
 ])
 AT_CHECK([deferred_ls_flows ls9 30.0.0.1 | grep -c "ls_in_pre_stateful"], [0], [2
 ])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([deferred-nat -- enable-stateless-acl-with-lb])
+AT_KEYWORDS([lb deferred-nat])
+ovn_start
+DEFERRED_NAT_SETUP
+
+stateless_lb_flows() {
+    ovn-sbctl lflow-list $1 | grep -E \
+        "ls_out_pre_lb.*priority=115|ls_out_stateful.*priority=110" \
+        | grep "reg0\[[16\]]" | ovn_strip_lflows
+}
+
+check ovn-nbctl --wait=sb set load_balancer lb1 options:deferred-nat=true
+
+AS_BOX([The option alone, without the switch carrying the LB])
+AT_CHECK([stateless_lb_flows ls1], [0], [])
+
+dnl lb1 lives on lr1, not on ls1, so the per-LB set of "switches in stateless
+dnl mode" does not see ls1.  The backend switch still needs the egress
+dnl conntrack, because that is where deferred NAT does the DNAT.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set logical_switch ls1 \
+    other_config:enable-stateless-acl-with-lb=true
+
+AT_CHECK([stateless_lb_flows ls1], [0], [dnl
+  table=??(ls_out_pre_lb      ), priority=115  , match=(reg0[[16]] == 1), action=(reg0[[2]] = 1; next;)
+  table=??(ls_out_stateful    ), priority=110  , match=(reg0[[16]] == 1 && ct.new), action=(next;)
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([A switch with the option but no deferred backend gets nothing])
+check ovn-nbctl ls-add ls8
+check ovn-nbctl --wait=sb set logical_switch ls8 \
+    other_config:enable-stateless-acl-with-lb=true
+AT_CHECK([stateless_lb_flows ls8], [0], [])
+
+AS_BOX([Dropping deferred-nat takes the flows away again])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb remove load_balancer lb1 options deferred-nat
+AT_CHECK([stateless_lb_flows ls1], [0], [])
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
 OVN_CLEANUP_NORTHD
