@@ -10,3 +10,4 @@
 ^\.gitmodules$
 ^utilities/containers/Makefile
 ^tests/ovn-inc-proc-graph-dump.at
+openvswitch-.*tar.gz.shadow
