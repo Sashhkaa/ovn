@@ -351,18 +351,28 @@ ovn_extend_table_remove_desired(struct ovn_extend_table *table,
     ovn_extend_table_delete_desired(table, l);
 }
 
+/* The key is an opaque string chosen by the caller: this layer only needs it
+ * to be a stable per-member identity, and must not assume any structure (the
+ * "select" action happens to use the decimal result-field value). */
 static struct ovn_extend_table_bucket *
 ovn_extend_table_bucket_lookup(struct hmap *buckets, const char *key,
                                uint32_t hash)
 {
     struct ovn_extend_table_bucket *b;
     HMAP_FOR_EACH_WITH_HASH (b, hmap_node, hash, buckets) {
-        /* почему тут strcmp если по сути это число */
         if (!strcmp(b->key, key)) {
             return b;
         }
     }
     return NULL;
+}
+
+/* Finds the bucket named 'key' in 'buckets' (an ovn_extend_table_info's
+ * desired_buckets or existing_buckets), or NULL if there is none. */
+struct ovn_extend_table_bucket *
+ovn_extend_table_bucket_find(struct hmap *buckets, const char *key)
+{
+    return ovn_extend_table_bucket_lookup(buckets, key, hash_string(key, 0));
 }
 
 static struct ovn_extend_table_bucket *
@@ -510,21 +520,58 @@ ovn_extend_table_assign_id(struct ovn_extend_table *table, const char *name,
     return table_id;
 }
 
+/* Set of bucket ids that are already spoken for while
+ * ovn_extend_table_assign_group_id() hands out ids, so that the search for a
+ * free id stays O(1) per probe instead of rescanning every bucket. */
+struct ovn_extend_table_bucket_id_node {
+    struct hmap_node hmap_node;
+    uint32_t bucket_id;
+};
+
+/* Claims 'id' in 'used'.  Returns false (leaving 'used' alone) if some other
+ * bucket already claimed it. */
 static bool
-ovn_extend_table_bucket_id_used(struct hmap *buckets, uint32_t id)
+ovn_extend_table_bucket_id_claim(struct hmap *used, uint32_t id)
 {
-    struct ovn_extend_table_bucket *b;
-    HMAP_FOR_EACH (b, hmap_node, buckets) {
-        if (b->bucket_id == id) {
-            return true;
+    uint32_t hash = hash_int(id, 0);
+    struct ovn_extend_table_bucket_id_node *n;
+
+    HMAP_FOR_EACH_WITH_HASH (n, hmap_node, hash, used) {
+        if (n->bucket_id == id) {
+            return false;
         }
     }
-    return false;
+
+    n = xmalloc(sizeof *n);
+    n->bucket_id = id;
+    hmap_insert(used, &n->hmap_node, hash);
+    return true;
 }
 
-/* OpenFlow 1.5 reserves 0xfffffffd..0xffffffff (OFPG15_BUCKET_FIRST/LAST/
- * ALL); stay well clear of that range. */
+static void
+ovn_extend_table_bucket_ids_destroy(struct hmap *used)
+{
+    struct ovn_extend_table_bucket_id_node *n;
+    HMAP_FOR_EACH_POP (n, hmap_node, used) {
+        free(n);
+    }
+    hmap_destroy(used);
+}
+
+/* OpenFlow 1.5 only allows bucket ids up to OFPG15_BUCKET_MAX (0xffffff00);
+ * everything above that is reserved (OFPG15_BUCKET_FIRST/LAST/ALL).  Masking
+ * to 31 bits stays well clear of the reserved range. */
 #define OVN_BUCKET_ID_MASK 0x7fffffff
+
+/* One desired bucket, while ovn_extend_table_assign_group_id() works out the
+ * bucket ids for the whole set. */
+struct ovn_extend_table_pending_bucket {
+    struct ovn_extend_table_bucket *peer; /* Counterpart in existing_buckets,
+                                             or NULL. */
+    uint32_t hash;                        /* hash_string() of the key. */
+    uint32_t bucket_id;
+    bool has_id;                          /* Is 'bucket_id' resolved yet? */
+};
 
 /* Like ovn_extend_table_assign_id(), but keyed by 'group_key' alone (without
  * bucket content), so the returned table_id stays stable while 'buckets'
@@ -552,13 +599,19 @@ ovn_extend_table_assign_group_id(struct ovn_extend_table *table,
     struct hmap *existing_buckets =
         info->peer ? &info->peer->existing_buckets : NULL;
 
-    struct hmap new_desired = HMAP_INITIALIZER(&new_desired);
+    struct hmap used_ids = HMAP_INITIALIZER(&used_ids);
+    struct ovn_extend_table_pending_bucket *pending =
+        n_buckets ? xmalloc(n_buckets * sizeof *pending) : NULL;
+
+    /* First pass: settle the id of every bucket we already know, before any
+     * new id is handed out.  Resolving new ids in the same pass would let a
+     * new bucket grab the id of a carried-over bucket that happens to be
+     * processed later, putting two buckets with the same id in one group -
+     * which the switch rejects with OFPGMFC_BUCKET_EXISTS, failing the whole
+     * bundle. */
     for (size_t i = 0; i < n_buckets; i++) {
         const struct ovn_extend_table_bucket_spec *spec = &buckets[i];
-        /* точно ли нужно хешировать ?*/
         uint32_t hash = hash_string(spec->key, 0);
-
-        /* тут синтаксис путает */
         struct ovn_extend_table_bucket *old =
             ovn_extend_table_bucket_lookup(&info->desired_buckets,
                                            spec->key, hash);
@@ -567,32 +620,63 @@ ovn_extend_table_assign_group_id(struct ovn_extend_table *table,
             ? ovn_extend_table_bucket_lookup(existing_buckets,
                                              spec->key, hash)
             : NULL;
-        struct ovn_extend_table_bucket *peer =
-            old ? old->peer : existing;
 
-        uint32_t bucket_id;
-        if (old) {
-            bucket_id = old->bucket_id;
-        } else if (existing) {
-            bucket_id = existing->bucket_id;
-        } else {
-            bucket_id = hash & OVN_BUCKET_ID_MASK;
-            /* это безопасно ? */
-            while (ovn_extend_table_bucket_id_used(&new_desired, bucket_id)
-                   || (existing_buckets &&
-                       ovn_extend_table_bucket_id_used(existing_buckets,
-                                                       bucket_id))) {
-                bucket_id = (bucket_id + 1) & OVN_BUCKET_ID_MASK;
-            }
+        pending[i].peer = old ? old->peer : existing;
+        pending[i].hash = hash;
+        pending[i].has_id = false;
+
+        struct ovn_extend_table_bucket *known = old ? old : existing;
+        if (known) {
+            /* Ids are unique within each of desired_buckets and
+             * existing_buckets, so the claim can only fail if 'buckets'
+             * contains the same key twice; give this one a fresh id below. */
+            pending[i].bucket_id = known->bucket_id;
+            pending[i].has_id =
+                ovn_extend_table_bucket_id_claim(&used_ids, known->bucket_id);
         }
-
-        struct ovn_extend_table_bucket *b = ovn_extend_table_bucket_alloc(
-            spec->key, bucket_id, spec->content, peer, hash);
-        hmap_insert(&new_desired, &b->hmap_node, hash);
     }
 
-    /* не понимаю логики? disered - это то что же было добавлено в этом ране */
+    /* Reserve the ids of the buckets that are installed but on their way out,
+     * so that a bucket added in this round does not reuse an id the switch
+     * has not been told to release yet.  Ids carried over just above are
+     * already claimed, and claiming is idempotent. */
+    if (existing_buckets) {
+        struct ovn_extend_table_bucket *b;
+        HMAP_FOR_EACH (b, hmap_node, existing_buckets) {
+            ovn_extend_table_bucket_id_claim(&used_ids, b->bucket_id);
+        }
+    }
+
+    /* Second pass: hand out ids to the buckets that are new to this group. */
+    for (size_t i = 0; i < n_buckets; i++) {
+        if (pending[i].has_id) {
+            continue;
+        }
+        uint32_t bucket_id = pending[i].hash & OVN_BUCKET_ID_MASK;
+        while (!ovn_extend_table_bucket_id_claim(&used_ids, bucket_id)) {
+            bucket_id = (bucket_id + 1) & OVN_BUCKET_ID_MASK;
+        }
+        pending[i].bucket_id = bucket_id;
+        pending[i].has_id = true;
+    }
+
+    struct hmap new_desired = HMAP_INITIALIZER(&new_desired);
+    for (size_t i = 0; i < n_buckets; i++) {
+        struct ovn_extend_table_bucket *b = ovn_extend_table_bucket_alloc(
+            buckets[i].key, pending[i].bucket_id, buckets[i].content,
+            pending[i].peer, pending[i].hash);
+        hmap_insert(&new_desired, &b->hmap_node, pending[i].hash);
+    }
+
+    /* 'info->desired_buckets' holds what the previous call asked for; replace
+     * it wholesale with what this call asks for.  The existing_buckets side is
+     * left alone: ofctrl.c still has to diff the two to work out which
+     * INSERT_BUCKET/REMOVE_BUCKET to send, and ovn_extend_table_sync() moves
+     * existing_buckets forward only once that has happened. */
     ovn_extend_table_desired_buckets_replace(info, &new_desired);
+
+    ovn_extend_table_bucket_ids_destroy(&used_ids);
+    free(pending);
 
     return table_id;
 }
