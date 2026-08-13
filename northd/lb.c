@@ -726,7 +726,6 @@ ovn_lb_datapaths_create(const struct ovn_northd_lb *lb, size_t n_ls_datapaths,
     dynamic_bitmap_alloc(&lb_dps->nb_lr_map, n_lr_datapaths);
     lb_dps->lflow_ref = lflow_ref_create();
     hmapx_init(&lb_dps->ls_lb_with_stateless_mode);
-    hmapx_init(&lb_dps->deferred_nat_ls);
     return lb_dps;
 }
 
@@ -737,7 +736,6 @@ ovn_lb_datapaths_destroy(struct ovn_lb_datapaths *lb_dps)
     dynamic_bitmap_free(&lb_dps->nb_ls_map);
     lflow_ref_destroy(lb_dps->lflow_ref);
     hmapx_destroy(&lb_dps->ls_lb_with_stateless_mode);
-    hmapx_destroy(&lb_dps->deferred_nat_ls);
     free(lb_dps);
 }
 

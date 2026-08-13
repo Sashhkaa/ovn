@@ -164,16 +164,6 @@ struct ovn_lb_datapaths {
 
     struct hmapx ls_lb_with_stateless_mode;
 
-    /* Logical switches that host at least one backend of this load balancer,
-     * for load balancers with 'options:deferred-nat' set.  Unlike
-     * 'nb_ls_map', membership here does not come from the switch's
-     * 'load_balancer' column: it is derived from the logical ports named in
-     * the load balancer's 'ip_port_mappings', so it can only be computed
-     * once the ports have been built.  See build_deferred_nat_data().
-     *
-     * Empty for load balancers that don't use deferred NAT. */
-    struct hmapx deferred_nat_ls;
-
     /* Reference of lflows generated for this load balancer.
      *
      * This data is initialized and destroyed by the en_northd node, but
