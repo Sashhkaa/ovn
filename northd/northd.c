@@ -1377,17 +1377,18 @@ ovn_port_get_peer(const struct hmap *lr_ports, struct ovn_port *op)
 }
 
 static struct ovn_port *
-ovn_port_get_lrp_for_lsp(struct ovn_port *op,
-                         struct ovn_datapath *lr)
+ovn_get_directly_connected_switch_for_op(struct ovn_port *op,
+                                         struct ovn_datapath *lr)
 {
     struct ovn_datapath *od = op->od;
-
     struct ovn_port *lrp;
+
     VECTOR_FOR_EACH (&od->router_ports, lrp) {
-        if (lrp->peer->od == lr) {
-            return lrp->peer ? lrp->peer : NULL;
+        if (lrp->peer && lrp->peer->od == lr) {
+            return lrp->peer;
         }
     }
+
     return NULL;
 }
 
@@ -7066,7 +7067,6 @@ build_pre_stateful(struct ovn_datapath *od,
                   lflow_ref);
     ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_STATEFUL, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_LB, 0, "1", "next;", lflow_ref);
 
     /* Note: priority-120 flows are added in build_lb_rules_pre_stateful(). */
 
@@ -11729,6 +11729,13 @@ build_lswitch_ip_unicast_lookup_for_nats(
     }
 }
 
+static void
+build_lswitch_default_egress_lb_flows(struct ovn_datapath *od, struct lflow_table *lflows,
+                                      struct ds *actions, struct lflow_ref *lflow_ref)
+{
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_LB, 0, "1", "next;", lflow_ref);
+}
+
 struct bfd_entry {
     struct hmap_node hmap_node;
 
@@ -13584,9 +13591,14 @@ build_lb_rules_deferred_nat(struct lrouter_nat_lb_flows_ctx *ctx,
             continue;
         }
 
-        struct ovn_port *lrp = ovn_port_get_lrp_for_lsp(op, od);
+        struct ovn_port *lrp = ovn_get_directly_connected_switch_for_op(op, od);
         if (!lrp) {
             continue;
+        }
+
+        /* надо написать что не поддерживается без адресов */
+        if (!lrp->lrp_networks.n_ipv4_addrs) {
+            return;
         }
 
         if (backend_nb->health_check
@@ -13622,9 +13634,6 @@ build_lb_rules_deferred_nat(struct lrouter_nat_lb_flows_ctx *ctx,
                       ds_cstr(&action), lflow_ref,
                       WITH_HINT(&lb->nlb->header_));
 
-        /* The router leaves the packet addressed to the VIP; the DNAT is
-         * done here, in the egress pipeline of the backend's switch, so that
-         * it lands in the conntrack zone of the backend port. */
         ds_clear(&match);
         ds_clear(&action);
         ds_put_format(&match, "eth.dst == %s && %s.dst == %s",
@@ -13645,14 +13654,6 @@ build_lb_rules_deferred_nat(struct lrouter_nat_lb_flows_ctx *ctx,
                       ds_cstr(&match), ds_cstr(&action), lflow_ref,
                       WITH_HINT(&lb->nlb->header_));
 
-        /* The reply has to be un-DNATted in the ingress pipeline of the same
-         * switch, which only happens if the packet is sent to conntrack
-         * there.  Don't rely on ls_stateful's has_lb_vip for that: it is
-         * computed from the switch's own 'load_balancer' column, which a
-         * deferred NAT load balancer is not in.  For the same reason the
-         * stateless ACL bypass at ls_in_pre_lb priority 110 must be
-         * overridden here, or the reply would leave with the backend's
-         * address as source. */
         ds_clear(&match);
         ds_put_format(&match, "inport == %s && %s.src == %s", op->json_key,
                       ip_match, backend->ip_str);
@@ -13664,12 +13665,6 @@ build_lb_rules_deferred_nat(struct lrouter_nat_lb_flows_ctx *ctx,
                       ds_cstr(&match), REGBIT_CONNTRACK_NAT" = 1; next;",
                       lflow_ref, WITH_HINT(&lb->nlb->header_));
 
-        /* Traffic that the router has just sent back down still carries the
-         * VIP as destination.  If the load balancer also happens to be
-         * attached to this switch, its ls_in_pre_stateful rules would DNAT
-         * it a second time, so skip conntrack for it here.  This is
-         * unconditional on REGBIT_ACL_STATELESS: with deferred NAT the
-         * translation belongs to the egress pipeline in either case. */
         const struct ovn_port *sw_rp;
         VECTOR_FOR_EACH (&op->od->router_ports, sw_rp) {
             ds_clear(&match);
@@ -20405,6 +20400,7 @@ build_lswitch_and_lrouter_iterate_by_ls(struct ovn_datapath *od,
         build_lswitch_lflows_l2_unknown(od, lsi->lflows, NULL);
     }
     build_mcast_flood_lswitch(od, lsi->lflows, &lsi->actions, NULL);
+    build_lswitch_default_egress_lb_flows(od, lsi->lflows, &lsi->actions, NULL);
 }
 
 /* Helper function to combine all lflow generation which is iterated by

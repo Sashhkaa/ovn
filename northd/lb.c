@@ -401,7 +401,7 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
     lb->is_distributed = smap_get_bool(&nbrec_lb->options, "distributed",
                                        false);
     lb->is_deferred_nat = smap_get_bool(&nbrec_lb->options, "deferred-nat",
-                                      false);
+                                        false);
 
     sset_init(&lb->ips_v4);
     sset_init(&lb->ips_v6);
@@ -442,7 +442,7 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
         }
         n_vips++;
 
-        if (lb_vip_needs_port_mappings(lb)) { 
+        if (lb_vip_needs_port_mappings(lb)) {
             ovn_lb_vip_backends_ip_port_mappings_init(lb, lb_vip, lb_vip_nb);
         }
     }

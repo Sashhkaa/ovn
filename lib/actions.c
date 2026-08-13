@@ -1821,7 +1821,6 @@ encode_SELECT(const struct ovnact_select *select,
     for (size_t bucket_id = 0; bucket_id < select->n_dsts; bucket_id++) {
         const struct ovnact_select_dst *dst = &select->dsts[bucket_id];
         if (incremental) {
-            /* подумать тут над тем что dst->id может меняться на стороне northd */
             bucket_specs[bucket_id].key = xasprintf("%"PRIu32, dst->id);
             /* All buckets carry the same weight, so ofctrl.c supplies it
              * and the content only needs to describe the actions. */

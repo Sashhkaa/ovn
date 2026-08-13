@@ -701,8 +701,10 @@ handle_od_lb_changes(struct nbrec_load_balancer **nbrec_lbs,
             ovs_assert(lb);
 
             trk_lb_data->has_health_checks |= lb->health_checks;
-            trk_lb_data->has_routable_lb |= lb->routable;
-            trk_lb_data->has_distributed_lb |= lb->is_distributed;
+            if (!trk_lb_data->has_routable_lb) {
+                trk_lb_data->has_routable_lb |= lb->routable;
+                trk_lb_data->has_distributed_lb |= lb->is_distributed;
+            }
             trk_lb_data->has_deferred_nat_lb |= lb->is_deferred_nat;
         }
 
