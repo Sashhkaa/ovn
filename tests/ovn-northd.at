@@ -22053,8 +22053,8 @@ dnl ls1 does not carry lb1 in its own 'load_balancer' column, but it hosts the
 dnl backends, so requests that originate inside 172.16.0.0/24 have to be load
 dnl balanced here rather than on lr1.
 AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.1], [0], [dnl
-  table=??(ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(reg4 = 30.0.0.1; reg2[[0..15]] = 80; ct_lb_mark;)
   table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 30.0.0.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 30.0.0.1; reg2[[0..15]] = 80; ct_lb_mark(backends=172.16.0.101:8080,172.16.0.102:8080,172.16.0.103:8080);)
+  table=??(ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(reg4 = 30.0.0.1; reg2[[0..15]] = 80; ct_lb_mark;)
 ])
 
 check_engine_compute lflow recompute
@@ -22066,15 +22066,20 @@ check ovn-nbctl --wait=sb set logical_switch ls1 \
     other_config:enable-stateless-acl-with-lb=true
 
 AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.1], [0], [dnl
-  table=??(ls_in_pre_stateful ), priority=150  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(reg4 = 30.0.0.1; reg2[[0..15]] = 80; ct_lb_mark;)
-  table=??(ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(reg4 = 30.0.0.1; reg2[[0..15]] = 80; ct_lb_mark;)
-  table=??(ls_in_pre_stateful ), priority=105  , match=(tcp && ip4.dst == 30.0.0.1), action=(ct_lb_mark;)
   table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 30.0.0.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 30.0.0.1; reg2[[0..15]] = 80; ct_lb_mark(backends=172.16.0.101:8080,172.16.0.102:8080,172.16.0.103:8080);)
+  table=??(ls_in_pre_stateful ), priority=105  , match=(tcp && ip4.dst == 30.0.0.1), action=(ct_lb_mark;)
+  table=??(ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(reg4 = 30.0.0.1; reg2[[0..15]] = 80; ct_lb_mark;)
+  table=??(ls_in_pre_stateful ), priority=150  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(reg4 = 30.0.0.1; reg2[[0..15]] = 80; ct_lb_mark;)
 ])
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
 check ovn-nbctl --wait=sb remove logical_switch ls1 other_config \
     enable-stateless-acl-with-lb
+
+AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.1], [0], [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 30.0.0.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 30.0.0.1; reg2[[0..15]] = 80; ct_lb_mark(backends=172.16.0.101:8080,172.16.0.102:8080,172.16.0.103:8080);)
+  table=??(ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(reg4 = 30.0.0.1; reg2[[0..15]] = 80; ct_lb_mark;)
+])
 
 AS_BOX([Remove the option -- every deferred-nat flow has to go away])
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
@@ -22094,6 +22099,11 @@ AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [3
 ])
 AT_CHECK([deferred_ls_flows ls1 30.0.0.1 | grep -c "ls_out_lb"], [0], [3
 ])
+AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.1], [0], [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 30.0.0.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 30.0.0.1; reg2[[0..15]] = 80; ct_lb_mark(backends=172.16.0.101:8080,172.16.0.102:8080,172.16.0.103:8080);)
+  table=??(ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(reg4 = 30.0.0.1; reg2[[0..15]] = 80; ct_lb_mark;)
+])
+
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -22104,6 +22114,10 @@ check ovn-nbctl set load_balancer lb1 options:deferred-nat=false --
 AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [3
 ])
 AT_CHECK([deferred_ls_flows ls1 30.0.0.1 | grep -c "ls_out_lb"], [0], [3
+])
+AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.1], [0], [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 30.0.0.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 30.0.0.1; reg2[[0..15]] = 80; ct_lb_mark(backends=172.16.0.101:8080,172.16.0.102:8080,172.16.0.103:8080);)
+  table=??(ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(reg4 = 30.0.0.1; reg2[[0..15]] = 80; ct_lb_mark;)
 ])
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
@@ -22116,6 +22130,7 @@ check ovn-nbctl set load_balancer lb1 options:deferred-nat=true --
 
 AT_CHECK([deferred_lr_flows lr1 30.0.0.1], [0], [])
 AT_CHECK([deferred_ls_flows ls1 30.0.0.1], [0], [])
+AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.1], [0], [])
 
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
