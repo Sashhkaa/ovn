@@ -13674,6 +13674,36 @@ build_lb_rules_deferred_nat(struct lrouter_nat_lb_flows_ctx *ctx,
                       ds_cstr(&match), ds_cstr(&action), lflow_ref,
                       WITH_HINT(&lb->nlb->header_));
 
+        /* Requests that reach the VIP from inside the backend's own subnet
+         * are load balanced on that switch, the same way any other switch
+         * load balancer works; only requests arriving from outside go
+         * through the deferred backend selection above.  The switch does not
+         * carry this load balancer in its 'load_balancer' column, so emit its
+         * part of the pipeline from here. */
+        build_lb_pre_stateful_ct_flow(lb, lb_vip, true, &match, &action);
+        ovn_lflow_add(ctx->lflows, op->od, S_SWITCH_IN_PRE_STATEFUL, 120,
+                      ds_cstr(&match), ds_cstr(&action), lflow_ref,
+                      WITH_HINT(&lb->nlb->header_));
+
+        if (op->od->lb_with_stateless_mode) {
+            build_lb_pre_stateful_stateless_flows(ctx->lflows, lb, lb_vip,
+                                                  op->od, lflow_ref,
+                                                  &match, &action);
+        }
+
+        uint16_t ls_lb_prio;
+        bool ls_lb_reject = build_lb_ls_flow(lb, lb_vip, lb_vip_nb,
+                                             svc_mons_data, &ls_lb_prio,
+                                             &match, &action);
+        if (!ls_lb_reject
+            || !build_lb_ls_reject_flow_for_od(ctx->lflows, lb, op->od,
+                                               ls_lb_prio, ctx->meter_groups,
+                                               lflow_ref, &match, &action)) {
+            ovn_lflow_add(ctx->lflows, op->od, S_SWITCH_IN_LB, ls_lb_prio,
+                          ds_cstr(&match), ds_cstr(&action), lflow_ref,
+                          WITH_HINT(&lb->nlb->header_));
+        }
+
         const struct ovn_port *sw_rp;
         VECTOR_FOR_EACH (&op->od->router_ports, sw_rp) {
             ds_clear(&match);
