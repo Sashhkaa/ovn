@@ -158,6 +158,9 @@ struct ovn_extend_table_info *
 ovn_extend_table_desired_lookup_by_name(struct ovn_extend_table * table,
                                         const char *name);
 
+struct ovn_extend_table_bucket *
+ovn_extend_table_bucket_find(struct hmap *buckets, const char *key);
+
 /* Iterates 'DESIRED' through all of the 'ovn_extend_table_info's in
  * 'TABLE'->desired that are not in 'TABLE'->existing.  (The loop body
  * presumably adds them.) */

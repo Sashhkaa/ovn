@@ -2158,6 +2158,83 @@ add_group_mod(struct ofputil_group_mod *gm,
     ofputil_uninit_group_mod(&split);
 }
 
+/* Parses 'group_string' as a 'command' group_mod and queues it up in 'msgs'.
+ * 'descr' names the operation in the log message if parsing fails. */
+static void
+add_group_mod_str(uint16_t command, const char *group_string,
+                  const char *descr, struct ofputil_bundle_ctrl_msg *bc,
+                  struct ovs_list *msgs)
+{
+    struct ofputil_group_mod gm;
+    enum ofputil_protocol usable_protocols;
+    char *error = parse_ofp_group_mod_str(&gm, command, group_string, NULL,
+                                          NULL, &usable_protocols);
+    if (!error) {
+        add_group_mod(&gm, bc, msgs);
+    } else {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_ERR_RL(&rl, "%s %s %s", descr, error, group_string);
+        free(error);
+    }
+    ofputil_uninit_group_mod(&gm);
+}
+
+static int
+bucket_id_cmp(const void *a_, const void *b_)
+{
+    const struct ovn_extend_table_bucket *const *a = a_;
+    const struct ovn_extend_table_bucket *const *b = b_;
+
+    return ((*a)->bucket_id > (*b)->bucket_id)
+           - ((*a)->bucket_id < (*b)->bucket_id);
+}
+
+/* Returns the contents of 'buckets' as an array of '*n_bucketsp' elements
+ * sorted by bucket id, which the caller must free (but not the buckets
+ * themselves).  Returns NULL if 'buckets' is empty.
+ *
+ * Groups are installed and updated in this order so that the bucket order a
+ * switch ends up with depends only on the group's contents, and not on hmap
+ * iteration order or on the sequence of updates that produced it.
+ *
+ * This matters most for selection_method=dp_hash, which is what "select"
+ * uses unless hash_fields are given: the datapath builds its hash value to
+ * bucket table by walking the buckets in order, so with equal weights the
+ * mapping is decided purely by their positions.  Two chassis that reached
+ * the same set of members through a different sequence of updates would
+ * hash the same flow to different members, and so would one chassis before
+ * and after a restart - and for a load balancer that does not commit to
+ * conntrack, that moves established connections. */
+static struct ovn_extend_table_bucket **
+sorted_buckets(struct hmap *buckets, size_t *n_bucketsp)
+{
+    *n_bucketsp = hmap_count(buckets);
+    if (!*n_bucketsp) {
+        return NULL;
+    }
+
+    struct ovn_extend_table_bucket **bs = xmalloc(*n_bucketsp * sizeof *bs);
+    struct ovn_extend_table_bucket *b;
+    size_t i = 0;
+    HMAP_FOR_EACH (b, hmap_node, buckets) {
+        bs[i++] = b;
+    }
+    qsort(bs, *n_bucketsp, sizeof *bs, bucket_id_cmp);
+
+    return bs;
+}
+
+/* Returns true if 'b' is already installed in 'installed' exactly as it is
+ * wanted, so that it needs no group_mod at all. */
+static bool
+bucket_is_installed(struct hmap *installed,
+                    const struct ovn_extend_table_bucket *b)
+{
+    const struct ovn_extend_table_bucket *e =
+        ovn_extend_table_bucket_find(installed, b->key);
+
+    return e && !strcmp(e->content, b->content);
+}
 
 static struct ofpbuf *
 encode_meter_mod(const struct ofputil_meter_mod *mm)
@@ -2917,12 +2994,14 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
             struct ds group_ds = DS_EMPTY_INITIALIZER;
             ds_put_format(&group_ds, "group_id=%"PRIu32",%s",
                           desired->table_id, desired->group_header);
-            struct ovn_extend_table_bucket *b;
-            HMAP_FOR_EACH (b, hmap_node, &desired->desired_buckets) {
-                ds_put_format(&group_ds, ",bucket=bucket_id=%"PRIu32
-                              ",weight:100,actions=%s",
-                              b->bucket_id, b->content);
+            size_t n_buckets;
+            struct ovn_extend_table_bucket **bs =
+                sorted_buckets(&desired->desired_buckets, &n_buckets);
+            for (size_t i = 0; i < n_buckets; i++) {
+                ds_put_format(&group_ds, ",bucket=bucket_id=%"PRIu32",%s",
+                              bs[i]->bucket_id, bs[i]->content);
             }
+            free(bs);
             group_string = ds_steal_cstr(&group_ds);
             ds_destroy(&group_ds);
         } else {
@@ -2950,11 +3029,16 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
      * what's actually installed (existing->existing_buckets) and send only
      * the bucket-level changes, instead of a whole-group replace.
      *
-     * A bucket whose content changed under the same key (e.g. a weight or
-     * health-check flip) has no direct "modify" verb in OF1.5: it's
-     * removed and re-inserted under the same bucket_id
+     * A bucket whose content changed under the same key (e.g. a weight
+     * change) has no direct "modify" verb in OF1.5: it's removed and
+     * re-inserted under the same bucket_id
      * (ovn_extend_table_assign_group_id() keeps ids stable per key), so
-     * REMOVE_BUCKET is sent before INSERT_BUCKET. */
+     * REMOVE_BUCKET is sent before INSERT_BUCKET.
+     *
+     * The buckets are inserted so that the group stays ordered by bucket id,
+     * see sorted_buckets(): each run of buckets to install goes in one
+     * INSERT_BUCKET anchored on the installed bucket it has to follow, or at
+     * the front of the group if there is none. */
     HMAP_FOR_EACH (desired, hmap_node, &groups->desired) {
         if (!desired->group_header) {
             continue;
@@ -2967,73 +3051,55 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
 
         struct ovn_extend_table_bucket *e;
         HMAP_FOR_EACH (e, hmap_node, &existing->existing_buckets) {
-            struct ovn_extend_table_bucket *d;
-            bool unchanged = false;
-            HMAP_FOR_EACH (d, hmap_node, &desired->desired_buckets) {
-                if (!strcmp(d->key, e->key)) {
-                    unchanged = !strcmp(d->content, e->content);
-                    break;
-                }
-            }
-            if (unchanged) {
+            if (bucket_is_installed(&desired->desired_buckets, e)) {
                 continue;
             }
 
-            struct ofputil_group_mod gm;
-            enum ofputil_protocol usable_protocols;
             char *group_string = xasprintf(
                 "group_id=%"PRIu32",command_bucket_id=%"PRIu32,
                 desired->table_id, e->bucket_id);
-            char *error = parse_ofp_group_mod_str(
-                &gm, OFPGC15_REMOVE_BUCKET, group_string, NULL, NULL,
-                &usable_protocols);
-            if (!error) {
-                add_group_mod(&gm, &bc, &msgs);
-            } else {
-                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
-                VLOG_ERR_RL(&rl, "remove bucket %s %s", error, group_string);
-                free(error);
-            }
+            add_group_mod_str(OFPGC15_REMOVE_BUCKET, group_string,
+                              "remove bucket", &bc, &msgs);
             free(group_string);
-            ofputil_uninit_group_mod(&gm);
         }
 
+        size_t n_buckets;
+        struct ovn_extend_table_bucket **bs =
+            sorted_buckets(&desired->desired_buckets, &n_buckets);
         struct ds insert_ds = DS_EMPTY_INITIALIZER;
-        struct ovn_extend_table_bucket *d;
-        HMAP_FOR_EACH (d, hmap_node, &desired->desired_buckets) {
-            bool unchanged = false;
-            HMAP_FOR_EACH (e, hmap_node, &existing->existing_buckets) {
-                if (!strcmp(e->key, d->key)) {
-                    unchanged = !strcmp(e->content, d->content);
-                    break;
-                }
-            }
-            if (!unchanged) {
-                ds_put_format(&insert_ds, ",bucket=bucket_id=%"PRIu32
-                              ",weight:100,actions=%s",
+        struct ds anchor = DS_EMPTY_INITIALIZER;
+        ds_put_cstr(&anchor, "first");
+
+        /* One extra iteration to flush whatever is still pending. */
+        for (size_t i = 0; i <= n_buckets; i++) {
+            struct ovn_extend_table_bucket *d = i < n_buckets ? bs[i] : NULL;
+
+            if (d && !bucket_is_installed(&existing->existing_buckets, d)) {
+                ds_put_format(&insert_ds, ",bucket=bucket_id=%"PRIu32",%s",
                               d->bucket_id, d->content);
+                continue;
+            }
+
+            /* 'd' is already installed where it belongs (or we ran off the
+             * end), so anything pending goes just after the previous such
+             * bucket. */
+            if (insert_ds.length) {
+                char *group_string = xasprintf(
+                    "group_id=%"PRIu32",command_bucket_id=%s%s",
+                    desired->table_id, ds_cstr(&anchor), ds_cstr(&insert_ds));
+                add_group_mod_str(OFPGC15_INSERT_BUCKET, group_string,
+                                  "insert bucket", &bc, &msgs);
+                free(group_string);
+                ds_clear(&insert_ds);
+            }
+            if (d) {
+                ds_clear(&anchor);
+                ds_put_format(&anchor, "%"PRIu32, d->bucket_id);
             }
         }
-        if (insert_ds.length) {
-            struct ofputil_group_mod gm;
-            enum ofputil_protocol usable_protocols;
-            char *group_string = xasprintf(
-                 "group_id=%"PRIu32",command_bucket_id=last%s",
-                 desired->table_id, ds_cstr(&insert_ds));
-            char *error = parse_ofp_group_mod_str(
-                &gm, OFPGC15_INSERT_BUCKET, group_string, NULL, NULL,
-                &usable_protocols);
-            if (!error) {
-                add_group_mod(&gm, &bc, &msgs);
-            } else {
-                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
-                VLOG_ERR_RL(&rl, "insert bucket %s %s", error, group_string);
-                free(error);
-            }
-            free(group_string);
-            ofputil_uninit_group_mod(&gm);
-        }
+        ds_destroy(&anchor);
         ds_destroy(&insert_ds);
+        free(bs);
     }
 
     /* If skipped last time, then process the flow table

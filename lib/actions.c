@@ -1822,10 +1822,14 @@ encode_SELECT(const struct ovnact_select *select,
         const struct ovnact_select_dst *dst = &select->dsts[bucket_id];
         if (incremental) {
             bucket_specs[bucket_id].key = xasprintf("%"PRIu32, dst->id);
-            /* All buckets carry the same weight, so ofctrl.c supplies it
-             * and the content only needs to describe the actions. */
+            /* Everything about the bucket except its id, so that ofctrl.c can
+             * tell whether an existing bucket still matches what is wanted.
+             * The weight belongs here rather than being supplied by ofctrl.c:
+             * it can change while the key stays the same, and a bucket whose
+             * content changed is reinstalled under the same id. */
             bucket_specs[bucket_id].content =
-                xasprintf("load:%u->%s[%u..%u],resubmit(,%d)", dst->id,
+                xasprintf("weight:%"PRIu16",actions=load:%u->%s[%u..%u],"
+                          "resubmit(,%d)", dst->weight, dst->id,
                           sf.field->name, sf.ofs, sf.ofs + sf.n_bits - 1,
                           resubmit_table);
             continue;
