@@ -861,7 +861,7 @@ void evpn_local_ip_map_init(struct evpn_local_ip_map *vni_ip_map,
                             const struct smap *config);
 const struct in6_addr *
 evpn_local_ip_map_lookup(const struct evpn_local_ip_map *map,
-                         uint32_t vni, bool ipv4);
+                         uint32_t vni);
 void evpn_local_ip_map_destroy(struct evpn_local_ip_map *map);
 
 #endif /* OVN_UTIL_H */
