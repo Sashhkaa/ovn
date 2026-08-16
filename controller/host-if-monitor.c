@@ -66,6 +66,21 @@ host_if_monitor_run(void)
 }
 
 void
+host_if_monitor_invalidate(const char *if_name)
+{
+    if (!sset_contains(&monitor.watched_interfaces, if_name)) {
+        return;
+    }
+
+    int32_t ifindex = if_nametoindex(if_name);
+    if (ifindex) {
+        simap_put(&monitor.ifname_to_ifindex, if_name, ifindex);
+    } else {
+        simap_find_and_delete(&monitor.ifname_to_ifindex, if_name);
+    }
+}
+
+void
 host_if_monitor_update_watches(const struct sset *if_names)
 {
     struct sset new_if_names = SSET_INITIALIZER(&new_if_names);

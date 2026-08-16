@@ -1899,6 +1899,30 @@ port_contains_duplicate_ip(struct lport_addresses *laddrs1,
 }
 
 const struct in6_addr *
+evpn_local_ip_map_lookup(const struct evpn_local_ip_map *map, uint32_t vni)
+{
+    const struct in6_addr *addr = evpn_local_ip_lookup(&map->vni_ip4, vni);
+    if (addr) {
+        return addr;
+    }
+
+    addr = evpn_local_ip_lookup(&map->vni_ip6, vni);
+    if (addr) {
+        return addr;
+    }
+
+    if (ipv6_addr_is_set(&map->default_ip4)) {
+        return &map->default_ip4;
+    }
+
+    if (ipv6_addr_is_set(&map->default_ip6)) {
+        return &map->default_ip6;
+    }
+
+    return NULL;
+}
+
+const struct in6_addr *
 evpn_local_ip_lookup(const struct hmap *map, uint32_t vni)
 {
     struct vni_local_ip *e;
