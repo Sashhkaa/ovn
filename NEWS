@@ -94,6 +94,7 @@ Post v26.03.0
    - Added a new "ovn-debug lflow-pipeline-oftable-start-list" command that
      prints the starting OpenFlow table number of the logical ingress and
      egress pipelines.
+   - Removed the deprecated "ct_lb" action.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
