@@ -31,12 +31,11 @@
 #include "route-table.h"
 #include "route.h"
 #include "vec.h"
+#include "netlink-utils.h"
 
 #include "route-exchange-netlink.h"
 
 VLOG_DEFINE_THIS_MODULE(route_exchange_netlink);
-
-#define NETNL_REQ_BUFFER_SIZE 128
 
 static void re_nl_encode_nexthop(struct ofpbuf *, bool dst_is_ipv4,
                                  const struct in6_addr *);
@@ -44,58 +43,13 @@ static void re_nl_encode_nexthop(struct ofpbuf *, bool dst_is_ipv4,
 int
 re_nl_create_vrf(const char *ifname, uint32_t table_id)
 {
-    if (!TABLE_ID_VALID(table_id)) {
-        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
-        VLOG_WARN_RL(&rl,
-                     "attempt to create VRF using invalid table id %"PRIu32,
-                     table_id);
-        return EINVAL;
-    }
-
-    size_t linkinfo_off, infodata_off;
-    struct ifinfomsg *ifinfo;
-    int err;
-
-    struct ofpbuf request;
-    uint8_t request_stub[NETNL_REQ_BUFFER_SIZE];
-    ofpbuf_use_stub(&request, request_stub, sizeof(request_stub));
-
-    nl_msg_put_nlmsghdr(&request, 0, RTM_NEWLINK,
-                        NLM_F_REQUEST | NLM_F_ACK | NLM_F_CREATE | NLM_F_EXCL);
-    ifinfo = ofpbuf_put_zeros(&request, sizeof *ifinfo);
-    nl_msg_put_string(&request, IFLA_IFNAME, ifname);
-
-    ifinfo->ifi_change = ifinfo->ifi_flags = IFF_UP;
-    linkinfo_off = nl_msg_start_nested(&request, IFLA_LINKINFO);
-    nl_msg_put_string(&request, IFLA_INFO_KIND, "vrf");
-    infodata_off = nl_msg_start_nested(&request, IFLA_INFO_DATA);
-    nl_msg_put_u32(&request, IFLA_VRF_TABLE, table_id);
-    nl_msg_end_nested(&request, infodata_off);
-    nl_msg_end_nested(&request, linkinfo_off);
-
-    err = nl_transact(NETLINK_ROUTE, &request, NULL);
-
-    ofpbuf_uninit(&request);
-    return err;
+    return nl_create_vrf(ifname, table_id);
 }
 
 int
 re_nl_delete_vrf(const char *ifname)
 {
-    struct ifinfomsg *ifinfo;
-    int err;
-
-    struct ofpbuf request;
-    uint8_t request_stub[NETNL_REQ_BUFFER_SIZE];
-    ofpbuf_use_stub(&request, request_stub, sizeof(request_stub));
-
-    nl_msg_put_nlmsghdr(&request, 0, RTM_DELLINK, NLM_F_REQUEST | NLM_F_ACK);
-    ifinfo = ofpbuf_put_zeros(&request, sizeof *ifinfo);
-    nl_msg_put_string(&request, IFLA_IFNAME, ifname);
-    err = nl_transact(NETLINK_ROUTE, &request, NULL);
-
-    ofpbuf_uninit(&request);
-    return err;
+    return nl_delete_device(ifname);
 }
 
 void
