@@ -15,12 +15,16 @@
 
 #include <config.h>
 
+#include <errno.h>
 #include <linux/neighbour.h>
+#include <net/if.h>
 
 #include "host-if-monitor.h"
+#include "lib/sset.h"
 #include "neighbor.h"
 #include "neighbor-exchange.h"
 #include "neighbor-exchange-netlink.h"
+#include "route-exchange-netlink.h"
 #include "openvswitch/poll-loop.h"
 #include "openvswitch/vlog.h"
 #include "ovn-util.h"
@@ -47,6 +51,8 @@ static uint32_t evpn_static_entry_hash(const struct eth_addr *mac,
                                        const struct in6_addr *ip,
                                        uint32_t vni, uint32_t nh_id);
 
+static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
+
 /* Last neighbor_exchange netlink operation. */
 static int neighbor_exchange_nl_status;
 
@@ -65,10 +71,353 @@ static int neighbor_exchange_nl_status;
         }                                          \
     } while (0)
 
+/* Tracks the EVPN interface stack of a single VNI.
+ *
+ * Presence in 'maintained_evpn_entries' means "OVN may have created kernel
+ * devices for this VNI and is therefore responsible for tearing them down".
+ * An entry is inserted before the first netlink call is issued, so that a
+ * stack that was only partially created is still cleaned up later. */
+struct maintained_evpn_entry {
+    struct hmap_node node;
+    /* The configuration the devices were last (re)created with, i.e. what
+     * the kernel is expected to hold.  It is updated as soon as the
+     * previous devices are gone, even if creating the new ones then fails,
+     * so that a partial failure doesn't leave a permanent difference
+     * against the desired configuration. */
+    struct neighbor_ovn_maintain_entry entry;
+    /* False if the last attempt to apply 'entry' didn't fully succeed.  The
+     * next run then repairs the stack by re-running the idempotent create
+     * path instead of tearing it down and rebuilding it. */
+    bool synced;
+};
+
+static struct hmap maintained_evpn_entries =
+    HMAP_INITIALIZER(&maintained_evpn_entries);
+
+static struct maintained_evpn_entry *
+maintained_evpn_entry_find(const struct hmap *entries, uint32_t vni)
+{
+    struct maintained_evpn_entry *me;
+    HMAP_FOR_EACH_WITH_HASH (me, node, hash_int(vni, 0), entries) {
+        if (me->entry.vni == vni) {
+            return me;
+        }
+    }
+
+    return NULL;
+}
+
+/* Deletes the interfaces for 'entry'. Returns true if all of them were
+ * deleted (or were already absent), false if any netlink call failed. */
+static bool
+evpn_delete_devices(struct neighbor_ovn_maintain_entry *entry)
+{
+    int error;
+    bool ok = true;
+
+    error = ne_nl_delete_iface(entry->br_if_name);
+    if (error && error != ENODEV) {
+        VLOG_WARN_RL(&rl, "Unable to delete bridge interface %s: %s",
+                     entry->br_if_name, ovs_strerror(error));
+        SET_NEIGHBOR_EXCHANGE_NL_STATUS(error);
+        ok = false;
+    }
+
+    error = ne_nl_delete_iface(entry->vxlan_if_name);
+    if (error && error != ENODEV) {
+        VLOG_WARN_RL(&rl, "Unable to delete VXLAN interface %s: %s",
+                     entry->vxlan_if_name, ovs_strerror(error));
+        SET_NEIGHBOR_EXCHANGE_NL_STATUS(error);
+        ok = false;
+    }
+
+    error = ne_nl_delete_iface(entry->vrf_if_name);
+    if (error && error != ENODEV) {
+        VLOG_WARN_RL(&rl, "Unable to delete vrf interface %s: %s",
+                     entry->vrf_if_name, ovs_strerror(error));
+        SET_NEIGHBOR_EXCHANGE_NL_STATUS(error);
+        ok = false;
+    }
+
+    error = ne_nl_delete_iface(entry->lo_if_name);
+    if (error && error != ENODEV) {
+        VLOG_WARN_RL(&rl, "Unable to delete dummy interface %s: %s",
+                     entry->lo_if_name, ovs_strerror(error));
+        SET_NEIGHBOR_EXCHANGE_NL_STATUS(error);
+        ok = false;
+    }
+
+    /* Refresh the host-if-monitor ifindex cache for the interfaces we
+     * monitor for neighbor sync, so a lookup later in this same engine
+     * iteration doesn't use a stale ifindex. */
+    host_if_monitor_invalidate(entry->br_if_name);
+    host_if_monitor_invalidate(entry->vxlan_if_name);
+    host_if_monitor_invalidate(entry->lo_if_name);
+
+    return ok;
+}
+
+static bool
+set_bridge_evpn_device_addr(struct neighbor_ovn_maintain_entry *entry)
+{
+    int err;
+    if (entry->br_config.has_addr) {
+        err = ne_nl_set_iface_mac_addr(entry->br_if_name,
+                                       &entry->br_config.lladdr);
+        if (err) {
+            VLOG_WARN_RL(&rl, "Unable set mac address on interface %s: %s",
+                         entry->br_if_name, ovs_strerror(err));
+            SET_NEIGHBOR_EXCHANGE_NL_STATUS(err);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/* Creates the interfaces for 'entry'. Returns true if the whole stack was
+ * created successfully (or already existed), false if any netlink call
+ * failed. */
+static bool
+evpn_create_devices(struct neighbor_ovn_maintain_entry *entry)
+{
+    static const char *link_dev = "vxlan_sys_4789";
+    int32_t link_ifindex = ne_nl_ifindex_get(link_dev);
+    int err;
+    bool ok = true;
+
+    if (!link_ifindex) {
+        err = ENODEV;
+        VLOG_WARN_RL(&rl,
+                     "Unable to find OVS system vxlan interface");
+        SET_NEIGHBOR_EXCHANGE_NL_STATUS(err);
+        ok = false;
+    }
+
+    if (entry->br_config.has_addr
+        && nrm_mode_IP_is_set(entry->redistribute_mode)) {
+        err = ne_nl_create_vrf(entry->vrf_if_name, entry->vni);
+        if (err && err != EEXIST) {
+            VLOG_WARN_RL(&rl,
+                         "Unable to create VRF %s for datapath %s",
+                         entry->vrf_if_name, ovs_strerror(err));
+            SET_NEIGHBOR_EXCHANGE_NL_STATUS(err);
+            ok = false;
+        }
+    }
+
+    err = ne_nl_create_vxlan(entry->vxlan_if_name, entry->vni,
+                             &entry->local_ip, entry->fake_vxlan_port,
+                             link_ifindex);
+    if (err && err != EEXIST) {
+        VLOG_WARN_RL(&rl,
+                     "Unable to create VXLAN interface %s for "
+                     "VNI %"PRIu32": %s",
+                     entry->vxlan_if_name, entry->vni, ovs_strerror(err));
+        SET_NEIGHBOR_EXCHANGE_NL_STATUS(err);
+        ok = false;
+    }
+
+    err = ne_nl_create_bridge(entry->br_if_name);
+    if (err && err != EEXIST) {
+        VLOG_WARN_RL(&rl,
+                     "Unable to create bridge interface %s for "
+                     "VNI %"PRIu32": %s",
+                     entry->br_if_name, entry->vni, ovs_strerror(err));
+        SET_NEIGHBOR_EXCHANGE_NL_STATUS(err);
+        ok = false;
+    }
+
+    if (!set_bridge_evpn_device_addr(entry)) {
+        ok = false;
+    }
+
+    if (entry->br_config.has_addr
+        && nrm_mode_IP_is_set(entry->redistribute_mode)) {
+        err = ne_nl_set_master(entry->br_if_name, entry->vrf_if_name);
+        if (err) {
+            VLOG_WARN_RL(&rl, "Unable to enslave %s to bridge %s: %s",
+                         entry->br_if_name, entry->vrf_if_name,
+                         ovs_strerror(err));
+            SET_NEIGHBOR_EXCHANGE_NL_STATUS(err);
+            ok = false;
+        }
+    }
+
+    if (nrm_mode_FDB_is_set(entry->redistribute_mode)) {
+        err = ne_nl_create_lo(entry->lo_if_name);
+        if (err && err != EEXIST) {
+            VLOG_WARN_RL(&rl,
+                         "Unable to create dummy interface %s for "
+                         "VNI %"PRIu32": %s",
+                         entry->lo_if_name, entry->vni, ovs_strerror(err));
+            SET_NEIGHBOR_EXCHANGE_NL_STATUS(err);
+            ok = false;
+        }
+        err = ne_nl_set_master(entry->lo_if_name, entry->br_if_name);
+        if (err) {
+            VLOG_WARN_RL(&rl, "Unable to enslave %s to bridge %s: %s",
+                         entry->lo_if_name, entry->br_if_name,
+                         ovs_strerror(err));
+            SET_NEIGHBOR_EXCHANGE_NL_STATUS(err);
+            ok = false;
+        }
+    }
+
+    err = ne_nl_set_master(entry->vxlan_if_name, entry->br_if_name);
+    if (err) {
+        VLOG_WARN_RL(&rl, "Unable to enslave %s to bridge %s: %s",
+                     entry->vxlan_if_name, entry->br_if_name,
+                     ovs_strerror(err));
+        SET_NEIGHBOR_EXCHANGE_NL_STATUS(err);
+        ok = false;
+    }
+
+    /* Refresh the host-if-monitor ifindex cache so a lookup later in this
+     * same engine iteration picks up the newly (re)created interfaces
+     * instead of a stale ifindex left over from before they were
+     * deleted/recreated. */
+    host_if_monitor_invalidate(entry->br_if_name);
+    host_if_monitor_invalidate(entry->vxlan_if_name);
+    host_if_monitor_invalidate(entry->lo_if_name);
+
+    return ok;
+}
+
+/* Returns true if a change between 'old_entry' and 'entry' requires
+ * deleting and recreating the whole VRF/bridge/VXLAN/lo interface stack,
+ * rather than updating it in place.  This is the case when:
+ *
+ * - The VXLAN device's local IP or UDP destination port changed: Netlink
+ *   offers no way to change either on an existing VXLAN interface.
+ *
+ * - The bridge gained or lost its L3 address ('has_addr'): this changes
+ *   whether a VRF is needed at all.
+ *
+ * - The redistribution mode changed (FDB and/or IP bits): this changes
+ *   whether the loopback advertise interface is needed at all.
+ *
+ * Recreating the whole stack in these cases is simpler and less
+ * error-prone than trying to patch each interface individually. */
+static bool
+should_destroy_interfaces(const struct neighbor_ovn_maintain_entry *entry,
+                          const struct neighbor_ovn_maintain_entry *old_entry)
+{
+    return !ipv6_addr_equals(&old_entry->local_ip, &entry->local_ip) ||
+           old_entry->fake_vxlan_port != entry->fake_vxlan_port ||
+           old_entry->br_config.has_addr != entry->br_config.has_addr ||
+           old_entry->redistribute_mode != entry->redistribute_mode ||
+           (entry->br_config.has_addr
+           && !eth_addr_equals(old_entry->br_config.lladdr,
+                               entry->br_config.lladdr));
+}
+
+/* Brings the kernel devices of a VNI in line with the desired configuration
+ * 'entry', recording in 'me' what was actually applied.  'has_old' tells
+ * whether 'me->entry' describes devices we created in a previous run. */
+static void
+maintain_evpn_devices(const struct neighbor_ovn_maintain_entry *entry,
+                      struct maintained_evpn_entry *me, bool has_old)
+{
+    if (has_old && should_destroy_interfaces(entry, &me->entry)) {
+        if (!evpn_delete_devices(&me->entry)) {
+            /* The old devices are (partly) still around, so 'me->entry'
+             * keeps describing them and the next run retries the
+             * teardown. */
+            me->synced = false;
+            return;
+        }
+    } else if (me->synced) {
+        /* Nothing changed and the stack was fully applied. */
+        return;
+    }
+
+    /* Either there were no devices yet, or the old ones are now gone: from
+     * here on 'entry' is what the kernel is expected to hold, even if the
+     * creation below only partially succeeds.  Otherwise the difference
+     * against 'entry' would never go away and we would tear the stack down
+     * and rebuild it on every single run. */
+    me->entry = *entry;
+    me->synced = evpn_create_devices(&me->entry);
+}
+
+static void
+neighbor_exchange_maintain_evpn_run(const struct vector *maintain_evpn)
+{
+    struct hmap old_maintained_evpn_entries =
+        HMAP_INITIALIZER(&old_maintained_evpn_entries);
+    hmap_swap(&maintained_evpn_entries, &old_maintained_evpn_entries);
+
+    struct neighbor_ovn_maintain_entry *entry;
+    VECTOR_FOR_EACH_PTR (maintain_evpn, entry) {
+        struct maintained_evpn_entry *me =
+            maintained_evpn_entry_find(&old_maintained_evpn_entries,
+                                        entry->vni);
+        bool has_old = me != NULL;
+
+        if (has_old) {
+            hmap_remove(&old_maintained_evpn_entries, &me->node);
+        } else {
+            me = xzalloc(sizeof *me);
+        }
+
+        /* Start tracking the VNI before issuing any netlink call to be
+         * responsible for deleting/updating its devices */
+        hmap_insert(&maintained_evpn_entries, &me->node,
+                    hash_int(entry->vni, 0));
+
+        maintain_evpn_devices(entry, me, has_old);
+    }
+
+    struct maintained_evpn_entry *stale_me;
+    HMAP_FOR_EACH_POP (stale_me, node, &old_maintained_evpn_entries) {
+        if (evpn_delete_devices(&stale_me->entry)) {
+            free(stale_me);
+        } else {
+            /* Deletion failed: keep tracking it so it's retried as stale
+             * again on the next run (it's no longer in 'maintain_evpn').
+             * Some devices may already be gone, so if the VNI comes back
+             * before the teardown completes, the stack has to be repaired
+             * rather than assumed to be in shape. */
+            stale_me->synced = false;
+            hmap_insert(&maintained_evpn_entries, &stale_me->node,
+                        hash_int(stale_me->entry.vni, 0));
+        }
+    }
+
+    hmap_destroy(&old_maintained_evpn_entries);
+}
+
+void
+neighbor_exchange_maintain_evpn_cleanup_all(void)
+{
+    struct maintained_evpn_entry *me;
+    HMAP_FOR_EACH (me, node, &maintained_evpn_entries) {
+        evpn_delete_devices(&me->entry);
+    }
+}
+
+void
+neighbor_exchange_maintain_evpn_destroy(void)
+{
+    struct maintained_evpn_entry *me;
+    HMAP_FOR_EACH_POP (me, node, &maintained_evpn_entries) {
+        free(me);
+    }
+    hmap_destroy(&maintained_evpn_entries);
+}
+
 void
 neighbor_exchange_run(const struct neighbor_exchange_ctx_in *n_ctx_in,
                       struct neighbor_exchange_ctx_out *n_ctx_out)
 {
+    /* Reset once for the whole run: errors hit while maintaining the EVPN
+     * devices must survive into neighbor_exchange_status_run(), otherwise
+     * the engine is never woken up to retry a failed or partial apply. */
+    CLEAR_NEIGHBOR_EXCHANGE_NL_STATUS();
+
+    neighbor_exchange_maintain_evpn_run(n_ctx_in->maintain_evpn);
+
     struct neighbor_interface_monitor *nim;
 
     struct sset if_names = SSET_INITIALIZER(&if_names);
@@ -78,7 +427,6 @@ neighbor_exchange_run(const struct neighbor_exchange_ctx_in *n_ctx_in,
     host_if_monitor_update_watches(&if_names);
     sset_destroy(&if_names);
 
-    CLEAR_NEIGHBOR_EXCHANGE_NL_STATUS();
     VECTOR_FOR_EACH (n_ctx_in->monitored_interfaces, nim) {
         int32_t if_index = host_if_monitor_ifname_toindex(nim->if_name);
 

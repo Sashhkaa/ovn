@@ -180,6 +180,28 @@ gather_external_ids(const struct nbrec_logical_switch *nbs,
             smap_add(external_ids, "dynamic-routing-arp-prefer-local",
                      prefer_evpn_arp_local);
         }
+
+        const char *ovn_maintain_evpn_mode =
+            smap_get(&nbs->other_config, "dynamic-routing-maintain-evpn");
+        if (ovn_maintain_evpn_mode) {
+            smap_add(external_ids, "dynamic-routing-maintain-evpn",
+                     ovn_maintain_evpn_mode);
+        }
+
+        const char *ovn_maintain_evpn_lrp =
+            smap_get(&nbs->other_config, "dynamic-routing-maintain-evpn-lrp");
+        if (ovn_maintain_evpn_lrp) {
+            smap_add(external_ids, "dynamic-routing-maintain-evpn-lrp",
+                     ovn_maintain_evpn_lrp);
+        }
+
+        const char *ovn_maintain_evpn_vxlan_port =
+            smap_get(&nbs->other_config,
+                     "dynamic-routing-maintain-evpn-vxlan-port");
+        if (ovn_maintain_evpn_vxlan_port) {
+            smap_add(external_ids, "dynamic-routing-maintain-evpn-vxlan-port",
+                     ovn_maintain_evpn_vxlan_port);
+        }
     }
 
     /* For backwards-compatibility, also store the NB UUID in
