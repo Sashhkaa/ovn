@@ -45,3 +45,13 @@ void
 evpn_static_entries_clear(struct hmap *static_entries OVS_UNUSED)
 {
 }
+
+void
+neighbor_exchange_maintain_evpn_cleanup_all(void)
+{
+}
+
+void
+neighbor_exchange_maintain_evpn_destroy(void)
+{
+}
