@@ -29,11 +29,6 @@
 #define RTPROT_OVN 84
 #endif
 
-#define TABLE_ID_VALID(table_id) (table_id != RT_TABLE_UNSPEC &&              \
-                                  table_id != RT_TABLE_COMPAT &&              \
-                                  table_id != RT_TABLE_LOCAL &&               \
-                                  table_id != RT_TABLE_MAX)
-
 struct in6_addr;
 struct hmap;
 struct vector;
