@@ -967,15 +967,30 @@
         </p>
 
         <p>
-          All of the following configuration options must also be provided
-          in order for the configuration to be valid:
-          <ref column="other_config" key="dynamic-routing-bridge-ifname"
-               table="Logical_switch"/>,
-          <ref column="other_config" key="dynamic-routing-vxlan-ifname"
-               table="Logical_switch"/>,
-          <ref column="other_config" key="dynamic-routing-advertise-ifname"
-               table="Logical_switch"/>.
+          The EVPN interfaces (VXLAN, bridge and advertise devices) can
+          either be named explicitly by the CMS, or auto-created and
+          maintained by <code>ovn-controller</code>:
         </p>
+
+        <ul>
+          <li>
+            To name the interfaces explicitly, all of the following
+            configuration options must also be provided in order for the
+            configuration to be valid:
+            <ref column="other_config" key="dynamic-routing-bridge-ifname"
+                 table="Logical_switch"/>,
+            <ref column="other_config" key="dynamic-routing-vxlan-ifname"
+                 table="Logical_switch"/>,
+            <ref column="other_config" key="dynamic-routing-advertise-ifname"
+                 table="Logical_switch"/>.
+          </li>
+          <li>
+            To have <code>ovn-controller</code> create and maintain the
+            interfaces automatically instead, set
+            <ref column="other_config" key="dynamic-routing-maintain-evpn"
+                 table="Logical_switch"/>.
+          </li>
+        </ul>
       </column>
 
       <column name="other_config" key="dynamic-routing-bridge-ifname">
@@ -996,6 +1011,80 @@
        integration.
        Only relevant if <ref column="other_config" key="dynamic-routing-vni"
                              table="Logical_switch"/> is set to valid VNI.
+      </column>
+
+     <column name="other_config" key="dynamic-routing-maintain-evpn"
+                   type='{"type": "string", "enum": ["set", ["mvd"]]}'>
+        <p>
+          Enables automatic management of the EVPN interface stack by
+          <code>ovn-controller</code> for the VNI specified by
+          <ref column="other_config" key="dynamic-routing-vni"
+          table="Logical_switch"/>.
+          Instead of requiring the CMS to create and configure the interfaces,
+          <code>ovn-controller</code> creates and maintains them on every
+          chassis where the logical switch is local.
+        </p>
+
+        <p>
+        The only supported value is <code>mvd</code> (VXLAN device per VNI).
+        </p>
+
+        <p>
+          In this mode, <code>ovn-controller</code> creates the following
+          interfaces, each suffixed with the VNI:
+          <code>ovnbr&lt;vni&gt;</code>,
+          <code>ovnvxlan&lt;vni&gt;</code>, and
+          <code>ovnlo&lt;vni&gt;</code>
+          (for example, <code>ovnvxlan100</code>).
+        </p>
+
+        <p>
+          If <ref column="other_config" key="dynamic-routing-redistribute"
+          table="Logical_switch"/> includes <code>ip</code> and
+          <ref column="other_config" key="dynamic-routing-maintain-evpn-lrp"
+          table="Logical_switch"/> is configured,
+          <code>ovn-controller</code> also creates a VRF named
+          <code>ovnvrf&lt;vni&gt;</code> and enslaves the bridge interface
+          to it. This allows the logical router IP addresses to be advertised
+          through EVPN.
+        </p>
+      </column>
+
+      <column name="other_config" key="dynamic-routing-maintain-evpn-lrp">
+        <p>
+          Specifies the
+          <ref table="Logical_Router_Port"/> whose MAC address is assigned
+          to the auto-created bridge interface managed by
+          <ref column="other_config" key="dynamic-routing-maintain-evpn"
+          table="Logical_switch"/>.
+          This ensures that L3/IRB traffic terminating on the EVPN VNI uses
+          the logical router's MAC address.
+        </p>
+
+        <p>
+          This option is required only when
+          <ref column="other_config" key="dynamic-routing-maintain-evpn"
+          table="Logical_switch"/> is enabled and
+          <ref column="other_config" key="dynamic-routing-redistribute"
+          table="Logical_switch"/> includes <code>ip</code>.
+        </p>
+      </column>
+
+      <column name="other_config"
+              key="dynamic-routing-maintain-evpn-vxlan-port"
+              type='{"type": "integer", "minInteger": 1,
+                     "maxInteger": 65535}'>
+        <p>
+          The UDP destination port configured on the VXLAN device created by
+          <ref column="other_config" key="dynamic-routing-maintain-evpn"
+          table="Logical_switch"/>.  Defaults to <code>4790</code>.
+        </p>
+
+        <p>
+          This device is only used to exchange EVPN state with the routing
+          daemon, it never carries traffic, so the port must differ from the
+          one used by the OVS datapath VXLAN device (<code>4789</code>).
+        </p>
       </column>
 
       <column name="other_config" key="dynamic-routing-fdb-prefer-local"

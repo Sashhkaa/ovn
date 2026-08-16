@@ -22,7 +22,7 @@
 
 void host_if_monitor_wait(void);
 bool host_if_monitor_run(void);
-
+void host_if_monitor_invalidate(const char *if_name);
 void host_if_monitor_update_watches(const struct sset *if_names);
 
 int32_t host_if_monitor_ifname_toindex(const char *if_name);

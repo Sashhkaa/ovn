@@ -44,6 +44,7 @@
 #include "lib/lflow-conj-ids.h"
 #include "lib/vswitch-idl.h"
 #include "lib/ovsdb-types.h"
+#include "lib/ovn-util.h"
 #include "local_data.h"
 #include "lport.h"
 #include "memory.h"
@@ -6197,6 +6198,9 @@ struct ed_type_neighbor {
     /* Contains 'struct local_datapath' pointers for datapaths with FDB
      * advertisement enabled. */
     struct hmapx fdb_datapaths;
+    /* Contains struct neighbor_ovn_maintain_entry, one per VNI
+     * whose EVPN interfaces are auto-created and maintained. */
+    struct vector maintain_evpn;
 };
 
 static void *
@@ -6210,6 +6214,8 @@ en_neighbor_init(struct engine_node *node OVS_UNUSED,
             VECTOR_EMPTY_INITIALIZER(struct neighbor_interface_monitor *),
         .advertised_pbs = SSET_INITIALIZER(&data->advertised_pbs),
         .fdb_datapaths = HMAPX_INITIALIZER(&data->fdb_datapaths),
+        .maintain_evpn =
+            VECTOR_EMPTY_INITIALIZER(struct neighbor_ovn_maintain_entry),
     };
     return data;
 }
@@ -6221,6 +6227,7 @@ en_neighbor_cleanup(void *data)
 
     neighbor_cleanup(&ne_data->monitored_interfaces);
     vector_destroy(&ne_data->monitored_interfaces);
+    vector_destroy(&ne_data->maintain_evpn);
     sset_destroy(&ne_data->advertised_pbs);
     hmapx_destroy(&ne_data->fdb_datapaths);
 }
@@ -6264,6 +6271,12 @@ en_neighbor_run(struct engine_node *node OVS_UNUSED, void *data)
         chassis_lookup_by_name(sbrec_chassis_by_name, chassis_id);
     ovs_assert(chassis);
 
+    struct evpn_local_ip_map evpn_ip_map = {
+        .vni_ip4 = HMAP_INITIALIZER(&evpn_ip_map.vni_ip4),
+        .vni_ip6 = HMAP_INITIALIZER(&evpn_ip_map.vni_ip6),
+    };
+    evpn_local_ip_map_init(&evpn_ip_map, &chassis->other_config);
+
     struct neighbor_ctx_in n_ctx_in = {
         .local_datapaths = &rt_data->local_datapaths,
         .sbrec_pb_by_dp = sbrec_port_binding_by_datapath,
@@ -6272,18 +6285,22 @@ en_neighbor_run(struct engine_node *node OVS_UNUSED, void *data)
         .sbrec_pb_by_key = sbrec_port_binding_by_key,
         .sbrec_fdb_by_dp_key = sbrec_fdb_by_dp_key,
         .chassis = chassis,
+        .evpn_local_ip_map = &evpn_ip_map,
     };
 
     struct neighbor_ctx_out n_ctx_out = {
         .monitored_interfaces = &ne_data->monitored_interfaces,
         .advertised_pbs = &ne_data->advertised_pbs,
         .fdb_datapaths = &ne_data->fdb_datapaths,
+        .maintain_evpn = &ne_data->maintain_evpn,
     };
 
     neighbor_cleanup(&ne_data->monitored_interfaces);
     sset_clear(&ne_data->advertised_pbs);
     hmapx_clear(&ne_data->fdb_datapaths);
+    vector_clear(&ne_data->maintain_evpn);
     neighbor_run(&n_ctx_in, &n_ctx_out);
+    evpn_local_ip_map_destroy(&evpn_ip_map);
 
     return EN_UPDATED;
 }
@@ -6645,6 +6662,7 @@ en_neighbor_exchange_run(struct engine_node *node, void *data_)
 
     struct neighbor_exchange_ctx_in n_ctx_in = {
         .monitored_interfaces = &neighbor_data->monitored_interfaces,
+        .maintain_evpn = &neighbor_data->maintain_evpn,
     };
     struct neighbor_exchange_ctx_out n_ctx_out = {
         .neighbor_table_watches = &nt_notify->watches,
@@ -8625,6 +8643,7 @@ loop_done:
             poll_block();
         }
         route_exchange_cleanup_vrfs();
+        neighbor_exchange_maintain_evpn_cleanup_all();
     }
 
     /* The engine cleanup should happen only after threads have been
@@ -8663,6 +8682,7 @@ loop_done:
     dns_resolve_destroy();
     route_exchange_destroy();
     ovn_netlink_notifiers_destroy();
+    neighbor_exchange_maintain_evpn_destroy();
 
     exit(retval);
 }
