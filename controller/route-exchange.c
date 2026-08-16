@@ -34,6 +34,7 @@
 #include "route.h"
 #include "route-exchange.h"
 #include "route-exchange-netlink.h"
+#include "netlink-utils.h"
 
 VLOG_DEFINE_THIS_MODULE(route_exchange);
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
@@ -333,7 +334,7 @@ route_exchange_run(const struct route_exchange_ctx_in *r_ctx_in,
 
         if (ad->maintain_vrf) {
             if (!sset_contains(&old_maintained_vrfs, ad->vrf_name)) {
-                error = re_nl_create_vrf(ad->vrf_name, table_id);
+                error = nl_create_vrf(ad->vrf_name, table_id);
                 if (error && error != EEXIST) {
                     VLOG_WARN_RL(&rl,
                                  "Unable to create VRF %s for datapath "
@@ -448,7 +449,7 @@ route_exchange_run(const struct route_exchange_ctx_in *r_ctx_in,
     const char *vrf_name;
     SSET_FOR_EACH_SAFE (vrf_name, &old_maintained_vrfs) {
         if (!sset_contains(&_maintained_vrfs, vrf_name)) {
-            error = re_nl_delete_vrf(vrf_name);
+            error = nl_delete_device(vrf_name);
             if (error && error != ENODEV) {
                 /* If netlink transaction fails, we will retry next time. */
                 sset_add(&_maintained_vrfs, vrf_name);
@@ -471,7 +472,7 @@ route_exchange_cleanup_vrfs(void)
 
     const char *vrf_name;
     SSET_FOR_EACH (vrf_name, &_maintained_vrfs) {
-        re_nl_delete_vrf(vrf_name);
+        nl_delete_device(vrf_name);
     }
 }
 
