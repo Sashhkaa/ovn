@@ -18,6 +18,7 @@
 #include "lib/hash.h"
 #include "lib/packets.h"
 #include "lib/sset.h"
+#include "lib/ovn-util.h"
 #include "local_data.h"
 #include "lport.h"
 #include "openvswitch/ofp-parse.h"
@@ -27,6 +28,7 @@
 #include "neighbor.h"
 
 VLOG_DEFINE_THIS_MODULE(neighbor);
+static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
 static const char *neighbor_opt_name[] = {
     [NEIGH_IFACE_BRIDGE] = "dynamic-routing-bridge-ifname",
@@ -91,11 +93,112 @@ neigh_parse_device_name(struct sset *device_names, struct local_datapath *ld,
                                      neighbor_opt_name[type], "");
     sset_from_delimited_string(device_names, names, ",");
     if (sset_is_empty(device_names)) {
-        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
         VLOG_WARN_RL(&rl, "Datapath "UUID_FMT" misses %s",
                      UUID_ARGS(&ld->datapath->header_.uuid),
                      neighbor_opt_name[type]);
     }
+}
+
+static bool
+create_maintain_evpn_entry(const struct neighbor_ctx_in *n_ctx_in,
+                           const struct local_datapath *ld, uint32_t vni,
+                           enum neigh_redistribute_mode redistribute_mode,
+                           enum neighbor_mainatain_mode mainatain_mode,
+                           struct neighbor_ovn_maintain_entry *entry)
+{
+    long long int vxlan_port =
+        ovn_smap_get_llong(&ld->datapath->external_ids,
+                           "dynamic-routing-maintain-evpn-vxlan-port",
+                           EVPN_DEFAULT_FAKE_VXLAN_PORT);
+    if (vxlan_port <= 0 || vxlan_port > UINT16_MAX) {
+        VLOG_WARN_RL(&rl, "dynamic-routing-maintain-evpn-vxlan-port "
+                     "%lld for datapath "UUID_FMT" is not a valid UDP port",
+                     vxlan_port, UUID_ARGS(&ld->datapath->header_.uuid));
+        return false;
+    }
+
+    *entry = (struct neighbor_ovn_maintain_entry) {
+        .redistribute_mode = redistribute_mode,
+        .mainatain_mode = mainatain_mode,
+        .vni = vni,
+        .fake_vxlan_port = vxlan_port,
+    };
+
+    snprintf(entry->vxlan_if_name, sizeof entry->vxlan_if_name,
+             "ovnvx%"PRIu32, vni);
+    snprintf(entry->br_if_name, sizeof entry->br_if_name,
+             "ovnbr%"PRIu32, vni);
+    snprintf(entry->lo_if_name, sizeof entry->lo_if_name,
+             "ovnlo%"PRIu32, vni);
+    snprintf(entry->vrf_if_name, sizeof entry->vrf_if_name,
+             "ovnvrf%"PRIu32, vni);
+
+    const struct in6_addr *local_ip =
+        evpn_local_ip_map_lookup(n_ctx_in->evpn_local_ip_map, vni);
+
+    if (local_ip) {
+        entry->local_ip = *local_ip;
+    } else {
+        VLOG_WARN_RL(&rl, "dynamic-routing-maintain-evpn set for datapath "
+                     UUID_FMT" VNI %"PRIu32" but no ovn-evpn-local-ip "
+                     "configured",
+                     UUID_ARGS(&ld->datapath->header_.uuid), vni);
+        return false;
+    }
+
+    const char *lrp_name = smap_get(&ld->datapath->external_ids,
+                                    "dynamic-routing-maintain-evpn-lrp");
+    if (nrm_mode_IP_is_set(redistribute_mode) && lrp_name) {
+        const struct sbrec_port_binding *pb =
+            lport_lookup_by_name(n_ctx_in->sbrec_pb_by_name, lrp_name);
+        if (!pb) {
+            VLOG_WARN_RL(&rl, "dynamic-routing-maintain-evpn-lrp: port \"%s\" "
+                              "not found", lrp_name);
+            return false;
+        }
+
+        const struct sbrec_port_binding *peer =
+            lport_get_peer(pb, n_ctx_in->sbrec_pb_by_name);
+        if (!peer) {
+            VLOG_WARN_RL(&rl, "dynamic-routing-maintain-evpn-lrp: port \"%s\" "
+                         "is not a router port", lrp_name);
+            return false;
+        }
+        if (peer->datapath != ld->datapath) {
+            VLOG_WARN_RL(&rl, "dynamic-routing-maintain-evpn-lrp: router port "
+                         "\"%s\" is not attached to datapath "UUID_FMT,
+                         lrp_name, UUID_ARGS(&ld->datapath->header_.uuid));
+            return false;
+        }
+
+        entry->br_config.has_addr =
+            extract_sbrec_binding_first_mac(pb, &entry->br_config.lladdr);
+        if (!entry->br_config.has_addr) {
+            VLOG_WARN_RL(&rl, "Unable to parse mac address on router "
+                         "port %s for configuring EVPN devices", lrp_name);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static enum neighbor_mainatain_mode
+parse_neigh_maintain_mode(const struct smap *external_ids)
+{
+    const char *val = smap_get(external_ids, "dynamic-routing-maintain-evpn");
+    if (!val) {
+        return NEIGH_MAINTAIN_NONE;
+    }
+
+    if (!strcmp(val, "mvd")) {
+        return NEIGH_MAINTAIN_MVD;
+    }
+
+    VLOG_WARN_RL(&rl, "dynamic-routing-maintain-evpn: unknown value \"%s\", "
+                 "expected \"mvd\"", val);
+
+    return NEIGH_MAINTAIN_NONE;
 }
 
 void
@@ -119,24 +222,50 @@ neighbor_run(struct neighbor_ctx_in *n_ctx_in,
             continue;
         }
 
+        enum neigh_redistribute_mode redistribute_mode =
+            parse_neigh_dynamic_redistribute(&ld->datapath->external_ids);
+
+        enum neighbor_mainatain_mode mainatain_mode =
+            parse_neigh_maintain_mode(&ld->datapath->external_ids);
+
+        struct neighbor_ovn_maintain_entry maintain_entry;
+        if (mainatain_mode != NEIGH_MAINTAIN_NONE) {
+            if (create_maintain_evpn_entry(n_ctx_in, ld, (uint32_t) vni,
+                                           redistribute_mode, mainatain_mode,
+                                           &maintain_entry)) {
+                vector_push(n_ctx_out->maintain_evpn, &maintain_entry);
+            } else {
+                continue;
+            }
+        }
+
         struct sset device_names;
-        neigh_parse_device_name(&device_names, ld, NEIGH_IFACE_VXLAN);
+        if (mainatain_mode != NEIGH_MAINTAIN_NONE) {
+            sset_init(&device_names);
+            sset_add(&device_names, maintain_entry.vxlan_if_name);
+        } else {
+            neigh_parse_device_name(&device_names, ld, NEIGH_IFACE_VXLAN);
+        }
         const char *name;
         SSET_FOR_EACH (name, &device_names) {
-            struct neighbor_interface_monitor *vxlan =
+            struct neighbor_interface_monitor *nim =
                 neighbor_interface_monitor_alloc(NEIGH_AF_BRIDGE,
                                                  NEIGH_IFACE_VXLAN, vni, name);
-            vector_push(n_ctx_out->monitored_interfaces, &vxlan);
+            vector_push(n_ctx_out->monitored_interfaces, &nim);
         }
         sset_destroy(&device_names);
 
         struct neighbor_interface_monitor *lo = NULL;
-        neigh_parse_device_name(&device_names, ld, NEIGH_IFACE_LOOPBACK);
-        if (sset_count(&device_names) > 1) {
-            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-            VLOG_WARN_RL(&rl, "Datapath "UUID_FMT" too many names provided "
-                              "for loopback device",
-                         UUID_ARGS(&ld->datapath->header_.uuid));
+        if (mainatain_mode != NEIGH_MAINTAIN_NONE) {
+            sset_init(&device_names);
+            sset_add(&device_names, maintain_entry.lo_if_name);
+        } else {
+            neigh_parse_device_name(&device_names, ld, NEIGH_IFACE_LOOPBACK);
+            if (sset_count(&device_names) > 1) {
+                VLOG_WARN_RL(&rl, "Datapath "UUID_FMT" too many names for "
+                                  "loopback device",
+                             UUID_ARGS(&ld->datapath->header_.uuid));
+            }
         }
 
         if (!sset_is_empty(&device_names)) {
@@ -149,32 +278,31 @@ neighbor_run(struct neighbor_ctx_in *n_ctx_in,
 
         struct neighbor_interface_monitor *br_v4 = NULL;
         struct neighbor_interface_monitor *br_v6 = NULL;
-        neigh_parse_device_name(&device_names, ld, NEIGH_IFACE_BRIDGE);
-        if (sset_count(&device_names) > 1) {
-            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-            VLOG_WARN_RL(&rl, "Datapath "UUID_FMT" too many names provided "
-                              "for bridge device",
-                         UUID_ARGS(&ld->datapath->header_.uuid));
+        if (mainatain_mode != NEIGH_MAINTAIN_NONE) {
+            sset_init(&device_names);
+            sset_add(&device_names, maintain_entry.br_if_name);
+        } else {
+            neigh_parse_device_name(&device_names, ld, NEIGH_IFACE_BRIDGE);
+            if (sset_count(&device_names) > 1) {
+                VLOG_WARN_RL(&rl, "Datapath "UUID_FMT" too many names for "
+                                  "bridge device",
+                             UUID_ARGS(&ld->datapath->header_.uuid));
+            }
         }
 
         if (!sset_is_empty(&device_names)) {
-            br_v4 =
-                neighbor_interface_monitor_alloc(NEIGH_AF_INET,
-                                                 NEIGH_IFACE_BRIDGE, vni,
-                                                 SSET_FIRST(&device_names));
+            br_v4 = neighbor_interface_monitor_alloc(
+                NEIGH_AF_INET, NEIGH_IFACE_BRIDGE, vni,
+                SSET_FIRST(&device_names));
             vector_push(n_ctx_out->monitored_interfaces, &br_v4);
-
-            br_v6 =
-                neighbor_interface_monitor_alloc(NEIGH_AF_INET6,
-                                                 NEIGH_IFACE_BRIDGE, vni,
-                                                 SSET_FIRST(&device_names));
+            br_v6 = neighbor_interface_monitor_alloc(
+                NEIGH_AF_INET6, NEIGH_IFACE_BRIDGE, vni,
+                SSET_FIRST(&device_names));
             vector_push(n_ctx_out->monitored_interfaces, &br_v6);
         }
         sset_destroy(&device_names);
 
-        enum neigh_redistribute_mode mode =
-            parse_neigh_dynamic_redistribute(&ld->datapath->external_ids);
-        if (nrm_mode_FDB_is_set(mode) && lo) {
+        if (nrm_mode_FDB_is_set(redistribute_mode) && lo) {
             neighbor_collect_mac_to_advertise(n_ctx_in,
                                               &lo->announced_neighbors,
                                               n_ctx_out->advertised_pbs,
@@ -189,7 +317,7 @@ neighbor_run(struct neighbor_ctx_in *n_ctx_in,
          * meant to be advertised.  With 'fdb' set, also program them as FDB
          * entries. */
         neighbor_collect_advertised_mac_bindings(
-            n_ctx_in, mode, lo ? &lo->announced_neighbors : NULL,
+            n_ctx_in, redistribute_mode, lo ? &lo->announced_neighbors : NULL,
             br_v4 ? &br_v4->announced_neighbors : NULL,
             br_v6 ? &br_v6->announced_neighbors : NULL,
             n_ctx_out->advertised_pbs, ld->datapath);
