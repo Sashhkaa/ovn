@@ -29,6 +29,8 @@
 
 VLOG_DEFINE_THIS_MODULE(en_advertised_route_sync);
 
+#define DYNAMIC_ROUTING_ADVERTISE_PREFIXES "dynamic-routing-advertise-prefixes"
+
 struct ar_entry {
     struct hmap_node hmap_node;
 
@@ -871,6 +873,61 @@ build_connected_as_host_routes(const struct ovn_datapath *od,
     }
 }
 
+/* Returns the explicit prefix list of LRP 'op' or NULL if not set. */
+static const char *
+lrp_advertise_prefixes(const struct ovn_port *op)
+{
+    if (!op || !op->nbrp) {
+        return NULL;
+    }
+
+    return smap_get(&op->nbrp->options, DYNAMIC_ROUTING_ADVERTISE_PREFIXES);
+}
+
+/* Adds the explicitly configured prefixes of 'od' ports to 'routes'. */
+static void
+build_advertise_prefix_routes(const struct ovn_datapath *od,
+                              struct hmap *routes)
+{
+    const struct ovn_port *op;
+    HMAP_FOR_EACH (op, dp_node, &od->ports) {
+        const char *prefixes = lrp_advertise_prefixes(op);
+        if (!prefixes || !op->sb) {
+            continue;
+        }
+
+        char *save_ptr = NULL;
+        char *tokstr = xstrdup(prefixes);
+        for (char *token = strtok_r(tokstr, ",", &save_ptr);
+             token != NULL;
+             token = strtok_r(NULL, ",", &save_ptr)) {
+            struct in6_addr prefix;
+            unsigned int plen;
+
+            if (!ip46_parse_cidr(token, &prefix, &plen)) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+                VLOG_WARN_RL(&rl, "bad prefix '%s' in option %s of %s",
+                             token, DYNAMIC_ROUTING_ADVERTISE_PREFIXES,
+                             op->nbrp->name);
+                continue;
+            }
+
+            char *ip_prefix = normalize_v46_prefix(&prefix, plen);
+            struct ar_entry *dup = ar_entry_find(routes, od->sdp->sb_dp,
+                                                 op->sb, ip_prefix, NULL);
+            if (dup && dup->source == ROUTE_SOURCE_ADVERTISE_PREFIX) {
+                /* The same prefix is listed twice in the option. */
+                free(ip_prefix);
+                continue;
+            }
+
+            ar_entry_add_nocopy(routes, od, op, ip_prefix, NULL,
+                                ROUTE_SOURCE_ADVERTISE_PREFIX);
+        }
+        free(tokstr);
+    }
+}
+
 void *
 en_dynamic_routes_init(struct engine_node *node OVS_UNUSED,
                        struct engine_arg *arg OVS_UNUSED)
@@ -989,6 +1046,8 @@ en_dynamic_routes_run(struct engine_node *node, void *data)
         build_connected_as_host_routes(od, &northd_data->ls_ports,
                                        dynamic_routes_data);
 
+        build_advertise_prefix_routes(od, &dynamic_routes_data->routes);
+
         const struct lr_stateful_record *lr_stateful_rec =
             lr_stateful_table_find_by_uuid(&lr_stateful_data->table, od->key);
         if (!lr_stateful_rec) {
@@ -1105,6 +1164,16 @@ should_advertise_route(const struct ovn_datapath *advertising_od,
         return false;
     }
 
+    if (source == ROUTE_SOURCE_ADVERTISE_PREFIX) {
+        /* Explicitly configured prefixes are always advertised. */
+        return true;
+    }
+
+    if (lrp_advertise_prefixes(advertising_op)) {
+        /* This port advertises only the explicitly configured prefixes. */
+        return false;
+    }
+
     enum dynamic_routing_redistribute_mode drr =
         advertising_op->dynamic_routing_redistribute;
 
@@ -1124,6 +1193,7 @@ should_advertise_route(const struct ovn_datapath *advertising_od,
         return drr_mode_CONNECTED_AS_HOST_is_set(drr);
     case ROUTE_SOURCE_IC_DYNAMIC:
         return drr_mode_IC_DYNAMIC_is_set(drr);
+    case ROUTE_SOURCE_ADVERTISE_PREFIX:
     case ROUTE_SOURCE_LEARNED:
         OVS_NOT_REACHED();
     default:

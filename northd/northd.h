@@ -869,6 +869,8 @@ enum route_source {
     ROUTE_SOURCE_CONNECTED_AS_HOST,
     /* The route is derived from an ovn-controller and advertised to IC. */
     ROUTE_SOURCE_IC_DYNAMIC,
+    /* The route is from LRP "dynamic-routing-advertise-prefixes". */
+    ROUTE_SOURCE_ADVERTISE_PREFIX,
 };
 
 struct parsed_route {

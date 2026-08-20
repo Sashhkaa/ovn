@@ -13274,6 +13274,7 @@ get_route_offset(enum route_source source,
 
     /* connected-as-host advertisements don't produce forwarding routes. */
     case ROUTE_SOURCE_CONNECTED_AS_HOST:
+    case ROUTE_SOURCE_ADVERTISE_PREFIX:
     default:
         OVS_NOT_REACHED();
     }
