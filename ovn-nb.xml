@@ -5009,6 +5009,36 @@ or
 
       </column>
 
+      <column name="options" key="dynamic-routing-advertise-prefixes"
+              type='{"type": "string"}'>
+        <p>
+          Only relevant if <ref column="options" key="dynamic-routing"
+          table="Logical_Router"/> on the respective Logical_Router is set
+          to <code>true</code>.
+        </p>
+
+        <p>
+          This is a list of IPv4 and/or IPv6 prefixes in CIDR notation,
+          separated by <code>,</code>, e.g.
+          <code>10.0.0.0/8,2001:db8::/32</code>.
+        </p>
+
+        <p>
+          If this option is set, northd creates entries in the <ref
+          table="Advertised_Route" db="OVN_Southbound"/> table only for the
+          prefixes listed here. Every route that would otherwise be
+          advertised via this port because of <ref column="options"
+          key="dynamic-routing-redistribute"
+          table="Logical_Router_Port"/> (or its Logical_Router counterpart),
+          i.e. <code>connected</code>, <code>connected-as-host</code>,
+          <code>static</code>, <code>nat</code>, <code>lb</code> and
+          <code>hub-spoke</code> routes, is not advertised via this port.
+          Setting the option to an empty string disables all advertisements
+          on this port.
+        </p>
+
+      </column>
+
       <column name="options" key="dynamic-routing-advertise">
         If the CMS sets <ref column="options" key="dynamic-routing-redistribute"
         table="Logical_Router_Port"/> to <code>connected-as-host</code>,

@@ -16527,6 +16527,114 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([dynamic-routing - advertise only configured prefixes])
+AT_KEYWORDS([dynamic-routing])
+ovn_start
+
+# Start with a GW router that advertises connected, static, nat and lb routes
+# via both of its LRPs.
+check ovn-nbctl lr-add lr0
+check ovn-nbctl set Logical_Router lr0                            \
+    options:dynamic-routing=true                                  \
+    options:chassis=hv1                                           \
+    options:dynamic-routing-redistribute="connected,static,nat,lb"
+check ovn-nbctl lrp-add lr0 lr0-sw0 00:00:00:00:ff:01 10.0.0.1/24
+check ovn-nbctl lrp-add lr0 lr0-sw1 00:00:00:00:ff:02 10.0.1.1/24
+check ovn-nbctl lr-route-add lr0 192.168.0.0/24 10.0.0.10
+check ovn-nbctl lr-nat-add lr0 dnat_and_snat 172.16.1.10 10.0.0.20
+check ovn-nbctl lb-add lb0 172.16.2.10:80 10.0.0.30:80
+check ovn-nbctl lr-lb-add lr0 lb0
+check ovn-nbctl --wait=sb sync
+
+datapath=$(fetch_column Datapath_Binding _uuid external_ids:name=lr0)
+sw0=$(fetch_column Port_Binding _uuid logical_port=lr0-sw0)
+sw1=$(fetch_column Port_Binding _uuid logical_port=lr0-sw1)
+
+check_row_count Advertised_Route 7
+check_row_count Advertised_Route 4 logical_port=$sw0
+check_row_count Advertised_Route 1 logical_port=$sw0 ip_prefix=10.0.0.0/24
+check_row_count Advertised_Route 1 logical_port=$sw0 ip_prefix=192.168.0.0/24
+check_row_count Advertised_Route 1 logical_port=$sw0 ip_prefix=172.16.1.10
+check_row_count Advertised_Route 1 logical_port=$sw0 ip_prefix=172.16.2.10
+check_row_count Advertised_Route 3 logical_port=$sw1
+
+# Setting dynamic-routing-advertise-prefixes on lr0-sw0 replaces every route
+# advertised via this port with the configured ones.  Both IPv4 and IPv6
+# prefixes are supported.  The other LRP is not affected.
+check ovn-nbctl --wait=sb set Logical_Router_Port lr0-sw0 \
+    options:dynamic-routing-advertise-prefixes="172.16.0.0/16,2001:db8:1::/64"
+check_row_count Advertised_Route 5
+check_row_count Advertised_Route 2 logical_port=$sw0
+check_row_count Advertised_Route 1     \
+    ip_prefix="172.16.0.0/16"          \
+    datapath=$datapath                 \
+    logical_port=$sw0                  \
+    tracked_port=[[]]
+check_row_count Advertised_Route 1     \
+    ip_prefix='"2001:db8:1::/64"'      \
+    datapath=$datapath                 \
+    logical_port=$sw0                  \
+    tracked_port=[[]]
+check_row_count Advertised_Route 3 logical_port=$sw1
+check_row_count Advertised_Route 1 logical_port=$sw1 ip_prefix=10.0.1.0/24
+check_row_count Advertised_Route 1 logical_port=$sw1 ip_prefix=172.16.1.10
+check_row_count Advertised_Route 1 logical_port=$sw1 ip_prefix=172.16.2.10
+
+# The prefixes are normalized and duplicates are advertised only once.
+check ovn-nbctl --wait=sb set Logical_Router_Port lr0-sw0 \
+    options:dynamic-routing-advertise-prefixes="10.10.10.5/24,10.10.10.0/24"
+check_row_count Advertised_Route 1 logical_port=$sw0
+check_row_count Advertised_Route 1 logical_port=$sw0 ip_prefix=10.10.10.0/24
+
+# Invalid prefixes are ignored, the valid ones are still advertised.
+check ovn-nbctl --wait=sb set Logical_Router_Port lr0-sw0 \
+    options:dynamic-routing-advertise-prefixes="not-a-prefix,10.20.0.0/16"
+check_row_count Advertised_Route 1 logical_port=$sw0
+check_row_count Advertised_Route 1 logical_port=$sw0 ip_prefix=10.20.0.0/16
+
+# An empty list blocks all advertisements on this port.
+check ovn-nbctl --wait=sb set Logical_Router_Port lr0-sw0 \
+    options:dynamic-routing-advertise-prefixes='""'
+check_row_count Advertised_Route 0 logical_port=$sw0
+check_row_count Advertised_Route 3 logical_port=$sw1
+
+# The option also overrides the redistribute modes set on the LRP itself.
+check ovn-nbctl --wait=sb set Logical_Router_Port lr0-sw0            \
+    options:dynamic-routing-redistribute="connected,static,nat,lb"   \
+    options:dynamic-routing-advertise-prefixes="10.30.0.0/16"
+check_row_count Advertised_Route 1 logical_port=$sw0
+check_row_count Advertised_Route 1 logical_port=$sw0 ip_prefix=10.30.0.0/16
+
+# Removing the option brings the redistributed routes back.
+check ovn-nbctl --wait=sb remove Logical_Router_Port lr0-sw0 \
+    options dynamic-routing-advertise-prefixes
+check_row_count Advertised_Route 4 logical_port=$sw0
+check_row_count Advertised_Route 1 logical_port=$sw0 ip_prefix=10.0.0.0/24
+check_row_count Advertised_Route 1 logical_port=$sw0 ip_prefix=192.168.0.0/24
+check_row_count Advertised_Route 1 logical_port=$sw0 ip_prefix=172.16.1.10
+check_row_count Advertised_Route 1 logical_port=$sw0 ip_prefix=172.16.2.10
+
+# The configured prefixes are advertised only while dynamic routing is
+# enabled on the Logical_Router.
+check ovn-nbctl --wait=sb set Logical_Router_Port lr0-sw0 \
+    options:dynamic-routing-advertise-prefixes="10.30.0.0/16"
+check ovn-nbctl --wait=sb remove Logical_Router lr0 options dynamic-routing
+check_row_count Advertised_Route 0
+check ovn-nbctl --wait=sb set Logical_Router lr0 options:dynamic-routing=true
+check_row_count Advertised_Route 4
+check_row_count Advertised_Route 1 logical_port=$sw0 ip_prefix=10.30.0.0/16
+check_row_count Advertised_Route 3 logical_port=$sw1
+
+# Removing the LRP removes its advertised prefixes.
+check ovn-nbctl --wait=sb lrp-del lr0-sw0
+check_row_count Advertised_Route 3
+check_row_count Advertised_Route 0 logical_port=$sw0
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([dynamic-routing - learning routes from sb])
 AT_KEYWORDS([dynamic-routing])
 ovn_start
