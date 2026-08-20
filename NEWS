@@ -140,6 +140,10 @@ OVN v26.09.0 - Sep 18 2026
      to the source of a packet that is forwarded back out of the port it
      arrived on, when the source and the next hop are on the same network
      of that port.  Disabled by default.
+   - Logical_Router_Port: Added a new
+     "options:dynamic-routing-advertise-prefixes" key that contains an
+     explicit list of prefixes to be advertised via this port.  If it is
+     set, only these prefixes will be announced.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
