@@ -396,9 +396,10 @@ static const char *reg_ct_state[] = {
 
 /* Deferred-NAT load balancing picks the backend in lr_in_ip_routing and must
  * win over any route. The highest priority a route can get is
- * (128 * ROUTE_PRIO_OFFSET_MULTIPLIER) + 7 + 1 == 1032
+ * ((128 + 1) * ROUTE_PRIO_OFFSET_MULTIPLIER) + (max(offset) == 12) + 1 +
+ *  plen * ROUTE_PRIO_OFFSET_MULTIPLIER= 3095
  */
-#define LB_DEFERRED_NAT_ROUTING_PRIO 1050
+#define LB_DEFERRED_NAT_ROUTING_PRIO 3096
 
 /* ovn_stages used by northd for logical switches and logical routers.
  * The first three components are combined to form the constant stage's
