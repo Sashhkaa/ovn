@@ -942,7 +942,7 @@ refer to either the parent or child ports as applicable to this logical switch.
   ``inport == P`` and advances packets to the next table (packets from the
   network function are not subject to redirection). This flow also sets
   ``reg5[16..31] = ct_label.tun_if_id`` for cross host traffic redirection for
-  VLAN subnet; the tunnel id is populated in egress :ref:`Stateful <ls-out-12>`
+  VLAN subnet; the tunnel id is populated in egress :ref:`Stateful <ls-out-13>`
   table.
 
 - In inline: For each active network function with *id* that is referenced in a
@@ -1448,7 +1448,7 @@ This table implements switching behavior.  It contains these logical flows:
 
 - A priority-100 flow that matches ``reg8[23] == 1`` and does ``output`` action.
   This ensures that packets that got injected back into this table from egress
-  table :ref:`Network Function <ls-out-13>` (after it set the ``outport`` for
+  table :ref:`Network Function <ls-out-14>` (after it set the ``outport`` for
   packet redirection) get forwarded without any further processing.
 
 - For any logical port that's defined as a target of routing protocol
@@ -1659,9 +1659,9 @@ This table also has a priority-115 flow for each network_function ``inport``
 *P*
 that matches ``inport == P`` and applies
 ``reg8[24] = nf_lookup_orig_inport(); next(pipeline=egress, table=T);`` where
-*T* is the table immediately following :ref:`Network Function <ls-out-13>`.
+*T* is the table immediately following :ref:`Network Function <ls-out-14>`.
 This is for the case where packet redirection happens in egress
-:ref:`Network Function <ls-out-13>` table. When the packet comes back from the
+:ref:`Network Function <ls-out-14>` table. When the packet comes back from the
 other NF port, it should not be processed again by the same egress stages,
 specifically conntrack processing should be skipped. This flow also performs
 ``nf_lookup_orig_inport()`` before continuing so post-NF loopback copies can
@@ -1720,14 +1720,25 @@ the below 3 logical flows.
 
 .. _ls-out-5:
 
-Egress Table 5: ``from-lport`` ACL hints
+Egress Table 5: Deferred NAT Load Balancing
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For load balancers with ``options:deferred-nat=true``, this table applies
+connection tracking and DNAT on the chassis hosting the selected backend.
+The rules match the backend's destination MAC address, the VIP, and the
+transport destination port when configured.  The default rule advances to
+the next table.
+
+.. _ls-out-6:
+
+Egress Table 6: ``from-lport`` ACL hints
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This is similar to ingress table :ref:`ACL hints <ls-in-8>`.
 
-.. _ls-out-6:
+.. _ls-out-7:
 
-Egress Table 6: ``to-lport`` ACL evaluation
+Egress Table 7: ``to-lport`` ACL evaluation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This is similar to ingress table :ref:`ACL eval <ls-in-9>` except for
@@ -1737,7 +1748,7 @@ indicate their verdicts. ``Allow-type`` ACLs set ``reg8[16]``, ``drop`` ACLs set
 
 Also like with ingress ACLs, egress ACLs can have network_function_group *id*
 and in that case the flow will set ``reg8[21] = 1; reg8[22] = 1; reg0[22..29] =
-id``. These registers are used in the :ref:`Network Function <ls-out-13>` table.
+id``. These registers are used in the :ref:`Network Function <ls-out-14>` table.
 
 Also like with ingress ACLs, egress ACLs can have a configured ``tier``. If a
 tier is configured, then the current tier counter is evaluated against the ACL's
@@ -1766,23 +1777,23 @@ In addition, the following flows are added.
   service monitor mac defined in the ``options:svc_monitor_mac`` column of
   ``NB_Global`` table. This is indicated by setting the allow bit.
 
-.. _ls-out-7:
+.. _ls-out-8:
 
-Egress Table 7: ``to-lport`` ACL sampling
+Egress Table 8: ``to-lport`` ACL sampling
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This is similar to ingress table :ref:`ACL sampling <ls-in-10>`.
 
-.. _ls-out-8:
+.. _ls-out-9:
 
-Egress Table 8: ``to-lport`` ACL action
+Egress Table 9: ``to-lport`` ACL action
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This is similar to ingress table :ref:`ACL action <ls-in-11>`.
 
-.. _ls-out-9:
+.. _ls-out-10:
 
-Egress Table 9: Mirror
+Egress Table 10: Mirror
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
 Overlay remote mirror table contains the following logical flows:
@@ -1799,17 +1810,17 @@ Overlay remote mirror table contains the following logical flows:
   switch ports, matches all outcoming packets that match rules and clones the
   packet and sends cloned packet to mirror target port.
 
-.. _ls-out-10:
+.. _ls-out-11:
 
-Egress Table 10: ``to-lport`` QoS
+Egress Table 11: ``to-lport`` QoS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This is similar to ingress table :ref:`QoS <ls-in-12>` except they apply to
 ``to-lport`` QoS rules.
 
-.. _ls-out-11:
+.. _ls-out-12:
 
-Egress Table 11: Pre Network Function
+Egress Table 12: Pre Network Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This stage selects the active network function from a ``Network_Function_Group``
@@ -1861,9 +1872,9 @@ support network function load balancing.
 - In inline, vtap mode: A priority-0 flow that simply moves traffic to the next
   table.
 
-.. _ls-out-12:
+.. _ls-out-13:
 
-Egress Table 12: Stateful
+Egress Table 13: Stateful
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This is similar to ingress table :ref:`Stateful <ls-in-24>` except that there
@@ -1881,9 +1892,9 @@ connection tracking.
   when it comes out of the other port of the network function (required for
   cross host traffic redirection for VLAN subnet).
 
-.. _ls-out-13:
+.. _ls-out-14:
 
-Egress Table 13: Network Function
+Egress Table 14: Network Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This table handles request packets for ``to-lport`` ACLs and response packets
@@ -1955,9 +1966,9 @@ in ``ct_label.nf_id`` during request processing.
 - In inline, vtap mode: One priority-0 flow same as ingress :ref:`Network
   Function <ls-in-25>`.
 
-.. _ls-out-14:
+.. _ls-out-15:
 
-Egress Table 14: Egress Port Security - check
+Egress Table 15: Egress Port Security - check
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This is similar to the port security logic in table :ref:`Ingress Port Security
@@ -1977,9 +1988,9 @@ port security rules.  This table adds the below logical flows.
   addresses defined in the ``port_security`` column of ``Logical_Switch_Port``
   table before delivering the packet to the ``outport``.
 
-.. _ls-out-15:
+.. _ls-out-16:
 
-Egress Table 15: Egress Port Security - Apply
+Egress Table 16: Egress Port Security - Apply
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This is similar to the ingress port security logic in ingress table
