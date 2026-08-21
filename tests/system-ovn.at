@@ -23741,3 +23741,375 @@ OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
 
 AT_CLEANUP
 ])
+
+m4_define([DEFERRED_NAT_GROUP_MARK], [NXM_NX_XXREG1])
+m4_define([DEFERRED_NAT_GROUP_HELPERS], [
+# The deferred-nat group as one line, or nothing if it is not installed.
+lb_group_line() {
+    ovs-ofctl dump-groups br-int | grep "type=select" | grep "DEFERRED_NAT_GROUP_MARK"
+}
+
+# One bucket per line, sorted.
+lb_group_buckets() {
+    lb_group_line | sed 's/,bucket=/@/g' | tr '@' '\n' |
+        grep "^bucket_id:" | sort
+}
+
+lb_group_id() {
+    lb_group_line | sed -n 's/^ *group_id=\([[0-9]]*\),.*/\1/p'
+}
+
+# bucket_id_of HEX -- id of the bucket that loads HEX into the result field,
+# i.e. the bucket of one backend.  Prints nothing if there is no such bucket.
+bucket_id_of() {
+    lb_group_buckets | grep "$[]1" | sed -n 's/^bucket_id:\([[0-9]]*\),.*/\1/p'
+}
+
+n_buckets() {
+    lb_group_buckets | wc -l | tr -d ' '
+}
+
+# Deferred-nat groups only -- the ct_lb_mark ones are not ours to count.
+n_select_groups() {
+    lb_group_line | grep -c "group_id="
+}
+])
+
+# DEFERRED_NAT_SYSTEM_SETUP
+# hv1 with br-int, and:
+#
+#   client 42.42.42.2 -- ls1 -- lr1 (lr1-ls1 42.42.42.1/24, gateway chassis hv1)
+#                         |
+#                         +---- backend3..6 (42.42.42.3 .. 42.42.42.6)
+#
+# lb0: 30.0.0.1:80 with 'deferred-nat' set.  Only 'client' is backed by a real
+# veth -- that is enough to make ls1 and lr1 local to hv1 so that the group is
+# installed; the backends only need to exist in the NB.
+#
+# The backend addresses are chosen so that the value each bucket loads is easy
+# to spot in the group dump: 42.42.42.3 is 0x2a2a2a03 and so on.
+m4_define([DEFERRED_NAT_SYSTEM_SETUP], [
+ovn_start
+OVS_TRAFFIC_VSWITCHD_START()
+ADD_BR([br-int])
+
+ovs-vsctl \
+        -- set Open_vSwitch . external-ids:system-id=hv1 \
+        -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
+        -- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
+        -- set Open_vSwitch . external-ids:ovn-encap-ip=169.0.0.1 \
+        -- set bridge br-int fail-mode=secure other-config:disable-in-band=true
+
+start_daemon ovn-controller
+
+check ovn-nbctl lr-add lr1
+check ovn-nbctl lrp-add lr1 lr1-ls1 00:00:00:00:00:01 42.42.42.1/24
+check ovn-nbctl lrp-set-gateway-chassis lr1-ls1 hv1
+
+check ovn-nbctl ls-add ls1
+check ovn-nbctl lsp-add-router-port ls1 ls1-lr1 lr1-ls1
+
+ADD_NAMESPACES(client)
+ADD_VETH(client, client, br-int, "42.42.42.2/24", "f0:00:00:01:02:02", \
+         "42.42.42.1")
+check ovn-nbctl lsp-add ls1 client \
+    -- lsp-set-addresses client "f0:00:00:01:02:02 42.42.42.2"
+
+for i in 3 4 5 6; do
+    check ovn-nbctl lsp-add ls1 backend$i \
+        -- lsp-set-addresses backend$i "f0:00:00:01:02:0$i 42.42.42.$i"
+done
+
+check ovn-nbctl lb-add lb0 30.0.0.1:80 \
+    42.42.42.3:10880,42.42.42.4:10880,42.42.42.5:10880
+check ovn-nbctl set load_balancer lb0 options:deferred-nat=true
+for i in 3 4 5 6; do
+    check ovn-nbctl set load_balancer lb0 \
+        ip_port_mappings:42.42.42.$i=backend$i:42.42.42.2
+done
+check ovn-nbctl lr-lb-add lr1 lb0
+check ovn-nbctl --wait=hv sync
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([deferred-nat load balancing -- incremental group buckets])
+AT_KEYWORDS([ovnlb deferred-nat])
+
+CHECK_CONNTRACK()
+CHECK_CONNTRACK_NAT()
+DEFERRED_NAT_GROUP_HELPERS
+DEFERRED_NAT_SYSTEM_SETUP
+
+AS_BOX([Three backends -- one bucket each])
+
+$(n_buckets)
+OVS_WAIT_UNTIL([test $(n_buckets) = 3])
+AT_CHECK([test $(n_select_groups) = 1])
+AT_CHECK([lb_group_buckets | grep -c 0x2a2a2a03], [0], [1
+])
+AT_CHECK([lb_group_buckets | grep -c 0x2a2a2a04], [0], [1
+])
+AT_CHECK([lb_group_buckets | grep -c 0x2a2a2a05], [0], [1
+])
+
+gid=$(lb_group_id)
+b3=$(bucket_id_of 0x2a2a2a03)
+b4=$(bucket_id_of 0x2a2a2a04)
+b5=$(bucket_id_of 0x2a2a2a05)
+
+AT_CHECK([test -n "$gid" && test -n "$b3" && test -n "$b4" && test -n "$b5"])
+echo "group_id=$gid buckets: .3=$b3 .4=$b4 .5=$b5"
+
+AS_BOX([Drop a backend -- the group is not rebuilt])
+check ovn-nbctl --wait=hv set load_balancer lb0 \
+    vips:'"30.0.0.1:80"'='"42.42.42.3:10880,42.42.42.4:10880"'
+OVS_WAIT_UNTIL([test $(n_buckets) = 2])
+
+# Same group, same ids for the backends that stayed: the group was updated a
+# bucket at a time rather than deleted and recreated.
+AT_CHECK([test "$(lb_group_id)" = "$gid"])
+AT_CHECK([test "$(bucket_id_of 0x2a2a2a03)" = "$b3"])
+AT_CHECK([test "$(bucket_id_of 0x2a2a2a04)" = "$b4"])
+AT_CHECK([lb_group_buckets | grep -c 0x2a2a2a05], [1], [0
+])
+
+AS_BOX([Add a different backend])
+check ovn-nbctl --wait=hv set load_balancer lb0 \
+    vips:'"30.0.0.1:80"'='"42.42.42.3:10880,42.42.42.4:10880,42.42.42.6:10880"'
+OVS_WAIT_UNTIL([test $(n_buckets) = 3])
+
+AT_CHECK([test "$(lb_group_id)" = "$gid"])
+AT_CHECK([test "$(bucket_id_of 0x2a2a2a03)" = "$b3"])
+AT_CHECK([test "$(bucket_id_of 0x2a2a2a04)" = "$b4"])
+AT_CHECK([lb_group_buckets | grep -c 0x2a2a2a06], [0], [1
+])
+b6=$(bucket_id_of 0x2a2a2a06)
+
+AS_BOX([A backend that comes back keeps its old identity])
+check ovn-nbctl --wait=hv set load_balancer lb0 \
+    vips:'"30.0.0.1:80"'='"42.42.42.3:10880,42.42.42.4:10880,42.42.42.5:10880,42.42.42.6:10880"'
+OVS_WAIT_UNTIL([test $(n_buckets) = 4])
+
+AT_CHECK([test "$(lb_group_id)" = "$gid"])
+AT_CHECK([test "$(bucket_id_of 0x2a2a2a03)" = "$b3"])
+AT_CHECK([test "$(bucket_id_of 0x2a2a2a04)" = "$b4"])
+AT_CHECK([test "$(bucket_id_of 0x2a2a2a06)" = "$b6"])
+# The bucket id is derived from the backend itself, so .5 lands back on the
+# id it had before it was removed.
+AT_CHECK([test "$(bucket_id_of 0x2a2a2a05)" = "$b5"])
+
+AS_BOX([Reordering the backends changes nothing])
+check ovn-nbctl --wait=hv set load_balancer lb0 \
+    vips:'"30.0.0.1:80"'='"42.42.42.6:10880,42.42.42.5:10880,42.42.42.4:10880,42.42.42.3:10880"'
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_UNTIL([test $(n_buckets) = 4])
+
+AT_CHECK([test "$(lb_group_id)" = "$gid"])
+AT_CHECK([test "$(bucket_id_of 0x2a2a2a03)" = "$b3"])
+AT_CHECK([test "$(bucket_id_of 0x2a2a2a04)" = "$b4"])
+AT_CHECK([test "$(bucket_id_of 0x2a2a2a05)" = "$b5"])
+AT_CHECK([test "$(bucket_id_of 0x2a2a2a06)" = "$b6"])
+
+AS_BOX([A controller recompute produces the same group])
+buckets_before=$(lb_group_buckets)
+check ovn-appctl -t ovn-controller inc-engine/recompute
+check ovn-nbctl --wait=hv sync
+AT_CHECK([test $(n_select_groups) = 1])
+AT_CHECK([test "$(lb_group_id)" = "$gid"])
+AT_CHECK([test "$(lb_group_buckets)" = "$buckets_before"])
+
+AS_BOX([The group survives a controller restart])
+TMPPID=$(cat $OVS_RUNDIR/ovn-controller.pid)
+check ovs-appctl -t ovn-controller exit --restart
+OVS_WAIT_WHILE([kill -0 $TMPPID 2>/dev/null])
+start_daemon ovn-controller
+check ovn-nbctl --wait=hv sync
+
+# The group id may be picked anew here, but there must be exactly one group,
+# with one bucket per backend and no duplicates.
+OVS_WAIT_UNTIL([test $(n_buckets) = 4])
+AT_CHECK([test $(n_select_groups) = 1])
+AT_CHECK([lb_group_buckets | grep -c 0x2a2a2a03], [0], [1
+])
+AT_CHECK([lb_group_buckets | grep -c 0x2a2a2a04], [0], [1
+])
+AT_CHECK([lb_group_buckets | grep -c 0x2a2a2a05], [0], [1
+])
+AT_CHECK([lb_group_buckets | grep -c 0x2a2a2a06], [0], [1
+])
+
+# None of the bucket updates above may have failed to parse or been rejected
+# by the switch -- ofctrl.c logs those at ERR.  This is what catches a bridge
+# that never negotiated OpenFlow 1.5, since INSERT_BUCKET/REMOVE_BUCKET need
+# it.
+AT_CHECK([grep -cE "(insert|remove) bucket" ovn-controller.log], [1], [0
+])
+
+OVN_CLEANUP_CONTROLLER([hv1])
+OVN_CLEANUP_NORTHD
+
+as
+OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
+/connection dropped.*/d"])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([deferred-nat load balancing -- group lifecycle])
+AT_KEYWORDS([ovnlb deferred-nat])
+
+CHECK_CONNTRACK()
+CHECK_CONNTRACK_NAT()
+DEFERRED_NAT_GROUP_HELPERS
+DEFERRED_NAT_SYSTEM_SETUP
+
+OVS_WAIT_UNTIL([test $(n_buckets) = 3])
+
+AS_BOX([A single backend needs no group at all])
+# northd emits a plain assignment instead of a select, so the group has to be
+# removed from br-int rather than left behind.
+check ovn-nbctl --wait=hv set load_balancer lb0 \
+    vips:'"30.0.0.1:80"'='"42.42.42.3:10880"'
+OVS_WAIT_UNTIL([test $(n_select_groups) = 0])
+
+AS_BOX([Two backends again -- exactly one group])
+check ovn-nbctl --wait=hv set load_balancer lb0 \
+    vips:'"30.0.0.1:80"'='"42.42.42.3:10880,42.42.42.4:10880"'
+OVS_WAIT_UNTIL([test $(n_buckets) = 2])
+AT_CHECK([test $(n_select_groups) = 1])
+
+AS_BOX([No backends at all])
+check ovn-nbctl --wait=hv clear load_balancer lb0 ip_port_mappings
+OVS_WAIT_UNTIL([test $(n_select_groups) = 0])
+
+check ovn-nbctl set load_balancer lb0 \
+    ip_port_mappings:42.42.42.3=backend3:42.42.42.2
+check ovn-nbctl --wait=hv set load_balancer lb0 \
+    ip_port_mappings:42.42.42.4=backend4:42.42.42.2
+OVS_WAIT_UNTIL([test $(n_buckets) = 2])
+
+AS_BOX([Turning the option off removes the group])
+check ovn-nbctl --wait=hv remove load_balancer lb0 options deferred-nat
+OVS_WAIT_UNTIL([test $(n_select_groups) = 0])
+
+check ovn-nbctl --wait=hv set load_balancer lb0 options:deferred-nat=true
+OVS_WAIT_UNTIL([test $(n_buckets) = 2])
+AT_CHECK([test $(n_select_groups) = 1])
+
+AS_BOX([Detaching the lb from the router removes the group])
+check ovn-nbctl --wait=hv lr-lb-del lr1 lb0
+OVS_WAIT_UNTIL([test $(n_select_groups) = 0])
+
+check ovn-nbctl --wait=hv lr-lb-add lr1 lb0
+OVS_WAIT_UNTIL([test $(n_buckets) = 2])
+
+AS_BOX([Deleting the lb removes the group])
+check ovn-nbctl --wait=hv lb-del lb0
+OVS_WAIT_UNTIL([test $(n_select_groups) = 0])
+
+# Nothing must be left behind on the bridge.
+AT_CHECK([ovs-ofctl -O OpenFlow15 dump-groups br-int | grep -c "group_id="], [1], [0
+])
+
+OVN_CLEANUP_CONTROLLER([hv1])
+OVN_CLEANUP_NORTHD
+
+as
+OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
+/connection dropped.*/d"])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([deferred-nat load balancing -- connectivity across backend removal])
+
+CHECK_CONNTRACK()
+CHECK_CONNTRACK_NAT()
+DEFERRED_NAT_GROUP_HELPERS
+
+ovn_start
+OVS_TRAFFIC_VSWITCHD_START()
+ADD_BR([br-int])
+
+ovs-vsctl \
+        -- set Open_vSwitch . external-ids:system-id=hv1 \
+        -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
+        -- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
+        -- set Open_vSwitch . external-ids:ovn-encap-ip=169.0.0.1 \
+        -- set bridge br-int fail-mode=secure other-config:disable-in-band=true
+
+start_daemon ovn-controller
+
+check ovn-nbctl lr-add lr1
+check ovn-nbctl lrp-add lr1 lr1-ls1 00:00:00:00:00:01 42.42.42.1/24
+check ovn-nbctl lrp-set-gateway-chassis lr1-ls1 hv1
+check ovn-nbctl lrp-add lr1 lr1-ls2 00:00:00:00:00:02 10.0.0.1/24
+
+check ovn-nbctl ls-add ls1
+check ovn-nbctl lsp-add-router-port ls1 ls1-lr1 lr1-ls1
+check ovn-nbctl ls-add ls2
+check ovn-nbctl lsp-add-router-port ls2 ls2-lr1 lr1-ls2
+
+ADD_NAMESPACES(client)
+ADD_VETH(client, client, br-int, "10.0.0.2/24", "f0:00:00:01:02:02", \
+         "10.0.0.1")
+check ovn-nbctl lsp-add ls2 client \
+    -- lsp-set-addresses client "f0:00:00:01:02:02 10.0.0.2"
+
+ADD_NAMESPACES(backend3)
+ADD_VETH(backend3, backend3, br-int, "42.42.42.3/24", "f0:00:00:01:02:03", \
+         "42.42.42.1")
+ADD_NAMESPACES(backend4)
+ADD_VETH(backend4, backend4, br-int, "42.42.42.4/24", "f0:00:00:01:02:04", \
+         "42.42.42.1")
+ADD_NAMESPACES(backend5)
+ADD_VETH(backend5, backend5, br-int, "42.42.42.5/24", "f0:00:00:01:02:05", \
+         "42.42.42.1")
+
+for i in 3 4 5; do
+    check ovn-nbctl lsp-add ls1 backend$i \
+        -- lsp-set-addresses backend$i "f0:00:00:01:02:0$i 42.42.42.$i"
+done
+
+check ovn-nbctl lb-add lb0 30.0.0.1:80 \
+    42.42.42.3:80,42.42.42.4:80,42.42.42.5:80
+check ovn-nbctl set load_balancer lb0 options:deferred-nat=true
+for i in 3 4 5; do
+    check ovn-nbctl set load_balancer lb0 \
+        ip_port_mappings:42.42.42.$i=backend$i:42.42.42.1
+done
+check ovn-nbctl lr-lb-add lr1 lb0
+check ovn-nbctl --wait=hv sync
+
+OVS_WAIT_UNTIL([test $(n_buckets) = 3])
+
+NETNS_DAEMONIZE([backend3], [nc -l -k 42.42.42.3 80 > backend3.log],
+                [backend3.pid])
+NETNS_DAEMONIZE([backend4], [nc -l -k 42.42.42.4 80 > backend4.log],
+                [backend4.pid])
+NETNS_DAEMONIZE([backend5], [nc -l -k 42.42.42.5 80 > backend5.log],
+                [backend5.pid])
+for i in 3 4 5; do
+    OVS_WAIT_UNTIL([NS_EXEC([backend$i],
+                            [netstat -ln | grep -q "42.42.42.$i:80"])])
+done
+
+AS_BOX([The vip accepts connections through the gateway])
+NS_CHECK_EXEC([client], [nc -z -w 1 30.0.0.1 80], [0], [ignore], [ignore])
+
+AS_BOX([Every connection to the vip is delivered to some backend])
+for i in $(seq 1 20); do
+    NS_CHECK_EXEC([client], [sh -c "echo conn$i | nc -w 1 30.0.0.1 80"],
+                  [0], [ignore], [ignore])
+done
+OVS_WAIT_UNTIL([test $(cat backend3.log backend4.log backend5.log | \
+                       grep -c '^conn') = 20])
+
+OVN_CLEANUP_CONTROLLER([hv1])
+OVN_CLEANUP_NORTHD
+
+as
+OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
+/connection dropped.*/d"])
+AT_CLEANUP
+])

@@ -2595,8 +2595,10 @@
           Remote endpoint:
           Specify :target_zone_name at the end of the above syntax to create
           remote health checks in a specific zone.
-          For distributed load balancers - ip_port_mappings is required.
-          In the absence of health checks - source_ip is optional.
+          For load balancers with the <code>deferred-nat</code> or
+          <code>distributed</code> options enabled - ip_port_mappings
+          is required.
+          In absence of health checks - source_ip is optional.
         </p>
 
         <p>
@@ -2812,6 +2814,56 @@ or
         won't be spread across all chassis. Instead, it will be concentrated
         only on the chassis that hosts the Distributed Gateway Port of the
         router.
+      </column>
+
+      <column name="options" key="deferred-nat">
+        <p>
+          If set to <code>true</code>, the load balancer performs the backend
+          selection in a stateless manner and defers the NAT itself to the
+          hypervisor that hosts the selected backend. No connection tracking
+          state is created on the gateway chassis, so gateway nodes can be
+          scaled horizontally. This option is set to <code>false</code> by
+          default.
+        </p>
+
+        <p>
+          A packet destined to the VIP is not NATed on the router. Instead,
+          a backend is selected for every packet in the routing stage and the
+          packet is sent directly to that backend: the destination MAC becomes
+          the backend's MAC while the destination IP stays the VIP. The DNAT
+          to the backend address is then performed on the node hosting the
+          backend, where the connection tracking state is created.
+          Because the translation is done per backend on the backend's own
+          node, a backend may be a member of several VIPs.
+        </p>
+
+        <p>
+          Since the packet is delivered to the backend by its MAC address,
+          traffic to a <code>deferred-nat</code> load balancer is no longer
+          routed: every backend must belong to a subnet of the logical router
+          that references this load balancer, that is, it must reside on a
+          logical switch that is directly connected to that router. Backends
+          that are reachable only through a next hop are not supported and are
+          ignored.
+        </p>
+
+        <p>
+          Required configuration: <ref column="ip_port_mappings"/>, since the
+          logical port of each backend must be known to resolve its MAC
+          address and the switch it belongs to.
+        </p>
+
+        <p>
+          Because the backend is selected per packet, the OpenFlow group that
+          implements the selection is updated incrementally: when a backend is
+          added or removed, only its own bucket is inserted into or deleted
+          from the group, instead of the whole group being rebuilt. For that
+          to actually preserve the TCP sessions established on the remaining
+          backends, the <code>hash</code> selection method must be used rather
+          than <code>dp_hash</code>, which reassigns the traffic across all
+          the buckets whenever their number changes. The hash method is chosen
+          by setting selection_fields on this load balancer.
+        </p>
       </column>
 
       <column name="options" key="event" type='{"type": "boolean"}'>

@@ -165,6 +165,7 @@ lb_data_load_balancer_handler(struct engine_node *node, void *data)
                                              lb->health_checks);
             trk_lb_data->has_routable_lb |= lb->routable;
             trk_lb_data->has_distributed_lb |= lb->is_distributed;
+            trk_lb_data->has_deferred_nat_lb |= lb->is_deferred_nat;
             continue;
         }
 
@@ -180,6 +181,7 @@ lb_data_load_balancer_handler(struct engine_node *node, void *data)
                                            lb->health_checks);
             trk_lb_data->has_routable_lb |= lb->routable;
             trk_lb_data->has_distributed_lb |= lb->is_distributed;
+            trk_lb_data->has_deferred_nat_lb |= lb->is_deferred_nat;
         } else {
             /* Load balancer updated. */
             bool health_checks = lb->health_checks;
@@ -190,12 +192,14 @@ lb_data_load_balancer_handler(struct engine_node *node, void *data)
             enum lb_neighbor_responder_mode neigh_mode = lb->neigh_mode;
             bool routable = lb->routable;
             bool distributed_mode = lb->is_distributed;
+            bool deferred_nat = lb->is_deferred_nat;
             ovn_northd_lb_reinit(lb, tracked_lb);
             health_checks |= lb->health_checks;
             struct crupdated_lb *clb = add_crupdated_lb_to_tracked_data(
                 lb, trk_lb_data, health_checks);
             trk_lb_data->has_routable_lb |= lb->routable;
             trk_lb_data->has_distributed_lb |= lb->is_distributed;
+            trk_lb_data->has_deferred_nat_lb |= lb->is_deferred_nat;
 
             /* Determine the inserted and deleted vips and store them in
              * the tracked data. */
@@ -230,6 +234,12 @@ lb_data_load_balancer_handler(struct engine_node *node, void *data)
             }
             if (distributed_mode != lb->is_distributed) {
                 /* If distributed_mode is updated trigger a full recompute. */
+                return EN_UNHANDLED;
+            }
+            if (deferred_nat != lb->is_deferred_nat) {
+                /* If deferred_nat is updated trigger a full recompute:
+                 * 'ovn_datapath.has_deferred_nat_lb' is only computed by a
+                 * full run, and turning the option off has to clear it. */
                 return EN_UNHANDLED;
             }
         }
@@ -701,6 +711,7 @@ handle_od_lb_changes(struct nbrec_load_balancer **nbrec_lbs,
             trk_lb_data->has_health_checks |= lb->health_checks;
             trk_lb_data->has_routable_lb |= lb->routable;
             trk_lb_data->has_distributed_lb |= lb->is_distributed;
+            trk_lb_data->has_deferred_nat_lb |= lb->is_deferred_nat;
         }
 
         if (unode) {
@@ -762,6 +773,7 @@ destroy_tracked_data(struct ed_type_lb_data *lb_data)
     lb_data->tracked_lb_data.has_dissassoc_lbgrps_from_od = false;
     lb_data->tracked_lb_data.has_routable_lb = false;
     lb_data->tracked_lb_data.has_distributed_lb = false;
+    lb_data->tracked_lb_data.has_deferred_nat_lb = false;
 
     struct hmapx_node *node;
     HMAPX_FOR_EACH_SAFE (node, &lb_data->tracked_lb_data.deleted_lbs) {
