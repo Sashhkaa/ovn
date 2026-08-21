@@ -50,6 +50,7 @@ struct ls_stateful_record {
      * by the northd engine node for each logical switch. */
     size_t ls_index;
 
+    bool has_deferred_nat_lb;
     bool has_stateful_acl;
     bool has_lb_vip;
     bool has_acls;
@@ -124,6 +125,14 @@ static inline bool
 ls_stateful_has_tracked_data(struct ls_stateful_tracked_data *trk_data) {
     return !hmapx_is_empty(&trk_data->crupdated) ||
            !hmapx_is_empty(&trk_data->deleted);
+}
+
+static inline bool
+ls_stateful_rec_needs_lb_conntrack(
+    const struct ls_stateful_record *ls_stateful_rec)
+{
+    return ls_stateful_rec->has_lb_vip
+           || ls_stateful_rec->has_deferred_nat_lb;
 }
 
 #endif /* EN_LS_STATEFUL_H */

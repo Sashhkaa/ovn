@@ -341,7 +341,7 @@ BUILD_ASSERT_DECL(
 
 /* The number of tables for the ingress and egress pipelines. */
 #define LOG_PIPELINE_INGRESS_LEN 35
-#define LOG_PIPELINE_EGRESS_LEN 16
+#define LOG_PIPELINE_EGRESS_LEN 17
 
 static inline uint32_t
 hash_add_in6_addr(uint32_t hash, const struct in6_addr *addr)
