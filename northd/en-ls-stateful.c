@@ -369,6 +369,9 @@ ls_stateful_record_init(struct ls_stateful_record *ls_stateful_rec,
                       const struct ls_port_group_table *ls_pgs)
 {
     ls_stateful_rec->has_lb_vip = ls_has_lb_vip(od);
+    /* For deferred-nat case, northd trigger full recompute,
+     * so we don't need to handle this option in the handlers. */
+    ls_stateful_rec->has_deferred_nat_lb = od->has_deferred_nat_lb;
     ls_stateful_record_set_acls(ls_stateful_rec, od->nbs, ls_pgs);
 }
 

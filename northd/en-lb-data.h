@@ -85,6 +85,8 @@ struct tracked_lb_data {
 
     /* Indicates if any lb (in the tracked data) has 'distibuted' flag set. */
     bool has_distributed_lb;
+
+    bool has_deferred_nat_lb;
 };
 
 /* Datapath (logical switch) to lb/lbgrp association data. */

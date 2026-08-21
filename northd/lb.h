@@ -79,6 +79,8 @@ struct ovn_northd_lb {
     /* Indicates if distributed option is enabled for load balancer. */
     bool is_distributed;
 
+    bool is_deferred_nat;
+
     bool use_stateless_nat;
 
     char *hairpin_snat_ip;
@@ -98,6 +100,7 @@ struct ovn_northd_lb_backend {
      /* Set to true if port does not locate in local AZ. */
     bool remote_backend;
     bool distributed_backend;
+    bool deferred_nat_backend;
     /* Logical port to which the ip belong to. */
     char *logical_port;
     /* Source IP address to be used for service monitoring. */
