@@ -5161,7 +5161,9 @@ check_stateful_flows() {
   table=??(ls_out_pre_stateful), priority=110  , match=(reg0[[2]] == 1), action=(ct_lb_mark;)
 ])
 
-    AT_CHECK([grep "ls_out_lb" sw0flows | sort], [0], [])
+    AT_CHECK([grep "ls_out_lb" sw0flows | ovn_strip_lflows], [0], [dnl
+  table=??(ls_out_lb          ), priority=0    , match=(1), action=(next;)
+])
 
     AT_CHECK([grep "ls_out_stateful" sw0flows | ovn_strip_lflows], [0], [dnl
   table=??(ls_out_stateful    ), priority=0    , match=(1), action=(next;)
@@ -24179,6 +24181,730 @@ check ovn-nbctl set logical_router_port lr0-noswitch \
     options:no-centralized-routing=true
 check ovn-nbctl --wait=sb sync
 check_row_count Port_Binding 1 logical_port=cr-lr0-noswitch
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+# Common topology for the "deferred-nat" tests below:
+#
+#                          lport1 (00:00:00:00:00:01, 172.16.0.101)
+#   lr1 ------------ ls1 - lport2 (00:00:00:00:00:02, 172.16.0.102)
+#   (lr1-ls1, DGP)         lport3 (00:00:00:00:00:03, 172.16.0.103)
+#
+#   lb1: 30.0.0.1:80 -> 172.16.0.10{1,2,3}:8080, attached to lr1.
+#
+# 'options:deferred-nat' is deliberately left unset here, every test enables
+# it on its own so that the transition itself is covered as well.
+#
+# The macro also defines three shell helpers that dump only the logical flows
+# the deferred-nat path is responsible for:
+#     deferred_lr_flows LR VIP
+#     deferred_ls_out_flows LS VIP
+#     deferred_ls_lb_flows LS VIP - check in case of it is
+#     enable-stateless-acl-with-lb option on switch it's also
+#     flow for unsnat in pre_statefull stage with low prio
+#     prelb_flows and prelb_flows - check switch became "statefull"
+m4_define([DEFERRED_NAT_SETUP], [
+deferred_lr_flows() {
+    ovn-sbctl lflow-list $[]1 | grep -E \
+        "lr_in_ct_extract|lr_in_dnat.*priority=130|lr_in_ip_routing.*priority=3096" \
+        | grep "$[]2" | ovn_strip_lflows
+}
+
+deferred_ls_out_flows() {
+    ovn-sbctl lflow-list $[]1 | grep -E \
+        "ls_out_lb.*priority=130" \
+        | grep "$[]2" | ovn_strip_lflows
+}
+
+deferred_ls_lb_flows() {
+    ovn-sbctl lflow-list $[]1 | grep -E \
+        "ls_in_pre_stateful.*priority=102|ls_in_pre_stateful.*priority=200" \
+    | ovn_strip_lflows
+}
+
+prelb_flows() {
+    ovn-sbctl lflow-list $1 | grep -E "ls_in_pre_lb" | \
+        grep "priority=100" | ovn_strip_lflows
+}
+
+ct_extract_flows() {
+    ovn-sbctl lflow-list $1 | grep "ls_in_ct_extract" | grep "priority=100" | \
+        ovn_strip_lflows
+}
+
+check ovn-nbctl ls-add ls1
+check ovn-nbctl lr-add lr1
+check ovn-nbctl lrp-add lr1 lr1-ls1 00:00:01:02:03:04 172.16.0.1/24
+check ovn-nbctl lrp-set-gateway-chassis lr1-ls1 hv1
+check ovn-nbctl lsp-add-router-port ls1 ls1-lr1 lr1-ls1
+
+check ovn-nbctl lsp-add ls1 lport1 -- lsp-set-addresses lport1 "00:00:00:00:00:01 172.16.0.101"
+check ovn-nbctl lsp-add ls1 lport2 -- lsp-set-addresses lport2 "00:00:00:00:00:02 172.16.0.102"
+check ovn-nbctl lsp-add ls1 lport3 -- lsp-set-addresses lport3 "00:00:00:00:00:03 172.16.0.103"
+
+check ovn-nbctl lb-add lb1 30.0.0.1:80 \
+    172.16.0.101:8080,172.16.0.102:8080,172.16.0.103:8080
+check ovn-nbctl set load_balancer lb1 ip_port_mappings:172.16.0.101=lport1:192.168.0.99
+check ovn-nbctl set load_balancer lb1 ip_port_mappings:172.16.0.102=lport2:192.168.0.99
+check ovn-nbctl set load_balancer lb1 ip_port_mappings:172.16.0.103=lport3:192.168.0.99
+check ovn-nbctl --wait=sb lr-lb-add lr1 lb1
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([deferred-nat -- option toggling])
+ovn_start
+DEFERRED_NAT_SETUP
+
+AS_BOX([Nothing is emitted while the option is unset])
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1], [0], [])
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1], [0], [])
+
+AS_BOX([Change options:deferred-nat=true])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set load_balancer lb1 options:deferred-nat=true
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(reg4 = select(values=(172.16.0.101,172.16.0.102,172.16.0.103); group_key="lr1:lb1:30.0.0.1:80");)
+  table=??(lr_in_dnat         ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(next;)
+  table=??(lr_in_ip_routing   ), priority=3096 , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80 && reg4 == 172.16.0.101), action=(ip.ttl--; reg8[[0..15]] = 0; reg0 = 172.16.0.101; reg5 = 172.16.0.1; eth.src = 00:00:01:02:03:04; outport = "lr1-ls1"; reg9[[9]] = 1; flags.loopback = 1; next;)
+  table=??(lr_in_ip_routing   ), priority=3096 , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80 && reg4 == 172.16.0.102), action=(ip.ttl--; reg8[[0..15]] = 0; reg0 = 172.16.0.102; reg5 = 172.16.0.1; eth.src = 00:00:01:02:03:04; outport = "lr1-ls1"; reg9[[9]] = 1; flags.loopback = 1; next;)
+  table=??(lr_in_ip_routing   ), priority=3096 , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80 && reg4 == 172.16.0.103), action=(ip.ttl--; reg8[[0..15]] = 0; reg0 = 172.16.0.103; reg5 = 172.16.0.1; eth.src = 00:00:01:02:03:04; outport = "lr1-ls1"; reg9[[9]] = 1; flags.loopback = 1; next;)
+])
+
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1], [0], [dnl
+  table=??(ls_out_lb          ), priority=130  , match=(eth.dst == 00:00:00:00:00:01 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(ct_lb_mark(backends=172.16.0.101:8080);)
+  table=??(ls_out_lb          ), priority=130  , match=(eth.dst == 00:00:00:00:00:02 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(ct_lb_mark(backends=172.16.0.102:8080);)
+  table=??(ls_out_lb          ), priority=130  , match=(eth.dst == 00:00:00:00:00:03 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(ct_lb_mark(backends=172.16.0.103:8080);)
+])
+
+AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.1], [0], [dnl
+  table=??(ls_in_pre_stateful ), priority=200  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && inport == "ls1-lr1"), action=(next;)
+])
+
+dnl ls1 does not carry lb1 in its own 'load_balancer' column, but it hosts the
+dnl backends, so requests that originate inside 172.16.0.0/24 have to be load
+dnl balanced here rather than on lr1.
+AT_CHECK([prelb_flows ls1], [0], [dnl
+  table=??(ls_in_pre_lb       ), priority=100  , match=(ip), action=(reg0[[2]] = 1; next;)
+])
+AT_CHECK([ct_extract_flows ls1], [0], [dnl
+  table=??(ls_in_ct_extract   ), priority=100  , match=(ct.new && ip), action=(reg1[[16..23]] = ct_proto(); reg1[[0..15]] = ct_tp_dst(); next;)
+])
+
+check_engine_compute lflow recompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([enable-stateless-acl-with-lb on the backend switch])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set logical_switch ls1 \
+    other_config:enable-stateless-acl-with-lb=true
+
+AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.1], [0], [dnl
+  table=??(ls_in_pre_stateful ), priority=102  , match=(ip4.src == 172.16.0.101 && tcp.src == 8080), action=(ct_lb_mark;)
+  table=??(ls_in_pre_stateful ), priority=102  , match=(ip4.src == 172.16.0.102 && tcp.src == 8080), action=(ct_lb_mark;)
+  table=??(ls_in_pre_stateful ), priority=102  , match=(ip4.src == 172.16.0.103 && tcp.src == 8080), action=(ct_lb_mark;)
+  table=??(ls_in_pre_stateful ), priority=200  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && inport == "ls1-lr1"), action=(next;)
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb remove logical_switch ls1 other_config \
+    enable-stateless-acl-with-lb
+
+AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.1], [0], [dnl
+  table=??(ls_in_pre_stateful ), priority=200  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && inport == "ls1-lr1"), action=(next;)
+])
+AT_CHECK([prelb_flows ls1], [0], [dnl
+  table=??(ls_in_pre_lb       ), priority=100  , match=(ip), action=(reg0[[2]] = 1; next;)
+])
+AT_CHECK([ct_extract_flows ls1], [0], [dnl
+  table=??(ls_in_ct_extract   ), priority=100  , match=(ct.new && ip), action=(reg1[[16..23]] = ct_proto(); reg1[[0..15]] = ct_tp_dst(); next;)
+])
+
+AS_BOX([Remove the option -- every deferred-nat flow has to go away])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb remove load_balancer lb1 options deferred-nat
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1], [0], [])
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1], [0], [])
+AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.1], [0], [])
+AT_CHECK([prelb_flows ls1], [0], [])
+AT_CHECK([ct_extract_flows ls1], [0], [])
+
+check_engine_compute lflow recompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([deferred-nat -- vips and backends])
+ovn_start
+DEFERRED_NAT_SETUP
+
+check ovn-nbctl --wait=sb set load_balancer lb1 options:deferred-nat=true
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [3
+])
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1 | grep -c "ls_out_lb"], [0], [3
+])
+
+AS_BOX([Drop one backend -- 3 members left of 2])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set load_balancer lb1 \
+    vips:'"30.0.0.1:80"'='"172.16.0.101:8080,172.16.0.102:8080"'
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep "lr_in_ct_extract"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(reg4 = select(values=(172.16.0.101,172.16.0.102); group_key="lr1:lb1:30.0.0.1:80");)
+])
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [2
+])
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1 | grep -c "ls_out_lb"], [0], [2
+])
+
+check_engine_compute lflow recompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([A single backend is named directly -- "select" needs two])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set load_balancer lb1 \
+    vips:'"30.0.0.1:80"'='"172.16.0.102:8080"'
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep "lr_in_ct_extract"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(reg4 = 172.16.0.102; next;)
+])
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [1
+])
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1], [0], [dnl
+  table=??(ls_out_lb          ), priority=130  , match=(eth.dst == 00:00:00:00:00:02 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(ct_lb_mark(backends=172.16.0.102:8080);)
+])
+AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.1], [0], [dnl
+  table=??(ls_in_pre_stateful ), priority=200  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && inport == "ls1-lr1"), action=(next;)
+])
+
+check_engine_compute lflow recompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([No backend at all])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set load_balancer lb1 vips:'"30.0.0.1:80"'='""'
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(drop;)
+])
+AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.1], [0], [dnl
+  table=??(ls_in_pre_stateful ), priority=200  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && inport == "ls1-lr1"), action=(next;)
+])
+
+check_engine_compute lflow recompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set load_balancer lb1 \
+    vips:'"30.0.0.1:80"'='"172.16.0.103:8080,172.16.0.101:8080,172.16.0.102:8080"'
+
+AS_BOX([A second vip gets its own group_key])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set load_balancer lb1 \
+    vips:'"30.0.0.2:80"'='"172.16.0.101:8080,172.16.0.102:8080"'
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.2 | grep "lr_in_ct_extract"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.2 && tcp && tcp.dst == 80), action=(reg4 = select(values=(172.16.0.101,172.16.0.102); group_key="lr1:lb1:30.0.0.2:80");)
+])
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.2 | grep -c "ls_out_lb"], [0], [2
+])
+AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.2], [0], [dnl
+  table=??(ls_in_pre_stateful ), priority=200  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && inport == "ls1-lr1"), action=(next;)
+  table=??(ls_in_pre_stateful ), priority=200  , match=(ip4.dst == 30.0.0.2 && tcp.dst == 80 && inport == "ls1-lr1"), action=(next;)
+])
+AT_CHECK([prelb_flows ls1], [0], [dnl
+  table=??(ls_in_pre_lb       ), priority=100  , match=(ip), action=(reg0[[2]] = 1; next;)
+])
+AT_CHECK([ct_extract_flows ls1], [0], [dnl
+  table=??(ls_in_ct_extract   ), priority=100  , match=(ct.new && ip), action=(reg1[[16..23]] = ct_proto(); reg1[[0..15]] = ct_tp_dst(); next;)
+])
+
+# The first vip is untouched.
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [3
+])
+
+check_engine_compute lflow recompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([selection_fields does not disturb group_key])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set load_balancer lb1 selection_fields=ip_src,ip_dst
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep "lr_in_ct_extract"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(reg4 = select(values=(172.16.0.103,172.16.0.101,172.16.0.102); group_key="lr1:lb1:30.0.0.1:80"; hash_fields="ip_dst,ip_src");)
+])
+
+dnl The switch side doensn't pick hash fields up
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1], [0], [dnl
+  table=??(ls_out_lb          ), priority=130  , match=(eth.dst == 00:00:00:00:00:01 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(ct_lb_mark(backends=172.16.0.101:8080);)
+  table=??(ls_out_lb          ), priority=130  , match=(eth.dst == 00:00:00:00:00:02 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(ct_lb_mark(backends=172.16.0.102:8080);)
+  table=??(ls_out_lb          ), priority=130  , match=(eth.dst == 00:00:00:00:00:03 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(ct_lb_mark(backends=172.16.0.103:8080);)
+])
+
+check_engine_compute lflow recompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([Renaming the lb moves the group_key])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+lb1_uuid=$(fetch_column nb:load_balancer _uuid name=lb1)
+check ovn-nbctl --wait=sb set load_balancer $lb1_uuid name=lb-renamed
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c 'group_key="lr1:lb-renamed:30.0.0.1:80"'], [0], [1
+])
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep 'group_key="lr1:lb1:30.0.0.1:80"'], [1], [])
+
+check_engine_compute lflow recompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([deferred-nat -- ip_port_mappings])
+AT_KEYWORDS([lb deferred-nat])
+ovn_start
+DEFERRED_NAT_SETUP
+
+check ovn-nbctl --wait=sb set load_balancer lb1 options:deferred-nat=true
+
+AS_BOX([A backend without a mapping is not steered])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb remove load_balancer lb1 ip_port_mappings 172.16.0.103
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep "lr_in_ct_extract"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(reg4 = select(values=(172.16.0.101,172.16.0.102); group_key="lr1:lb1:30.0.0.1:80");)
+])
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [2
+])
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1 | grep -c "ls_out_lb"], [0], [2
+])
+
+check_engine_compute lflow recompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([Adding the mapping back brings the backend back])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set load_balancer lb1 \
+    ip_port_mappings:172.16.0.103=lport3:192.168.0.99
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [3
+])
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1 | grep -c "ls_out_lb"], [0], [3
+])
+
+check_engine_compute lflow recompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([Clearing all the mappings removes every deferred-nat flow])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb clear load_balancer lb1 ip_port_mappings
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(drop;)
+])
+AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.1], [0], [dnl
+  table=??(ls_in_pre_stateful ), priority=200  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && inport == "ls1-lr1"), action=(next;)
+])
+check_engine_compute lflow recompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([A mapping without a source IP is supported])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set load_balancer lb1 ip_port_mappings:172.16.0.101=lport1
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep "lr_in_ct_extract"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(reg4 = 172.16.0.101; next;)
+])
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [1
+])
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1 | grep -c "ls_out_lb"], [0], [1
+])
+
+check ovn-nbctl clear load_balancer lb1 ip_port_mappings
+AS_BOX([A mapping to a port that does not exist is ignored])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set load_balancer lb1 \
+    ip_port_mappings:172.16.0.101=nosuchport:192.168.0.99
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(drop;)
+])
+AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.1], [0], [dnl
+  table=??(ls_in_pre_stateful ), priority=200  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && inport == "ls1-lr1"), action=(next;)
+])
+
+check_engine_compute lflow recompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([deferred-nat -- logical switch port changes])
+AT_KEYWORDS([lb deferred-nat])
+ovn_start
+DEFERRED_NAT_SETUP
+
+check ovn-nbctl --wait=sb set load_balancer lb1 options:deferred-nat=true
+
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1 | grep "172.16.0.101:8080"], [0], [dnl
+  table=??(ls_out_lb          ), priority=130  , match=(eth.dst == 00:00:00:00:00:01 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(ct_lb_mark(backends=172.16.0.101:8080);)
+])
+
+AS_BOX([Change the mac of a backend port])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lsp-set-addresses lport1 "00:00:00:00:00:aa 172.16.0.101"
+
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1 | grep "172.16.0.101:8080"], [0], [dnl
+  table=??(ls_out_lb          ), priority=130  , match=(eth.dst == 00:00:00:00:00:aa && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(ct_lb_mark(backends=172.16.0.101:8080);)
+])
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [3
+])
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1 | grep -c "ls_out_lb"], [0], [3
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([Delete a backend port])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lsp-del lport3
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep "lr_in_ct_extract"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(reg4 = select(values=(172.16.0.101,172.16.0.102); group_key="lr1:lb1:30.0.0.1:80");)
+])
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [2
+])
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1 | grep -c "ls_out_lb"], [0], [2
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([Re-create the port with a different mac])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl lsp-add ls1 lport3
+check ovn-nbctl --wait=sb lsp-set-addresses lport3 "00:00:00:00:00:cc 172.16.0.103"
+
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1 | grep "172.16.0.103:8080"], [0], [dnl
+  table=??(ls_out_lb          ), priority=130  , match=(eth.dst == 00:00:00:00:00:cc && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(ct_lb_mark(backends=172.16.0.103:8080);)
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([A backend whose port shows up only later])
+check ovn-nbctl --wait=sb set load_balancer lb1 \
+    vips:'"30.0.0.1:80"'='"172.16.0.101:8080,172.16.0.104:8080"' \
+    ip_port_mappings:172.16.0.104=lport4:192.168.0.99
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep "lr_in_ct_extract"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(reg4 = 172.16.0.101; next;)
+])
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [1
+])
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1 | grep -c "ls_out_lb"], [0], [1
+])
+
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl lsp-add ls1 lport4
+check ovn-nbctl --wait=sb lsp-set-addresses lport4 "00:00:00:00:00:04 172.16.0.104"
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep "lr_in_ct_extract"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(reg4 = select(values=(172.16.0.101,172.16.0.104); group_key="lr1:lb1:30.0.0.1:80");)
+])
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [2
+])
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1 | grep "172.16.0.104:8080"], [0], [dnl
+  table=??(ls_out_lb          ), priority=130  , match=(eth.dst == 00:00:00:00:00:04 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(ct_lb_mark(backends=172.16.0.104:8080);)
+])
+
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([Disabling a backend port])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lsp-set-enabled lport4 disabled
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep "lr_in_ct_extract"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(reg4 = 172.16.0.101; next;)
+])
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [1
+])
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1 | grep "172.16.0.101:8080"], [0], [dnl
+  table=??(ls_out_lb          ), priority=130  , match=(eth.dst == 00:00:00:00:00:aa && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(ct_lb_mark(backends=172.16.0.101:8080);)
+])
+
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([A backend port with no address at all])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb clear logical_switch_port lport4 addresses
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ct_extract"], [0], [1
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([deferred-nat -- subnets and router ports])
+AT_KEYWORDS([lb deferred-nat])
+ovn_start
+DEFERRED_NAT_SETUP
+
+check ovn-nbctl --wait=sb set load_balancer lb1 options:deferred-nat=true
+
+AS_BOX([New subnet first, backend afterwards])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl ls-add ls2
+check ovn-nbctl lrp-add lr1 lr1-ls2 00:00:01:02:03:05 172.17.0.1/24
+check ovn-nbctl lsp-add-router-port ls2 ls2-lr1 lr1-ls2
+check ovn-nbctl lsp-add ls2 lport5 -- lsp-set-addresses lport5 "00:00:00:00:00:05 172.17.0.101"
+check ovn-nbctl --wait=sb set load_balancer lb1 \
+    vips:'"30.0.0.1:80"'='"172.16.0.101:8080,172.17.0.101:8080"' \
+    ip_port_mappings:172.17.0.101=lport5:192.168.0.99
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(reg4 = select(values=(172.16.0.101,172.17.0.101); group_key="lr1:lb1:30.0.0.1:80");)
+  table=??(lr_in_dnat         ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(next;)
+  table=??(lr_in_ip_routing   ), priority=3096 , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80 && reg4 == 172.16.0.101), action=(ip.ttl--; reg8[[0..15]] = 0; reg0 = 172.16.0.101; reg5 = 172.16.0.1; eth.src = 00:00:01:02:03:04; outport = "lr1-ls1"; reg9[[9]] = 1; flags.loopback = 1; next;)
+  table=??(lr_in_ip_routing   ), priority=3096 , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80 && reg4 == 172.17.0.101), action=(ip.ttl--; reg8[[0..15]] = 0; reg0 = 172.17.0.101; reg5 = 172.17.0.1; eth.src = 00:00:01:02:03:05; outport = "lr1-ls2"; reg9[[9]] = 1; flags.loopback = 1; next;)
+])
+AT_CHECK([deferred_ls_out_flows ls2 30.0.0.1], [0], [dnl
+  table=??(ls_out_lb          ), priority=130  , match=(eth.dst == 00:00:00:00:00:05 && ip4.dst == 30.0.0.1 && tcp.dst == 80), action=(ct_lb_mark(backends=172.17.0.101:8080);)
+])
+AT_CHECK([deferred_ls_lb_flows ls2 30.0.0.1], [0], [dnl
+  table=??(ls_in_pre_stateful ), priority=200  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && inport == "ls2-lr1"), action=(next;)
+])
+
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([Backend first, subnet afterwards])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set load_balancer lb1 \
+    vips:'"30.0.0.1:80"'='"172.16.0.101:8080,172.17.0.101:8080,172.18.0.101:8080"' \
+    ip_port_mappings:172.18.0.101=lport6:192.168.0.99
+
+# Neither ls3 nor lport6 exist yet.
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(reg4 = select(values=(172.16.0.101,172.17.0.101); group_key="lr1:lb1:30.0.0.1:80");)
+  table=??(lr_in_dnat         ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(next;)
+  table=??(lr_in_ip_routing   ), priority=3096 , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80 && reg4 == 172.16.0.101), action=(ip.ttl--; reg8[[0..15]] = 0; reg0 = 172.16.0.101; reg5 = 172.16.0.1; eth.src = 00:00:01:02:03:04; outport = "lr1-ls1"; reg9[[9]] = 1; flags.loopback = 1; next;)
+  table=??(lr_in_ip_routing   ), priority=3096 , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80 && reg4 == 172.17.0.101), action=(ip.ttl--; reg8[[0..15]] = 0; reg0 = 172.17.0.101; reg5 = 172.17.0.1; eth.src = 00:00:01:02:03:05; outport = "lr1-ls2"; reg9[[9]] = 1; flags.loopback = 1; next;)
+])
+
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl ls-add ls3
+check ovn-nbctl lrp-add lr1 lr1-ls3 00:00:01:02:03:06 172.18.0.1/24
+check ovn-nbctl lsp-add-router-port ls3 ls3-lr1 lr1-ls3
+check ovn-nbctl lsp-add ls3 lport6 -- lsp-set-addresses lport6 "00:00:00:00:00:06 172.18.0.101"
+check ovn-nbctl --wait=sb sync
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [3
+])
+AT_CHECK([deferred_ls_out_flows ls3 30.0.0.1 | grep -c "ls_out_lb"], [0], [1
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([Drop a subnet])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lrp-del lr1-ls3
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [2
+])
+AT_CHECK([deferred_ls_out_flows ls3 30.0.0.1 | grep "ls_in_pre_stateful"], [1], [])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([A second router port on the backend switch])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl lr-add lr2
+check ovn-nbctl lrp-add lr2 lr2-ls1 00:00:02:02:03:04 172.16.1.1/24
+check ovn-nbctl --wait=sb lsp-add-router-port ls1 ls1-lr2 lr2-ls1
+
+AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.1 | grep "ls_in_pre_stateful"], [0], [dnl
+  table=??(ls_in_pre_stateful ), priority=200  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && inport == "ls1-lr1"), action=(next;)
+  table=??(ls_in_pre_stateful ), priority=200  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && inport == "ls1-lr2"), action=(next;)
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([Remove the second router port again])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lsp-del ls1-lr2
+
+AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.1 | grep -c "ls_in_pre_stateful"], [0], [1
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([deferred-nat -- health checks])
+AT_KEYWORDS([lb deferred-nat])
+ovn_start
+DEFERRED_NAT_SETUP
+
+check ovn-nbctl --wait=sb set load_balancer lb1 options:deferred-nat=true
+
+AS_BOX([Adding a health check -- backends start out offline])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+AT_CHECK([ovn-nbctl --wait=sb \
+    -- --id=@hc create Load_Balancer_Health_Check vip=30.0.0.1\\:80 \
+    -- add Load_Balancer lb1 health_check @hc | uuidfilt], [0], [<0>
+])
+
+check_engine_compute northd recompute
+wait_row_count Service_Monitor 3 status=offline
+check ovn-nbctl --wait=sb sync
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(drop;)
+])
+AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.1], [0], [dnl
+  table=??(ls_in_pre_stateful ), priority=200  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && inport == "ls1-lr1"), action=(next;)
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([Backends come online])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-sbctl set port_binding lport1 up=true
+check ovn-sbctl set port_binding lport2 up=true
+check ovn-sbctl set port_binding lport3 up=true
+check ovn-sbctl set service_monitor lport1 status=online
+check ovn-sbctl set service_monitor lport2 status=online
+check ovn-sbctl set service_monitor lport3 status=online
+ovn-sbctl list service_monitor
+
+wait_row_count Service_Monitor 3 status=online
+check ovn-nbctl --wait=sb sync
+
+OVS_WAIT_FOR_OUTPUT(
+  [deferred_lr_flows lr1 30.0.0.1 | grep "lr_in_ct_extract"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(reg4 = select(values=(172.16.0.101,172.16.0.102,172.16.0.103); group_key="lr1:lb1:30.0.0.1:80");)
+])
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [3
+])
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1 | grep -c "ls_out_lb"], [0], [3
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([One backend goes offline -- it drops out of the select, the routing and egress flows are unaffected])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-sbctl set service_monitor lport2 status=offline
+wait_row_count Service_Monitor 1 logical_port=lport2 status=offline
+check ovn-nbctl --wait=sb sync
+
+OVS_WAIT_FOR_OUTPUT(
+  [deferred_lr_flows lr1 30.0.0.1 | grep "lr_in_ct_extract"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(reg4 = select(values=(172.16.0.101,172.16.0.103); group_key="lr1:lb1:30.0.0.1:80");)
+])
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [2
+])
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1 | grep -c "ls_out_lb"], [0], [2
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([Every backend goes offline])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-sbctl set service_monitor lport1 status=offline
+check ovn-sbctl set service_monitor lport3 status=offline
+wait_row_count Service_Monitor 3 status=offline
+check ovn-nbctl --wait=sb sync
+
+# Back to the all-offline shape: the select gives way to a drop, and the
+# egress side disappears again, while the per-backend routing/dnat flows
+# stay untouched.
+OVS_WAIT_FOR_OUTPUT(
+  [deferred_lr_flows lr1 30.0.0.1 | grep "lr_in_ct_extract"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(drop;)
+])
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep "lr_in_ip_routing"], [1], [])
+AT_CHECK([deferred_ls_lb_flows ls1 30.0.0.1], [0], [dnl
+  table=??(ls_in_pre_stateful ), priority=200  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && inport == "ls1-lr1"), action=(next;)
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([Backends come back])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-sbctl set service_monitor lport1 status=online
+check ovn-sbctl set service_monitor lport2 status=online
+check ovn-sbctl set service_monitor lport3 status=online
+wait_row_count Service_Monitor 3 status=online
+check ovn-nbctl --wait=sb sync
+
+OVS_WAIT_FOR_OUTPUT(
+  [deferred_lr_flows lr1 30.0.0.1 | grep "lr_in_ct_extract"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(reg4 = select(values=(172.16.0.101,172.16.0.102,172.16.0.103); group_key="lr1:lb1:30.0.0.1:80");)
+])
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [3
+])
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1 | grep -c "ls_out_lb"], [0], [3
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([Removing the health check])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb clear load_balancer lb1 health_check
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep -c "lr_in_ip_routing"], [0], [3
+])
+AT_CHECK([deferred_ls_out_flows ls1 30.0.0.1 | grep -c "ls_out_lb"], [0], [3
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([deferred-nat -- backend outside of the router])
+AT_KEYWORDS([lb deferred-nat])
+ovn_start
+DEFERRED_NAT_SETUP
+
+check ovn-nbctl --wait=sb set load_balancer lb1 options:deferred-nat=true
+
+AS_BOX([A backend on a switch that lr1 cannot reach])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl ls-add ls9
+check ovn-nbctl lr-add lr9
+check ovn-nbctl lrp-add lr9 lr9-ls9 00:00:09:02:03:04 172.19.0.1/24
+check ovn-nbctl lsp-add-router-port ls9 ls9-lr9 lr9-ls9
+check ovn-nbctl lsp-add ls9 lport9 -- lsp-set-addresses lport9 "00:00:00:00:00:09 172.19.0.101"
+check ovn-nbctl --wait=sb set load_balancer lb1 \
+    vips:'"30.0.0.1:80"'='"172.16.0.101:8080,172.19.0.101:8080"' \
+    ip_port_mappings:172.19.0.101=lport9:192.168.0.99
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep "lr_in_ct_extract"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(reg4 = 172.16.0.101; next;)
+])
+AT_CHECK([deferred_ls_out_flows ls9 30.0.0.1], [0], [])
+AT_CHECK([deferred_ls_lb_flows ls9 30.0.0.1], [0], [])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([Connect that switch to lr1 as well])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl lrp-add lr1 lr1-ls9 00:00:01:02:03:09 172.19.0.2/24
+check ovn-nbctl --wait=sb lsp-add-router-port ls9 ls9-lr1 lr1-ls9
+
+AT_CHECK([deferred_lr_flows lr1 30.0.0.1 | grep "lr_in_ct_extract"], [0], [dnl
+  table=??(lr_in_ct_extract   ), priority=130  , match=(ip4 && ip4.dst == 30.0.0.1 && tcp && tcp.dst == 80), action=(reg4 = select(values=(172.16.0.101,172.19.0.101); group_key="lr1:lb1:30.0.0.1:80");)
+])
+
+# Check ingress skip lflow is installed for both: lr1 and lr9 router ports
+AT_CHECK([deferred_ls_lb_flows ls9 30.0.0.1 | grep "ls_in_pre_stateful"], [0], [dnl
+  table=??(ls_in_pre_stateful ), priority=200  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && inport == "ls9-lr1"), action=(next;)
+  table=??(ls_in_pre_stateful ), priority=200  , match=(ip4.dst == 30.0.0.1 && tcp.dst == 80 && inport == "ls9-lr9"), action=(next;)
+])
+
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
 OVN_CLEANUP_NORTHD
 AT_CLEANUP
