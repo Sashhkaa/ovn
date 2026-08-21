@@ -181,7 +181,7 @@ parse_ip_port_mapping_optional_params(char *fields, const char *mapping,
 /*
  * Parses ip_port_mappings in the format :
  * "ip:logical_port[:src_ip][:protocol:port][:az_name]".
- * src_ip parameter is optional when distributed mode is enabled,
+ * src_ip parameter is optional in distributed/deferred-nat mode,
  * without health checks configured. Protocol and port override
  * the protocol and the port used by health checks.
  * If az_name is present and non-empty, it indicates this is a
@@ -195,7 +195,7 @@ ovn_lb_vip_backends_ip_port_mappings_init(const struct ovn_northd_lb *lb,
 {
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
     struct ds key = DS_EMPTY_INITIALIZER;
-    bool allow_without_src_ip = lb->is_distributed
+    bool allow_without_src_ip = (lb->is_distributed || lb->is_deferred_nat)
                                 && !lb_vip_nb->lb_health_check;
 
     for (size_t j = 0; j < vector_len(&lb_vip->backends); j++) {
@@ -295,6 +295,7 @@ init_backend:
                           ? lb->nlb->protocol : "tcp";
         }
         backend_nb->svc_mon_protocol = xstrdup(hc_protocol);
+        backend_nb->deferred_nat_backend = lb->is_deferred_nat;
 cleanup:
         free(port_name);
     }
@@ -418,6 +419,13 @@ validate_snap_ip_address(const char *snat_ip)
     return ip_parse(snat_ip, &ip);
 }
 
+static bool
+lb_vip_needs_port_mappings(const struct ovn_northd_lb *lb)
+{
+    return lb->health_checks || lb->is_distributed
+           || lb->is_deferred_nat;
+}
+
 static void
 ovn_northd_lb_init(struct ovn_northd_lb *lb,
                    const struct nbrec_load_balancer *nbrec_lb)
@@ -469,6 +477,8 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
 
     lb->is_distributed = smap_get_bool(&nbrec_lb->options, "distributed",
                                        false);
+    lb->is_deferred_nat = smap_get_bool(&nbrec_lb->options, "deferred-nat",
+                                        false);
 
     sset_init(&lb->ips_v4);
     sset_init(&lb->ips_v6);
@@ -509,7 +519,7 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
         }
         n_vips++;
 
-        if (lb_vip_nb->lb_health_check || lb->is_distributed) {
+        if (lb_vip_needs_port_mappings(lb)) {
             ovn_lb_vip_backends_ip_port_mappings_init(lb, lb_vip, lb_vip_nb);
         }
     }
