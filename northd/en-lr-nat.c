@@ -349,12 +349,12 @@ lr_nat_entry_set_dgw_port(const struct ovn_datapath *od,
      * satisfies the conditions for distributed NAT processing. */
     nat_entry->is_distributed = false;
 
-    /* NAT cannnot be distributed if the DGP's peer
-     * has a chassisredirect port (as the routing is centralized
-     * on the gateway chassis for the DGP's networks/subnets.)
-     */
+    /* On a router with a single DGP, NAT cannot be distributed if the
+     * DGP's peer has a chassisredirect port, as routing for the DGP's
+     * networks/subnets is centralized on the gateway chassis. */
     struct ovn_port *l3dgw_port = nat_entry->l3dgw_port;
-    if (l3dgw_port && lrp_has_centralized_routing(l3dgw_port)) {
+    if (l3dgw_port && lrp_has_centralized_routing(l3dgw_port)
+        && vector_len(&od->l3dgw_ports) == 1) {
         return true;
     }
 

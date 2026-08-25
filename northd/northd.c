@@ -1834,8 +1834,7 @@ create_cr_port(struct ovn_port *op, struct hmap *ports,
  *     - op is excluded from centralized routing, in which case the
  *       chassis resident port is not used for routing, but ovn-controller
  *       still needs it to add the router to its local datapaths, or
- *     - op is the only distributed gateway port attached to its router
- *       and op's peer logical switch has no localnet ports.
+ *     - op's peer logical switch has no localnet ports.
  */
 static bool
 peer_needs_cr_port_creation(struct ovn_port *op)
@@ -1849,8 +1848,7 @@ peer_needs_cr_port_creation(struct ovn_port *op)
         return true;
     }
 
-    return vector_len(&op->od->l3dgw_ports) == 1 &&
-           !ls_has_localnet_port(op->peer->od);
+    return !ls_has_localnet_port(op->peer->od);
 }
 
 static void
