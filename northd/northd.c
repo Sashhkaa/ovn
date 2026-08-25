@@ -1868,8 +1868,7 @@ peer_needs_cr_port_creation(struct ovn_port *op)
         return true;
     }
 
-    return vector_len(&op->od->l3dgw_ports) == 1 &&
-           !ls_has_localnet_port(op->peer->od);
+    return !ls_has_localnet_port(op->peer->od);
 }
 
 static void

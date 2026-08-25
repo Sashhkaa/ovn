@@ -354,7 +354,8 @@ lr_nat_entry_set_dgw_port(const struct ovn_datapath *od,
      * on the gateway chassis for the DGP's networks/subnets.)
      */
     struct ovn_port *l3dgw_port = nat_entry->l3dgw_port;
-    if (l3dgw_port && lrp_has_centralized_routing(l3dgw_port)) {
+    if (l3dgw_port && lrp_has_centralized_routing(l3dgw_port)
+        && vector_len(&od->l3dgw_ports) == 1) {
         return true;
     }
 
