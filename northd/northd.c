@@ -1835,7 +1835,7 @@ static bool
 peer_needs_cr_port_creation(struct ovn_port *op)
 {
     if ((op->nbrp->n_gateway_chassis || op->nbrp->ha_chassis_group)
-        && vector_len(&op->od->l3dgw_ports) == 1 && op->peer && op->peer->nbsp
+        && op->peer && op->peer->nbsp
         && !ls_has_localnet_port(op->peer->od)) {
         return true;
     }
