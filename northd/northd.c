@@ -4291,6 +4291,9 @@ sync_pb_for_lrp(struct ovn_port *op,
         if (always_redirect) {
             smap_add(&new, "always-redirect", "true");
         }
+        if (lrp_has_no_centralized_routing_option(op)) {
+            smap_add(&new, "no-centralized-routing", "true");
+        }
     } else {
         if (op->peer) {
             smap_add(&new, "peer", op->peer->key);
@@ -4301,9 +4304,6 @@ sync_pb_for_lrp(struct ovn_port *op,
             if (op->cr_port && (op->nbrp->ha_chassis_group ||
                 op->nbrp->n_gateway_chassis)) {
                 smap_add(&new, "chassis-redirect-port", op->cr_port->key);
-            }
-            if (lrp_has_no_centralized_routing_option(op)) {
-                smap_add(&new, "no-centralized-routing", "true");
             }
         }
         if (chassis_name) {
