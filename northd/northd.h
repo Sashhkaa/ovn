@@ -833,4 +833,12 @@ is_vxlan_mode(const struct smap *nb_options,
 
 uint32_t get_ovn_max_dp_key_local(bool _vxlan_mode);
 
+static inline bool
+lrp_has_no_centralized_routing_option(const struct ovn_port *router_op)
+{
+    return router_op && router_op->nbrp &&
+           smap_get_bool(&router_op->nbrp->options,
+                         "no-centralized-routing", false);
+}
+
 #endif /* NORTHD_H */
