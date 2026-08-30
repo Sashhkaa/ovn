@@ -4291,9 +4291,6 @@ sync_pb_for_lrp(struct ovn_port *op,
         if (always_redirect) {
             smap_add(&new, "always-redirect", "true");
         }
-        if (lrp_has_no_centralized_routing_option(op)) {
-            smap_add(&new, "no-centralized-routing", "true");
-        }
     } else {
         if (op->peer) {
             smap_add(&new, "peer", op->peer->key);
@@ -4360,6 +4357,10 @@ sync_pb_for_lrp(struct ovn_port *op,
     const char *ipv6_pd_list = smap_get(&op->sb->options, "ipv6_ra_pd_list");
     if (ipv6_pd_list) {
         smap_add(&new, "ipv6_ra_pd_list", ipv6_pd_list);
+    }
+
+    if (!is_cr_port(op) && lrp_has_no_centralized_routing_option(op)) {
+        smap_add(&new, "no-centralized-routing", "true");
     }
 
     sbrec_port_binding_set_options(op->sb, &new);
