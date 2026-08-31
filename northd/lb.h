@@ -76,6 +76,10 @@ struct ovn_northd_lb {
     /* Indicates if the load balancer has health checks configured. */
     bool health_checks;
 
+    /* If true, and all the health checked backends of a VIP are down, all
+     * of them are used instead of dropping (or rejecting) the traffic. */
+    bool fail_open;
+
     /* Indicates if distributed option is enabled for load balancer. */
     bool is_distributed;
 

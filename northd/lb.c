@@ -402,6 +402,7 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
                                        false);
     lb->is_deferred_nat = smap_get_bool(&nbrec_lb->options, "deferred-nat",
                                         false);
+    lb->fail_open = smap_get_bool(&nbrec_lb->options, "fail_open", false);
 
     sset_init(&lb->ips_v4);
     sset_init(&lb->ips_v6);
