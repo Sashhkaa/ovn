@@ -2775,6 +2775,16 @@
         SB controller event for this load balancer.
       </column>
 
+      <column name="options" key="fail_open" type='{"type": "boolean"}'>
+        If set to <code>true</code>, and health checks are configured for a
+        VIP of this load balancer, traffic is load balanced to all the
+        backends of that VIP whenever all of them are detected as down,
+        instead of being dropped (or rejected, if the <code>reject</code>
+        option is set).  As soon as at least one backend is detected as
+        online again, only the online backends are used.  This option has no
+        effect on VIPs without health checks.
+      </column>
+
       <column name="options" key="hairpin_snat_ip">
         IP to be used as source IP for packets that have been hair-pinned
         after load balancing.  The default behavior when the option is not set

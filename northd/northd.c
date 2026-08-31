@@ -3598,6 +3598,55 @@ backend_is_available(const struct ovn_northd_lb *lb,
            false : true;
 }
 
+static size_t
+build_lb_vip_backends(const struct ovn_northd_lb *lb,
+                      const struct ovn_lb_vip *lb_vip,
+                      const struct ovn_northd_lb_vip *lb_vip_nb,
+                      struct ds *action,
+                      const struct svc_monitors_map_data *svc_mons_data,
+                      bool ignore_health_status)
+{
+    const struct ovn_lb_backend *backend;
+    size_t n_backends = 0;
+    size_t i = 0;
+
+    VECTOR_FOR_EACH_PTR (&lb_vip->backends, backend) {
+        struct ovn_northd_lb_backend *backend_nb =
+            &lb_vip_nb->backends_nb[i++];
+        bool ipv6_backend = !IN6_IS_ADDR_V4MAPPED(&backend->ip);
+
+        /* XXX: Remove these checks: by changing the iteration
+         * only for selected backends. */
+        if (lb_vip_nb->lb_health_check &&
+            !backend_nb->health_check) {
+            continue;
+        }
+
+        if (lb->is_distributed &&
+            !backend_nb->distributed_backend) {
+            continue;
+        }
+
+        if (!ignore_health_status && backend_nb->health_check &&
+            !backend_is_available(lb,
+                                  backend,
+                                  backend_nb,
+                                  svc_mons_data)) {
+            continue;
+        }
+
+        if (backend_nb->distributed_backend) {
+            ds_put_format(action, "\"%s\":", backend_nb->logical_port);
+        }
+        ds_put_format(action,
+                      ipv6_backend ? "[%s]:%"PRIu16"," : "%s:%"PRIu16",",
+                      backend->ip_str, backend->port);
+        n_backends++;
+    }
+
+    return n_backends;
+}
+
 static bool
 build_lb_vip_actions(const struct ovn_northd_lb *lb,
                      const struct ovn_lb_vip *lb_vip,
@@ -3628,41 +3677,21 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
                   : "ct_lb_mark(backends=");
 
     if (lb_vip_nb->lb_health_check || lb->is_distributed) {
-        size_t i = 0;
-        size_t n_active_backends = 0;
-        const struct ovn_lb_backend *backend;
-        VECTOR_FOR_EACH_PTR (&lb_vip->backends, backend) {
-            struct ovn_northd_lb_backend *backend_nb =
-                &lb_vip_nb->backends_nb[i++];
-            bool ipv6_backend = !IN6_IS_ADDR_V4MAPPED(&backend->ip);
+        size_t backends_start = action->length;
+        size_t n_active_backends =
+            build_lb_vip_backends(lb, lb_vip, lb_vip_nb, action,
+                                  svc_mons_data, false);
 
-            /* XXX: Remove these checks: by changing the iteration
-             * only for selected backends. */
-            if (lb_vip_nb->lb_health_check &&
-                !backend_nb->health_check) {
-                continue;
-            }
-
-            if (lb->is_distributed &&
-                !backend_nb->distributed_backend) {
-                continue;
-            }
-
-            if (backend_nb->health_check &&
-                !backend_is_available(lb,
-                                      backend,
-                                      backend_nb,
-                                      svc_mons_data)) {
-                continue;
-            }
-
-            if (backend_nb->distributed_backend) {
-                ds_put_format(action, "\"%s\":", backend_nb->logical_port);
-            }
-            ds_put_format(action,
-                          ipv6_backend ? "[%s]:%"PRIu16"," : "%s:%"PRIu16",",
-                          backend->ip_str, backend->port);
-            n_active_backends++;
+        /* If all the health checked backends are down and "fail_open" is
+         * enabled, use all of them instead of dropping (or rejecting) the
+         * traffic.  As soon as at least one backend is reported online
+         * again only the online ones are used. */
+        if (!n_active_backends && lb->fail_open
+            && lb_vip_nb->lb_health_check) {
+            ds_truncate(action, backends_start);
+            n_active_backends =
+                build_lb_vip_backends(lb, lb_vip, lb_vip_nb, action,
+                                      svc_mons_data, true);
         }
         ds_chomp(action, ',');
 

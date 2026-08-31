@@ -104,10 +104,15 @@ OVN v26.09.0 - xxx xx xxxx
      where routing for such a port has to stay distributed. Note that the
      router must not perform stateful processing (stateful NAT or load
      balancing) for that port.  See ovn-nb(5) for more information.
-    - Logical_Router_Port: Added a new
-      "options:dynamic-routing-advertise-prefixes" key that contains an
-      explicit list of prefixes to be advertised via this port.  If it is
-      set, only these prefixes will be announced.
+   - Logical_Router_Port: Added a new
+     "options:dynamic-routing-advertise-prefixes" key that contains an
+     explicit list of prefixes to be advertised via this port.  If it is
+     set, only these prefixes will be announced.
+   - Added a new "options:fail_open" key to the Load_Balancer table.  If set
+     to true and all the health checked backends of a VIP are detected as
+     down, traffic is load balanced to all of them instead of being dropped
+     (or rejected).  As soon as at least one backend is online again, only
+     the online backends are used.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
