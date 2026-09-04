@@ -108,6 +108,11 @@ OVN v26.09.0 - xxx xx xxxx
       "options:dynamic-routing-advertise-prefixes" key that contains an
       explicit list of prefixes to be advertised via this port.  If it is
       set, only these prefixes will be announced.
+   - Documented the "virtual gateway" setup, in which several ovn-controller
+     instances share one chassis name and one anycast encapsulation IP
+     reachable over the underlay through ECMP, so that they appear to OVN as
+     a single chassis. See Documentation/topics/virtual-gateway.rst for the
+     requirements and the restrictions.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
