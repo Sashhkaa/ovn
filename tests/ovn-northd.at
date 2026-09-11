@@ -25012,3 +25012,74 @@ CHECK_NO_CHANGE_AFTER_RECOMPUTE
 OVN_CLEANUP_NORTHD
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([ICMPv4 redirect])
+ovn_start
+
+check ovn-nbctl lr-add lr1
+check ovn-nbctl lrp-add lr1 lrp0 00:00:00:00:00:01 192.168.1.1/24
+check ovn-nbctl lrp-add lr1 lrp1 00:00:00:00:00:02 10.0.0.1/24 10.0.1.1/24
+check ovn-nbctl --wait=sb lrp-add lr1 lrp2 00:00:00:00:00:03 2001:db8::1/64
+
+# Off by default.
+AT_CHECK([ovn-sbctl lflow-list | grep "lr_in_icmp_redirect" | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_icmp_redirect), priority=0    , match=(1), action=(next;)
+])
+AT_CHECK([ovn-sbctl lflow-list | grep "lr_in_ip_routing_pre" | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_ip_routing_pre), priority=0    , match=(1), action=(reg7 = 0; next;)
+])
+
+# Enabled per router port.
+check ovn-nbctl --wait=sb set logical_router_port lrp1 options:icmp_redirect=true
+AT_CHECK([ovn-sbctl lflow-list | grep "lr_in_icmp_redirect" | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_icmp_redirect), priority=0    , match=(1), action=(next;)
+  table=??(lr_in_icmp_redirect), priority=100  , match=(inport == "lrp1" && outport == "lrp1" && ip4 && ip4.src == 10.0.0.0/24 && reg0 == 10.0.0.0/24 && !ip.later_frag), action=(icmp4_redirect {eth.dst = xreg1[[0..47]]; eth.src = 00:00:00:00:00:02; ip4.dst = ip4.src; ip4.src = 10.0.0.1; ip.ttl = 254; outport = "lrp1"; flags.loopback = 1; output; }; next;)
+  table=??(lr_in_icmp_redirect), priority=100  , match=(inport == "lrp1" && outport == "lrp1" && ip4 && ip4.src == 10.0.1.0/24 && reg0 == 10.0.1.0/24 && !ip.later_frag), action=(icmp4_redirect {eth.dst = xreg1[[0..47]]; eth.src = 00:00:00:00:00:02; ip4.dst = ip4.src; ip4.src = 10.0.1.1; ip.ttl = 254; outport = "lrp1"; flags.loopback = 1; output; }; next;)
+  table=??(lr_in_icmp_redirect), priority=110  , match=(inport == "lrp1" && icmp4.type == 5), action=(next;)
+  table=??(lr_in_icmp_redirect), priority=110  , match=(ip4 && ip4.dst == 10.0.0.0/24), action=(next;)
+  table=??(lr_in_icmp_redirect), priority=110  , match=(ip4 && ip4.dst == 10.0.1.0/24), action=(next;)
+])
+
+# The original eth.src is saved only on ports with the option enabled.
+AT_CHECK([ovn-sbctl lflow-list | grep "lr_in_ip_routing_pre" | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_ip_routing_pre), priority=0    , match=(1), action=(reg7 = 0; next;)
+  table=??(lr_in_ip_routing_pre), priority=100  , match=(inport == "lrp1"), action=(xreg1[[0..47]] = eth.src; reg7 = 0; next;)
+])
+
+# Together with a route table.
+check ovn-nbctl --wait=sb set logical_router_port lrp1 options:route_table=rtb1
+AT_CHECK([ovn-sbctl lflow-list | grep "lr_in_ip_routing_pre" | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_ip_routing_pre), priority=0    , match=(1), action=(reg7 = 0; next;)
+  table=??(lr_in_ip_routing_pre), priority=100  , match=(inport == "lrp1"), action=(xreg1[[0..47]] = eth.src; reg7 = 1; next;)
+])
+check ovn-nbctl --wait=sb remove logical_router_port lrp1 options route_table
+
+check ovn-nbctl --wait=sb set logical_router_port lrp0 options:icmp_redirect=true
+check ovn-nbctl --wait=sb set logical_router_port lrp2 options:icmp_redirect=true
+AT_CHECK([ovn-sbctl lflow-list | grep "lr_in_icmp_redirect" | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_icmp_redirect), priority=0    , match=(1), action=(next;)
+  table=??(lr_in_icmp_redirect), priority=100  , match=(inport == "lrp0" && outport == "lrp0" && ip4 && ip4.src == 192.168.1.0/24 && reg0 == 192.168.1.0/24 && !ip.later_frag), action=(icmp4_redirect {eth.dst = xreg1[[0..47]]; eth.src = 00:00:00:00:00:01; ip4.dst = ip4.src; ip4.src = 192.168.1.1; ip.ttl = 254; outport = "lrp0"; flags.loopback = 1; output; }; next;)
+  table=??(lr_in_icmp_redirect), priority=100  , match=(inport == "lrp1" && outport == "lrp1" && ip4 && ip4.src == 10.0.0.0/24 && reg0 == 10.0.0.0/24 && !ip.later_frag), action=(icmp4_redirect {eth.dst = xreg1[[0..47]]; eth.src = 00:00:00:00:00:02; ip4.dst = ip4.src; ip4.src = 10.0.0.1; ip.ttl = 254; outport = "lrp1"; flags.loopback = 1; output; }; next;)
+  table=??(lr_in_icmp_redirect), priority=100  , match=(inport == "lrp1" && outport == "lrp1" && ip4 && ip4.src == 10.0.1.0/24 && reg0 == 10.0.1.0/24 && !ip.later_frag), action=(icmp4_redirect {eth.dst = xreg1[[0..47]]; eth.src = 00:00:00:00:00:02; ip4.dst = ip4.src; ip4.src = 10.0.1.1; ip.ttl = 254; outport = "lrp1"; flags.loopback = 1; output; }; next;)
+  table=??(lr_in_icmp_redirect), priority=110  , match=(inport == "lrp0" && icmp4.type == 5), action=(next;)
+  table=??(lr_in_icmp_redirect), priority=110  , match=(inport == "lrp1" && icmp4.type == 5), action=(next;)
+  table=??(lr_in_icmp_redirect), priority=110  , match=(ip4 && ip4.dst == 10.0.0.0/24), action=(next;)
+  table=??(lr_in_icmp_redirect), priority=110  , match=(ip4 && ip4.dst == 10.0.1.0/24), action=(next;)
+  table=??(lr_in_icmp_redirect), priority=110  , match=(ip4 && ip4.dst == 192.168.1.0/24), action=(next;)
+])
+
+check ovn-nbctl --wait=sb set logical_router_port lrp0 options:icmp_redirect=false
+check ovn-nbctl --wait=sb remove logical_router_port lrp1 options icmp_redirect
+AT_CHECK([ovn-sbctl lflow-list | grep "lr_in_icmp_redirect" | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_icmp_redirect), priority=0    , match=(1), action=(next;)
+])
+AT_CHECK([ovn-sbctl lflow-list | grep "lr_in_ip_routing_pre" | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_ip_routing_pre), priority=0    , match=(1), action=(reg7 = 0; next;)
+  table=??(lr_in_ip_routing_pre), priority=100  , match=(inport == "lrp2"), action=(xreg1[[0..47]] = eth.src; reg7 = 0; next;)
+])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+

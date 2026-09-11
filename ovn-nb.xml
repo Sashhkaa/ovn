@@ -5240,6 +5240,27 @@ or
           is, plain routing and stateless NAT only.
         </p>
       </column>
+
+      <column name="options" key="icmp_redirect"
+              type='{"type": "boolean"}'>
+        <p>
+          If set to <code>true</code>, the router sends an ICMPv4 Redirect to
+          the source of a packet that arrived on this port and is forwarded
+          back out of it, provided that the source and the next hop are on
+          the same network of the port. The Redirect names the next hop as
+          the better first hop; the packet itself is still forwarded.
+          No Redirect is sent when the next hop is the source of the packet
+          or when the packet is itself an ICMP Redirect.
+        </p>
+        <p>
+          No Redirect is sent when the destination itself belongs to one of
+          the networks of this port: a Redirect always points to another
+          router, never to the destination host for now.
+        </p>
+        <p>
+          It is <code>false</code> by default.
+        </p>
+      </column>
     </group>
 
     <group title="Attachment">

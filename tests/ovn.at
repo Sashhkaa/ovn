@@ -47232,3 +47232,40 @@ check ovn-nbctl --wait=hv lsp-set-type down_ext localnet
 OVN_CLEANUP([hv1],[hv2])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([ICMPv4 redirect - ovn-trace])
+ovn_start
+
+check ovn-nbctl lr-add lr1
+check ovn-nbctl lrp-add lr1 lrp0 00:00:00:00:00:01 10.0.0.1/24
+check ovn-nbctl lrp-set-options lrp0 icmp_redirect=true
+check ovn-nbctl ls-add sw1
+check ovn-nbctl lsp-add-router-port sw1 sw-lr1 lrp0
+check ovn-nbctl lsp-add sw1 sw1-lport1
+check ovn-nbctl lsp-set-addresses sw1-lport1 "00:00:00:00:00:10 10.0.0.10"
+
+# A better first hop for 172.16.0.0/24 sits on the same segment as the VM.
+check ovn-nbctl --wait=sb lr-route-add lr1 172.16.0.0/24 10.0.0.80
+
+AT_CHECK([ovn-trace lr1 'inport == "lrp0" && eth.src == 00:00:00:00:00:10 && eth.dst == 00:00:00:00:00:01 && ip4.src == 10.0.0.10 && ip4.dst == 172.16.0.5 && ip.ttl == 64 && icmp4.type == 8' | \
+         grep -c "icmp4_redirect: gw = 10.0.0.80"], [0], [dnl
+1
+])
+
+# No Redirect in reply to a Redirect.
+AT_CHECK([ovn-trace lr1 'inport == "lrp0" && eth.src == 00:00:00:00:00:10 && eth.dst == 00:00:00:00:00:01 && ip4.src == 10.0.0.10 && ip4.dst == 172.16.0.5 && ip.ttl == 64 && icmp4.type == 5' | \
+          grep -c "icmp4_redirect"], [1], [dnl
+0
+])
+
+# No Redirect to the next hop itself.
+AT_CHECK([ovn-trace lr1 'inport == "lrp0" && eth.src == 00:00:00:00:00:80 && eth.dst == 00:00:00:00:00:01 && ip4.src == 10.0.0.80 && ip4.dst == 172.16.0.5 && ip.ttl == 64 && icmp4.type == 8' | \
+          grep -c "icmp4_redirect: suppressed, next hop 10.0.0.80 is the source"], [0], [dnl
+1
+])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
