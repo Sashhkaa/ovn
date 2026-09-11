@@ -143,6 +143,7 @@ struct collector_set_ids;
     OVNACT(CHK_EVPN_ARP,      ovnact_chk_evpn_arp)    \
     OVNACT(NF_LEARN_ORIG_INPORT,  ovnact_nf_learn)    \
     OVNACT(NF_LOOKUP_ORIG_INPORT, ovnact_nf_lookup)   \
+    OVNACT(ICMP4_REDIRECT,    ovnact_nest)            \
 
 /* enum ovnact_type, with a member OVNACT_<ENUM> for each action. */
 enum OVS_PACKED_ENUM ovnact_type {
@@ -859,7 +860,15 @@ OVNACTS
      * Arguments follow the action_header, in this format:
      *   - The 32-bit IPv4 address.
      */                                                                       \
-    ACTION_OPCODE(PUT_ICMP4_INNER_IP4_SRC)
+    ACTION_OPCODE(PUT_ICMP4_INNER_IP4_SRC)                                    \
+                                                                              \
+    /* "icmp4_redirect { ...actions... }".
+     *
+     * The actions, in OpenFlow 1.3 format, follow the action_header. The
+     * address of the better first hop is taken from reg0, where the logical
+     * router pipeline leaves the resolved next hop.
+     */                                                                       \
+    ACTION_OPCODE(ICMP4_REDIRECT)
 
 
 enum action_opcode {
