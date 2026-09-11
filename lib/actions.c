@@ -1935,6 +1935,12 @@ parse_ICMP4(struct action_context *ctx)
 }
 
 static void
+parse_ICMP4_REDIRECT(struct action_context *ctx)
+{
+    parse_nested_action(ctx, OVNACT_ICMP4_REDIRECT, "ip4", ctx->scope);
+}
+
+static void
 parse_ICMP4_ERROR(struct action_context *ctx)
 {
     parse_nested_action(ctx, OVNACT_ICMP4_ERROR, "ip4", ctx->scope);
@@ -2013,6 +2019,12 @@ static void
 format_ICMP4(const struct ovnact_nest *nest, struct ds *s)
 {
     format_nested_action(nest, "icmp4", s);
+}
+
+static void
+format_ICMP4_REDIRECT(const struct ovnact_nest *nest, struct ds *s)
+{
+    format_nested_action(nest, "icmp4_redirect", s);
 }
 
 static void
@@ -2116,6 +2128,7 @@ is_paused_nested_action(enum action_opcode opcode)
     case ACTION_OPCODE_PUT_ND_RA_OPTS:
     case ACTION_OPCODE_ICMP:
     case ACTION_OPCODE_ICMP4_ERROR:
+    case ACTION_OPCODE_ICMP4_REDIRECT:
     case ACTION_OPCODE_ICMP6_ERROR:
     case ACTION_OPCODE_TCP_RESET:
     case ACTION_OPCODE_SCTP_ABORT:
@@ -2180,6 +2193,14 @@ encode_ICMP4(const struct ovnact_nest *on,
              struct ofpbuf *ofpacts)
 {
     encode_nested_actions(on, ep, ACTION_OPCODE_ICMP, ofpacts);
+}
+
+static void
+encode_ICMP4_REDIRECT(const struct ovnact_nest *on,
+                      const struct ovnact_encode_params *ep,
+                      struct ofpbuf *ofpacts)
+{
+    encode_nested_actions(on, ep, ACTION_OPCODE_ICMP4_REDIRECT, ofpacts);
 }
 
 static void
@@ -6394,6 +6415,8 @@ parse_action(struct action_context *ctx)
         parse_CLONE(ctx);
     } else if (lexer_match_id(ctx->lexer, "arp")) {
         parse_ARP(ctx);
+    } else if (lexer_match_id(ctx->lexer, "icmp4_redirect")) {
+        parse_ICMP4_REDIRECT(ctx);
     } else if (lexer_match_id(ctx->lexer, "icmp4")) {
         parse_ICMP4(ctx);
     } else if (lexer_match_id(ctx->lexer, "icmp4_error")) {
