@@ -1701,7 +1701,7 @@ static void
 pinctrl_handle_icmp(struct rconn *swconn, const struct flow *ip_flow,
                     struct dp_packet *pkt_in,
                     const struct match *md, struct ofpbuf *userdata,
-                    bool set_icmp_code, bool loopback)
+                    bool set_icmp_code, bool loopback, bool redirect)
 {
     enum ofp_version version = rconn_get_version(swconn);
 
@@ -1713,6 +1713,14 @@ pinctrl_handle_icmp(struct rconn *swconn, const struct flow *ip_flow,
         VLOG_WARN_RL(&rl,
                      "ICMP action on non-IP packet (eth_type 0x%"PRIx16")",
                      ntohs(ip_flow->dl_type));
+        return;
+    }
+
+    /* Northd decides whether a packet deserves an ICMP Redirect, but one of
+     * the conditions - that the next hop is not the source of the packet -
+     * compares two run-time values, which the logical flow match language
+     * cannot express. So check it here instead. */
+    if (redirect && htonl(md->flow.regs[0]) == ip_flow->nw_src) {
         return;
     }
 
@@ -1784,10 +1792,18 @@ pinctrl_handle_icmp(struct rconn *swconn, const struct flow *ip_flow,
         void *data = ih + 1;
         memcpy(data, in_ip, in_ip_len);
 
-        ovs_be16 *mtu = ofpacts_get_ovn_field(&ofpacts, OVN_ICMP4_FRAG_MTU);
-        if (mtu) {
-            ih->icmp_fields.frag.mtu = *mtu;
-            ih->icmp_code = 4;
+        if (redirect) {
+            put_16aligned_be32(&ih->icmp_fields.gateway,
+                               htonl(md->flow.regs[0]));
+            ih->icmp_type = ICMP4_REDIRECT;
+            ih->icmp_code = 1;
+        } else {
+            ovs_be16 *mtu = ofpacts_get_ovn_field(&ofpacts,
+                                                  OVN_ICMP4_FRAG_MTU);
+            if (mtu) {
+                ih->icmp_fields.frag.mtu = *mtu;
+                ih->icmp_code = 4;
+            }
         }
 
         ih->icmp_csum = 0;
@@ -2072,7 +2088,8 @@ pinctrl_handle_reject(struct rconn *swconn, const struct flow *ip_flow,
     } else if (ip_flow->nw_proto == IPPROTO_SCTP) {
         pinctrl_handle_sctp_abort(swconn, ip_flow, pkt_in, md, userdata, true);
     } else {
-        pinctrl_handle_icmp(swconn, ip_flow, pkt_in, md, userdata, true, true);
+        pinctrl_handle_icmp(swconn, ip_flow, pkt_in, md, userdata, true, true,
+                            false);
     }
 }
 
@@ -3855,13 +3872,18 @@ process_packet_in(struct rconn *swconn, const struct ofp_header *msg)
 
     case ACTION_OPCODE_ICMP:
         pinctrl_handle_icmp(swconn, &headers, &packet, &pin.flow_metadata,
-                            &userdata, true, false);
+                            &userdata, true, false, false);
+        break;
+
+    case ACTION_OPCODE_ICMP4_REDIRECT:
+        pinctrl_handle_icmp(swconn, &headers, &packet, &pin.flow_metadata,
+                            &userdata, false, false, true);
         break;
 
     case ACTION_OPCODE_ICMP4_ERROR:
     case ACTION_OPCODE_ICMP6_ERROR:
         pinctrl_handle_icmp(swconn, &headers, &packet, &pin.flow_metadata,
-                            &userdata, false, false);
+                            &userdata, false, false, false);
         break;
 
     case ACTION_OPCODE_TCP_RESET:
