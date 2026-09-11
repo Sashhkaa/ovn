@@ -231,6 +231,12 @@ BUILD_ASSERT_DECL(ACL_OBS_STAGE_MAX < (1 << 2));
 #define REG_SRC_IPV4 "reg5"
 #define REG_SRC_IPV6 "xxreg1"
 #define REG_DHCP_RELAY_DIP_IPV4 "reg2"
+
+/* Register that holds the Ethernet source address of the packet as received.
+ * Must be saved, since routing will overwrite eth.src with the egress router
+ * port's address. Read back when building the ICMP redirect packet. Only set
+ * in IP_ROUTING_PRE for ports with options:icmp_redirect=true. */
+#define REG_ORIG_ETH_SRC "xreg1[0..47]"
 #define REG_POLICY_CHAIN_ID "reg9[16..31]"
 #define REG_ROUTE_TABLE_ID "reg7"
 
@@ -339,9 +345,9 @@ static const char *reg_ct_state[] = {
  * +-----+---------------------------+---+-----------------+---+------------------------------------+
  * | R2  |  REG_DHCP_RELAY_DIP_IPV4  |   |                 | 0 |                                    |
  * |     |       REG_LB_PORT         | X |                 | 0 |                                    |
- * |     | (>= IN_LB_AFF_CHECK       | R |                 |   |                                    |
- * |     |  <= IN_LB_AFF_LEARN)      | E |                 |   |                                    |
- * +-----+---------------------------+ G |     UNUSED      |   |                                    |
+ * |     | (>= IN_LB_AFF_CHECK       | R | REG_ORIG_ETH_SRC|   |                                    |
+ * |     |  <= IN_LB_AFF_LEARN)      | E | (>= IP_ROUTING_ |   |                                    |
+ * +-----+---------------------------+ G |PRE <= ICMP_RED)|   |                                    |
  * | R3  |        UNUSED             | 1 |                 |   |                                    |
  * |     |                           |   |                 |   |                                    |
  * +-----+---------------------------+---+-----------------+---+------------------------------------+
@@ -12723,24 +12729,32 @@ get_route_table_id(struct simap *route_tables, const char *route_table_name)
     return rtb_id;
 }
 
+/* Logical router ingress table IP_ROUTING_PRE, per port (priority 100):
+ * selects the route table of the port and, if the port sends ICMP
+ * redirects, saves the original eth.src. */
 static void
-build_route_table_lflow(struct ovn_datapath *od, struct lflow_table *lflows,
-                        struct nbrec_logical_router_port *lrp,
-                        struct simap *route_tables,
-                        struct lflow_ref *lflow_ref)
+build_ip_routing_pre_port_lflow(struct ovn_datapath *od,
+                                struct lflow_table *lflows,
+                                struct nbrec_logical_router_port *lrp,
+                                struct simap *route_tables,
+                                struct lflow_ref *lflow_ref)
 {
     struct ds match = DS_EMPTY_INITIALIZER;
     struct ds actions = DS_EMPTY_INITIALIZER;
 
     const char *route_table_name = smap_get(&lrp->options, "route_table");
     uint32_t rtb_id = get_route_table_id(route_tables, route_table_name);
-    if (!rtb_id) {
+    bool icmp_redirect = smap_get_bool(&lrp->options, "icmp_redirect", false);
+    if (!rtb_id && !icmp_redirect) {
         return;
     }
 
     ds_put_format(&match, "inport == \"%s\"", lrp->name);
-    ds_put_format(&actions, "%s = %d; next;",
-                  REG_ROUTE_TABLE_ID, rtb_id);
+    if (icmp_redirect) {
+        /* Routing overwrites eth.src, save it for the ICMP redirect. */
+        ds_put_format(&actions, "%s = eth.src; ", REG_ORIG_ETH_SRC);
+    }
+    ds_put_format(&actions, "%s = %d; next;", REG_ROUTE_TABLE_ID, rtb_id);
 
     ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING_PRE, 100,
                   ds_cstr(&match), ds_cstr(&actions), lflow_ref);
@@ -16010,8 +16024,8 @@ build_default_route_flows_for_lrouter(
                   od->datapath_lflows);
 
     for (int i = 0; i < od->nbr->n_ports; i++) {
-        build_route_table_lflow(od, lflows, od->nbr->ports[i],
-                                route_tables, NULL);
+        build_ip_routing_pre_port_lflow(od, lflows, od->nbr->ports[i],
+                                        route_tables, NULL);
     }
 
 }
@@ -16047,6 +16061,88 @@ build_route_data_flows_for_lrouter(
     }
 }
 
+/* Flow for building ICMP redirect packet (ICMP error type 5,
+ * code 1 - Redirect for Destination Host).
+ *
+ * RFC 1812 5.2.7.2 allows the Redirect only when:
+ * 1) the ingress and egress interfaces are the same.
+ * 2) the next hop sits on a ingress port network.
+ * 3) the next hop does not match source ip - this is
+ *    checked by ovn-controller.
+ * 4) the packet is not icmp redirect itself.
+ *
+ * RFC 1812 lists additional conditions for sending a Redirect (e.g. the
+ * datagram is not source-routed (LSRR/SSRR options), but OVN currently
+ * has no way to check those conditions, so they are not enforced here.
+ *
+ * We also rely on the destination is not on the ingress port network itself,
+ * so the Redirect always points to another router and never to the
+ * destination host
+ */
+static void
+build_icmp_redirect_flows_for_lrouter_port(
+        struct lflow_table *lflows, const struct ovn_port *op,
+        const struct shash *meter_groups, struct lflow_ref *lflow_ref,
+        struct ds *match, struct ds *actions)
+{
+    if (!smap_get_bool(&op->nbrp->options, "icmp_redirect", false)) {
+        return;
+    }
+
+    /* No Redirect in reply to a Redirect (RFC 1122 3.2.2). */
+    ds_clear(match);
+    ds_put_format(match, "inport == %s && icmp4.type == 5", op->json_key);
+    ovn_lflow_add(lflows, op->od, S_ROUTER_IN_ICMP_REDIRECT, 110,
+                  ds_cstr(match), "next;", lflow_ref);
+
+    for (size_t i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
+        const struct ipv4_netaddr *na = &op->lrp_networks.ipv4_addrs[i];
+
+        ds_clear(match);
+        ds_clear(actions);
+        ds_put_format(match, "ip4 && ip4.dst == %s/%u",
+                      na->network_s, na->plen
+                      );
+        ovn_lflow_add(lflows, op->od, S_ROUTER_IN_ICMP_REDIRECT, 110,
+                      ds_cstr(match), "next;", lflow_ref,
+                      WITH_CTRL_METER(copp_meter_get(COPP_ICMP4_ERR,
+                                                     op->od->nbr->copp,
+                                                     meter_groups)));
+        ds_clear(match);
+        ds_clear(actions);
+
+        ds_put_format(match,
+                      "inport == %s && outport == %s && ip4 && "
+                      "ip4.src == %s/%u && "
+                      REG_NEXT_HOP_IPV4" == %s/%u && "
+                      "!ip.later_frag",
+                      op->json_key, op->json_key,
+                      na->network_s, na->plen, na->network_s, na->plen);
+
+        ds_put_format(actions,
+                      "icmp4_redirect {"
+                      "eth.dst = "REG_ORIG_ETH_SRC"; eth.src = %s; "
+                      "ip4.dst = ip4.src; ip4.src = %s; ip.ttl = 254; "
+                      "outport = %s; flags.loopback = 1; output; }; next;",
+                      op->lrp_networks.ea_s, na->addr_s, op->json_key);
+
+        ovn_lflow_add(lflows, op->od, S_ROUTER_IN_ICMP_REDIRECT, 100,
+                      ds_cstr(match), ds_cstr(actions), lflow_ref,
+                      WITH_CTRL_METER(copp_meter_get(COPP_ICMP4_ERR,
+                                                     op->od->nbr->copp,
+                                                     meter_groups)),
+                      WITH_HINT(&op->nbrp->header_));
+    }
+}
+
+static void
+build_default_icmp_redirect_lflow(struct ovn_datapath *od,
+                                  struct lflow_table *lflows)
+{
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_ICMP_REDIRECT, 0, "1", "next;",
+                  od->datapath_lflows);
+}
+
 static void
 build_route_flows_for_lrouter(
         struct ovn_datapath *od, struct lflow_table *lflows,
@@ -16055,6 +16151,7 @@ build_route_flows_for_lrouter(
 {
     ovs_assert(od->nbr);
     build_default_route_flows_for_lrouter(od, lflows, route_tables);
+    build_default_icmp_redirect_lflow(od, lflows);
 
     const struct group_ecmp_datapath *datapath_node =
         group_ecmp_datapath_lookup(route_data, od);
@@ -18206,6 +18303,10 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
     build_lrouter_ipv4_default_ttl_expired_flows(op, lflows,
                                                  match, actions,
                                                  meter_groups, lflow_ref);
+
+    /* ICMP redirect */
+    build_icmp_redirect_flows_for_lrouter_port(lflows, op, meter_groups,
+                                               lflow_ref, match, actions);
 
     /* ARP reply.  These flows reply to ARP requests for the router's own
      * IP address. */
