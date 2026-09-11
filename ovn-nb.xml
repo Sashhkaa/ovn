@@ -3578,6 +3578,27 @@ or
         </p>
       </column>
 
+      <column name="options" key="disable_icmp_redirect"
+              type='{"type": "boolean"}'>
+        <p>
+          By default the router sends an ICMPv4 Redirect to the source of
+          a packet that it forwards back out of the router port the packet
+          arrived on, provided that the source and the next hop are on the
+          same network of that port. The Redirect names the next hop as
+          the better first hop; the packet itself is still forwarded.
+          No Redirect is sent when the next hop is the source of the packet
+          or when the packet is itself an ICMP Redirect.
+        </p>
+        <p>
+          No Redirect is sent when the destination itself belongs to one of
+          the router's directly connected networks: a Redirect always points
+          to another router, never to the destination host for now.
+        </p>
+        <p>
+          It is <code>false</code> by default.
+        </p>
+      </column>
+
       <column name="options" key="requested-tnl-key"
           type='{"type": "integer", "minInteger": 1, "maxInteger": 16777215}'>
         Configures the datapath tunnel key for the logical router.

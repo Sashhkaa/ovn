@@ -1859,12 +1859,21 @@ static void
 execute_icmp4(const struct ovnact_nest *on,
               const struct ovntrace_datapath *dp,
               const struct flow *uflow, uint8_t table_id, bool loopback,
-              enum ovnact_pipeline pipeline, struct ovs_list *super)
+              bool redirect, enum ovnact_pipeline pipeline,
+              struct ovs_list *super)
 {
     struct flow icmp4_flow = *uflow;
 
     if (loopback && icmp4_flow.tp_src == htons(ICMP4_DST_UNREACH)) {
         return; /* Avoid recirculation. */
+    }
+
+    /* Same check as ovn-controller: no Redirect to the next hop itself. */
+    if (redirect && htonl(uflow->regs[0]) == uflow->nw_src) {
+        ovntrace_node_append(super, OVNTRACE_NODE_TRANSFORMATION,
+                             "icmp4_redirect: suppressed, next hop "IP_FMT
+                             " is the source", IP_ARGS(uflow->nw_src));
+        return;
     }
 
     /* Update fields for ICMP. */
@@ -1881,11 +1890,18 @@ execute_icmp4(const struct ovnact_nest *on,
     }
     icmp4_flow.nw_proto = IPPROTO_ICMP;
     icmp4_flow.nw_ttl = 255;
-    icmp4_flow.tp_src = htons(ICMP4_DST_UNREACH); /* icmp type */
-    icmp4_flow.tp_dst = htons(1); /* icmp code */
+    icmp4_flow.tp_src = htons(redirect ? ICMP4_REDIRECT
+                                       : ICMP4_DST_UNREACH); /* icmp type */
+    icmp4_flow.tp_dst = htons(redirect ? 0 : 1); /* icmp code */
 
-    struct ovntrace_node *node = ovntrace_node_append(
-        super, OVNTRACE_NODE_TRANSFORMATION, "icmp4");
+    /* The Redirect names the next hop that routing left in reg0.  It is not
+     * a field of the flow, so spell it out here: which better first hop the
+     * sender is told about is the whole point of tracing one. */
+    struct ovntrace_node *node = redirect
+        ? ovntrace_node_append(super, OVNTRACE_NODE_TRANSFORMATION,
+                               "icmp4_redirect: gw = "IP_FMT,
+                               IP_ARGS(htonl(uflow->regs[0])))
+        : ovntrace_node_append(super, OVNTRACE_NODE_TRANSFORMATION, "icmp4");
 
     trace_actions(on->nested, on->nested_len, dp, &icmp4_flow,
                   table_id, pipeline, &node->subs);
@@ -2116,7 +2132,8 @@ execute_reject(const struct ovnact_nest *on,
         execute_sctp_abort(on, dp, uflow, table_id, true, pipeline, super);
     } else {
         if (get_dl_type(uflow) == htons(ETH_TYPE_IP)) {
-            execute_icmp4(on, dp, uflow, table_id, true, pipeline, super);
+            execute_icmp4(on, dp, uflow, table_id, true, false, pipeline,
+                          super);
         } else {
             execute_icmp6(on, dp, uflow, table_id, true, pipeline, super);
         }
@@ -3517,12 +3534,17 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
 
         case OVNACT_ICMP4:
             execute_icmp4(ovnact_get_ICMP4(a), dp, uflow, table_id, false,
-                          pipeline, super);
+                          false, pipeline, super);
+            break;
+
+        case OVNACT_ICMP4_REDIRECT:
+            execute_icmp4(ovnact_get_ICMP4_REDIRECT(a), dp, uflow, table_id,
+                          false, true, pipeline, super);
             break;
 
         case OVNACT_ICMP4_ERROR:
             execute_icmp4(ovnact_get_ICMP4_ERROR(a), dp, uflow, table_id,
-                          false, pipeline, super);
+                          false, false, pipeline, super);
             break;
 
         case OVNACT_ICMP6:
