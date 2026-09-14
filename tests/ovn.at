@@ -47443,3 +47443,112 @@ AT_CHECK([ovn-trace lr1 'inport == "lrp0" && eth.src == 00:00:00:00:00:80 && eth
 OVN_CLEANUP_NORTHD
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ICMPv4 redirect - rate limiting])
+AT_KEYWORDS([icmp redirect])
+CHECK_SCAPY
+ovn_start
+
+check ovn-nbctl lr-add lr1
+check ovn-nbctl lrp-add lr1 lrp0 00:00:00:00:00:01 10.0.0.1/24
+check ovn-nbctl lrp-set-options lrp0 send_icmp4_redirects=true
+check ovn-nbctl ls-add sw1
+check ovn-nbctl lsp-add-router-port sw1 sw-lr1 lrp0
+check ovn-nbctl lsp-add sw1 sw1-lport1
+check ovn-nbctl lsp-set-addresses sw1-lport1 "00:00:00:00:00:10 10.0.0.10"
+check ovn-nbctl lsp-add sw1 sw1-lport2
+check ovn-nbctl lsp-set-addresses sw1-lport2 "00:00:00:00:00:80 10.0.0.80"
+
+# A better first hop for 172.16.0.0/24 sits on the same segment as the VM.
+check ovn-nbctl lr-route-add lr1 172.16.0.0/24 10.0.0.80
+
+net_add n1
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+ovs-vsctl -- add-port br-int vif1 -- \
+    set interface vif1 external-ids:iface-id=sw1-lport1 \
+    options:tx_pcap=hv1/vif1-tx.pcap \
+    options:rxq_pcap=hv1/vif1-rx.pcap
+ovs-vsctl -- add-port br-int vif2 -- \
+    set interface vif2 external-ids:iface-id=sw1-lport2 \
+    options:tx_pcap=hv1/vif2-tx.pcap \
+    options:rxq_pcap=hv1/vif2-rx.pcap
+
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+OVN_POPULATE_ARP
+
+packet=$(fmt_pkt "Ether(dst='00:00:00:00:00:01', src='00:00:00:00:00:10')/ \
+                  IP(src='10.0.0.10', dst='172.16.0.5', ttl=64)/ \
+                  ICMP(type=8, id=0x1234, seq=1)")
+
+# The forwarded packet, as sw1-lport2 sees it: routed, so from lrp0's MAC.
+forwarded=$(fmt_pkt "Ether(dst='00:00:00:00:00:80', src='00:00:00:00:00:01')/ \
+                     IP(src='10.0.0.10', dst='172.16.0.5', ttl=63)/ \
+                     ICMP(type=8, id=0x1234, seq=1)")
+
+# ICMP Redirect for host, from lrp0 to the sender, naming 10.0.0.80.
+# Match on the IP addresses and the ICMP type/code that follow them.
+redirect_pattern="0a0000010a00000a0501"
+
+count_redirects() {
+    $PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/vif1-tx.pcap | \
+        grep -c "$redirect_pattern"
+}
+
+# A burst of packets from the same sender earns a single Redirect...
+for i in 1 2 3; do
+    check as hv1 ovs-appctl netdev-dummy/receive vif1 $packet
+done
+
+# ...while every packet is still forwarded.
+for i in 1 2 3; do echo $forwarded; done > vif2.expected
+OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [vif2.expected])
+
+OVS_WAIT_UNTIL([test "$(count_redirects)" = 1])
+sleep 1
+AT_CHECK([count_redirects], [0], [1
+])
+
+# Once the backoff interval has passed, the next packet earns another one.
+# The interval doubles every time: 1s, 2s, 4s and 8s.
+n=2
+for interval in 2 3 5 9; do
+    sleep $interval
+    check as hv1 ovs-appctl netdev-dummy/receive vif1 $packet
+    OVS_WAIT_UNTIL([test "$(count_redirects)" = $n])
+    n=$((n + 1))
+done
+
+# The burst of 5 is spent: no more Redirects, however long we wait.
+for i in 1 2 3; do
+    check as hv1 ovs-appctl netdev-dummy/receive vif1 $packet
+    sleep 1
+done
+AT_CHECK([count_redirects], [0], [5
+])
+
+# A sender that goes quiet starts over.  Shorten the quiet timeout from its
+# 20s default so that the test does not have to wait that long.
+check as hv1 ovs-vsctl set open . \
+    external_ids:ovn-icmp-redirect-quiet-timeout-sec=2
+sleep 3
+check as hv1 ovs-appctl netdev-dummy/receive vif1 $packet
+OVS_WAIT_UNTIL([test "$(count_redirects)" = 6])
+
+# A zero timeout turns the per-sender limiting off: every packet that
+# deserves a Redirect gets one.  The packet is resent until ovn-controller
+# has picked the new value up.
+check as hv1 ovs-vsctl set open . \
+    external_ids:ovn-icmp-redirect-quiet-timeout-sec=0
+OVS_WAIT_UNTIL([as hv1 ovs-appctl netdev-dummy/receive vif1 $packet
+                test "$(count_redirects)" = 7])
+check as hv1 ovs-appctl netdev-dummy/receive vif1 $packet
+OVS_WAIT_UNTIL([test "$(count_redirects)" = 8])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
