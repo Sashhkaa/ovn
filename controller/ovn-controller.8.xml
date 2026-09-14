@@ -307,6 +307,17 @@
         vlan type logical switch.
       </dd>
 
+      <dt><code>external_ids:ovn-icmp-redirect-quiet-timeout-sec</code></dt>
+      <dd>
+        How long, in seconds, a sender has to stop asking for ICMPv4
+        Redirects before <code>ovn-controller</code> answers it again.
+        A sender gets at most five Redirects, spaced by an interval that
+        starts at one second and doubles every time, and no more until it
+        has been quiet for this long. The default is <code>20</code> sec.
+        Setting it to <code>0</code> turns the per-sender limiting off,
+        leaving only the meter.
+      </dd>
+
       <dt><code>external_ids:ovn-is-interconn</code></dt>
       <dd>
         The boolean flag indicates if the chassis is used as an

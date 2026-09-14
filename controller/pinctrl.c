@@ -196,6 +196,9 @@ static struct pinctrl pinctrl;
 static bool pinctrl_is_sb_commited(int64_t commit_cfg, int64_t cur_cfg);
 static void init_buffered_packets_map(void);
 static void destroy_buffered_packets_map(void);
+static void init_icmp_redirect_map(void);
+static void destroy_icmp_redirect_map(void);
+static void icmp_redirect_map_gc(long long int now);
 static void
 run_buffered_binding(const struct sbrec_mac_binding_table *mac_binding_table,
                      const struct hmap *local_datapaths,
@@ -395,6 +398,8 @@ COVERAGE_DEFINE(pinctrl_ring_full_put_mac_binding);
 COVERAGE_DEFINE(pinctrl_drop_put_fdb);
 COVERAGE_DEFINE(pinctrl_ring_full_put_fdb);
 COVERAGE_DEFINE(pinctrl_drop_buffered_packets_map);
+COVERAGE_DEFINE(pinctrl_icmp_redirect_suppressed);
+COVERAGE_DEFINE(pinctrl_icmp_redirect_map_full);
 COVERAGE_DEFINE(pinctrl_drop_controller_event);
 COVERAGE_DEFINE(pinctrl_drop_put_vport_binding);
 COVERAGE_DEFINE(pinctrl_notify_main_thread);
@@ -572,6 +577,7 @@ pinctrl_init(void)
     init_ipv6_ras();
     init_ipv6_prefixd();
     init_buffered_packets_map();
+    init_icmp_redirect_map();
     init_activated_ports();
     init_event_table();
     ip_mcast_snoop_init();
@@ -1696,6 +1702,158 @@ pinctrl_handle_arp(struct rconn *swconn, const struct flow *ip_flow,
     dp_packet_uninit(&packet);
 }
 
+#define ICMP_REDIRECT_MIN_INTERVAL_MS 1000
+#define ICMP_REDIRECT_BURST 5
+#define ICMP_REDIRECT_QUIET_TIMEOUT_DEF_MS (20 * 1000)
+#define ICMP_REDIRECT_GC_INTERVAL_MS (60 * 1000)
+#define ICMP_REDIRECT_MAP_MAX_SIZE 8192
+
+/* Written by the main thread, read by the pinctrl_handler thread. */
+static atomic_llong icmp_redirect_quiet_timeout =
+    ICMP_REDIRECT_QUIET_TIMEOUT_DEF_MS;
+
+struct icmp_redirect_entry {
+    struct hmap_node hmap_node;
+    ovs_be64 dp_key;
+    ovs_be32 src_ip;
+    ovs_be32 gateway;
+    long long int last_seen;    /* Time of the last packet, in ms. */
+    long long int last_sent;    /* Time of the last Redirect, in ms. */
+    long long int interval;     /* Minimum time until the next one, in ms. */
+    unsigned int sent;          /* Redirects sent in the current burst. */
+};
+
+static struct hmap icmp_redirect_map;
+
+static void
+init_icmp_redirect_map(void)
+{
+    hmap_init(&icmp_redirect_map);
+}
+
+static void
+destroy_icmp_redirect_map(void)
+{
+    struct icmp_redirect_entry *e;
+    HMAP_FOR_EACH_POP (e, hmap_node, &icmp_redirect_map) {
+        free(e);
+    }
+    hmap_destroy(&icmp_redirect_map);
+}
+
+static uint32_t
+icmp_redirect_hash(ovs_be64 dp_key, ovs_be32 src_ip, ovs_be32 gateway)
+{
+    return hash_2words((OVS_FORCE uint32_t) src_ip,
+                       hash_uint64_basis((OVS_FORCE uint64_t) dp_key,
+                                         (OVS_FORCE uint32_t) gateway));
+}
+
+static struct icmp_redirect_entry *
+icmp_redirect_lookup(ovs_be64 dp_key, ovs_be32 src_ip, ovs_be32 gateway,
+                     uint32_t hash)
+{
+    struct icmp_redirect_entry *e;
+    HMAP_FOR_EACH_WITH_HASH (e, hmap_node, hash, &icmp_redirect_map) {
+        if (e->dp_key == dp_key && e->src_ip == src_ip
+            && e->gateway == gateway) {
+            return e;
+        }
+    }
+    return NULL;
+}
+
+static bool
+icmp_redirect_may_send(ovs_be64 dp_key, ovs_be32 src_ip, ovs_be32 gateway,
+                       long long int now)
+{
+    uint32_t hash = icmp_redirect_hash(dp_key, src_ip, gateway);
+    struct icmp_redirect_entry *e = icmp_redirect_lookup(dp_key, src_ip,
+                                                         gateway, hash);
+    if (!e) {
+        if (hmap_count(&icmp_redirect_map) >= ICMP_REDIRECT_MAP_MAX_SIZE) {
+            /* Too many senders to keep track of.  Fall back to the COPP
+             * meter alone. */
+            COVERAGE_INC(pinctrl_icmp_redirect_map_full);
+            return true;
+        }
+        e = xmalloc(sizeof *e);
+        e->dp_key = dp_key;
+        e->src_ip = src_ip;
+        e->gateway = gateway;
+        e->last_seen = now;
+        e->last_sent = now;
+        e->interval = ICMP_REDIRECT_MIN_INTERVAL_MS;
+        e->sent = 1;
+        hmap_insert(&icmp_redirect_map, &e->hmap_node, hash);
+        return true;
+    }
+
+    long long int quiet_timeout;
+    atomic_read_relaxed(&icmp_redirect_quiet_timeout, &quiet_timeout);
+    if (now - e->last_seen >= quiet_timeout) {
+        /* The sender has been quiet: start a new burst. */
+        e->last_seen = now;
+        e->last_sent = now;
+        e->interval = ICMP_REDIRECT_MIN_INTERVAL_MS;
+        e->sent = 1;
+        return true;
+    }
+    e->last_seen = now;
+
+    if (e->sent >= ICMP_REDIRECT_BURST
+        || now - e->last_sent < e->interval) {
+        COVERAGE_INC(pinctrl_icmp_redirect_suppressed);
+        return false;
+    }
+
+    e->interval *= 2;
+    e->last_sent = now;
+    e->sent++;
+    return true;
+}
+
+static void
+icmp_redirect_config_run(const struct ovsrec_open_vswitch_table *ovs_table,
+                         const struct sbrec_chassis *chassis)
+{
+    const struct ovsrec_open_vswitch *cfg =
+        ovsrec_open_vswitch_table_first(ovs_table);
+
+    if (!cfg || !chassis) {
+        return;
+    }
+
+    long long int quiet_timeout =
+        (long long int) get_chassis_external_id_value_uint(
+            &cfg->external_ids, chassis->name,
+            "ovn-icmp-redirect-quiet-timeout-sec",
+            ICMP_REDIRECT_QUIET_TIMEOUT_DEF_MS / 1000) * 1000;
+    atomic_store_relaxed(&icmp_redirect_quiet_timeout, quiet_timeout);
+}
+
+static void
+icmp_redirect_map_gc(long long int now)
+{
+    static long long int next_gc = LLONG_MIN;
+
+    if (now < next_gc) {
+        return;
+    }
+    next_gc = now + ICMP_REDIRECT_GC_INTERVAL_MS;
+
+    long long int quiet_timeout;
+    atomic_read_relaxed(&icmp_redirect_quiet_timeout, &quiet_timeout);
+
+    struct icmp_redirect_entry *e;
+    HMAP_FOR_EACH_SAFE (e, hmap_node, &icmp_redirect_map) {
+        if (now - e->last_seen >= quiet_timeout) {
+            hmap_remove(&icmp_redirect_map, &e->hmap_node);
+            free(e);
+        }
+    }
+}
+
 /* Called with in the pinctrl_handler thread context. */
 static void
 pinctrl_handle_icmp(struct rconn *swconn, const struct flow *ip_flow,
@@ -1720,8 +1878,15 @@ pinctrl_handle_icmp(struct rconn *swconn, const struct flow *ip_flow,
      * the conditions - that the next hop is not the source of the packet -
      * compares two run-time values, which the logical flow match language
      * cannot express. So check it here instead. */
-    if (redirect && htonl(md->flow.regs[0]) == ip_flow->nw_src) {
-        return;
+    if (redirect) {
+        ovs_be32 gateway = htonl(md->flow.regs[0]);
+        if (gateway == ip_flow->nw_src) {
+            return;
+        }
+        if (!icmp_redirect_may_send(md->flow.metadata, ip_flow->nw_src,
+                                    gateway, time_msec())) {
+            return;
+        }
     }
 
     uint64_t ofpacts_stub[4096 / 8];
@@ -4080,6 +4245,8 @@ pinctrl_handler(void *arg_)
             lock_failed = true;
         }
 
+        icmp_redirect_map_gc(time_msec());
+
         rconn_run(swconn);
         new_seq = seq_read(pinctrl_handler_seq);
         if (rconn_is_connected(swconn)) {
@@ -4239,6 +4406,7 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
     run_put_vport_bindings(ovnsb_idl_txn, sbrec_datapath_binding_by_key,
                            sbrec_port_binding_by_key, chassis, cur_cfg);
     send_garp_rarp_prepare(ecmp_nh_table, chassis, ovs_table);
+    icmp_redirect_config_run(ovs_table, chassis);
     prepare_ipv6_ras(local_active_ports_ras, sbrec_port_binding_by_name,
                      chassis);
     prepare_ipv6_prefixd(ovnsb_idl_txn, sbrec_port_binding_by_name,
@@ -4807,6 +4975,7 @@ pinctrl_destroy(void)
     destroy_ipv6_ras();
     destroy_ipv6_prefixd();
     destroy_buffered_packets_map();
+    destroy_icmp_redirect_map();
     destroy_activated_ports();
     event_table_destroy();
     destroy_mac_bindings();
