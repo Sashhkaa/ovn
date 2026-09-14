@@ -5258,6 +5258,16 @@ or
           router, never to the destination host for now.
         </p>
         <p>
+          Redirects are sent by <code>ovn-controller</code> and are rate limited
+          per sender and next hop: a sender gets at most five Redirects,
+          spaced by an interval that starts at one second and doubles every time,
+          and no more until it stops sending packets that need one for the time set
+          by <code>external_ids:ovn-icmp-redirect-quiet-timeout-sec</code> in the
+          local <code>Open_vSwitch</code> table, twenty seconds by default.
+          A sender that ignores Redirects therefore does not flood the
+          controller.
+        </p>
+        <p>
           It is <code>false</code> by default.
         </p>
       </column>
