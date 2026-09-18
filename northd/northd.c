@@ -4254,6 +4254,10 @@ sync_pb_for_lrp(struct ovn_port *op,
         smap_add(&new, "ipv6_ra_pd_list", ipv6_pd_list);
     }
 
+    if (!is_cr_port(op) && lrp_has_no_centralized_routing_option(op)) {
+        smap_add(&new, "no-centralized-routing", "true");
+    }
+
     sbrec_port_binding_set_options(op->sb, &new);
     smap_destroy(&new);
 }
