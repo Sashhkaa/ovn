@@ -1,5 +1,11 @@
 OVN v26.09.0 - Sep 18 2026
 --------------------------
+   - Mirrors of type "lport" now mirror the traffic that is really present
+     on the logical port: "from-lport" traffic is mirrored in the first
+     ingress table, before port security, and "to-lport" traffic in the last
+     egress table, after port security.  Packets dropped by ingress port
+     security are now mirrored, while packets dropped by egress port
+     security are not mirrored anymore
    - Load balancer health checks can now use a port and a protocol
      different from the backend's port and the load balancer's protocol.
      They are set in the ip_port_mappings column in Load_Balancer table.
