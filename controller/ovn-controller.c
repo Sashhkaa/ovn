@@ -8349,13 +8349,24 @@ main(int argc, char *argv[])
             const char *chassis_id = get_ovs_chassis_id(ovs_table);
             const struct sbrec_chassis *chassis = NULL;
             const struct sbrec_chassis_private *chassis_private = NULL;
+            bool chassis_config_conflict = false;
             if (chassis_id) {
                 chassis = chassis_run(ovnsb_idl_txn, sbrec_chassis_by_name,
                                       sbrec_chassis_private_by_name,
                                       ovs_table, chassis_id,
                                       br_int, &transport_zones,
                                       &chassis_private,
-                                      sbrec_encaps_index_by_ip_and_type);
+                                      sbrec_encaps_index_by_ip_and_type,
+                                      &chassis_config_conflict);
+            }
+
+            if (chassis_config_conflict) {
+                /* The replicated Chassis record is not ours to modify.
+                 * Skip the rest of the processing, keep the already
+                 * installed flows and wait for either the local or the
+                 * Southbound configuration to change. */
+                sset_destroy(&transport_zones);
+                goto replicated_conflict;
             }
 
             /* If any OVS feature support changed, force a full recompute.
@@ -8761,6 +8772,7 @@ main(int argc, char *argv[])
             ovn_netlink_notifiers_wait();
         }
 
+replicated_conflict:
         unixctl_server_run(unixctl);
 
         unixctl_server_wait(unixctl);
