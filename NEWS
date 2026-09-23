@@ -119,6 +119,12 @@ OVN v26.09.0 - Sep 18 2026
      "options:dynamic-routing-advertise-prefixes" key that contains an
      explicit list of prefixes to be advertised via this port.  If it is
      set, only these prefixes will be announced.
+   - Mirrors of type "lport" now mirror the traffic that is really present
+     on the logical port: "from-lport" traffic is mirrored in the first
+     ingress table, before port security, and "to-lport" traffic in the last
+     egress table, after port security.  Packets dropped by ingress port
+     security are now mirrored, while packets dropped by egress port
+     security are not mirrored anymore.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
