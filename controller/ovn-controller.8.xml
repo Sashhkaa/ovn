@@ -331,6 +331,57 @@
         interconnection gateway.
       </dd>
 
+      <dt><code>external_ids:ovn-chassis-preserve-other-config</code></dt>
+      <dd>
+        <p>
+          If <code>true</code>, preserve the existing <ref table="Chassis"
+          column="other_config" db="OVN_Southbound"/> in the Southbound
+          database.  The controller neither publishes local changes to this
+          column nor removes keys it does not recognize.  Differences from
+          the local configuration are logged with rate limiting.  The
+          default is <code>false</code>.
+        </p>
+        <p>
+          This option does not stop processing database updates, installing
+          OpenFlow rules, or updating other Southbound columns and tables.
+          In particular, hostname, encapsulations and transport zones are
+          still updated normally.  An existing <code>Chassis</code> record
+          is required: while this option is enabled the controller waits
+          rather than creating a new record without its configuration.
+        </p>
+        <p>
+          The option can be changed without restarting the controller.
+          When set to <code>false</code> or removed, normal publication and
+          removal of unsupported keys resume.
+        </p>
+        <p>
+          Use this option for controlled deployments and rolling upgrades of
+          replicated gateways whose controllers share a chassis name and
+          encapsulation IP.  Enable it on every replica before upgrading any
+          of them, so that the published capabilities remain unchanged while
+          versions differ.  Every replica must support this option and the
+          capabilities already advertised in the database.
+        </p>
+        <p>
+          Upgrade replicas one at a time, withdrawing each replica from
+          underlay ECMP before the upgrade and restoring it only after it
+          has applied the configuration and is ready to forward traffic.
+          Once all replicas have matching configuration and capabilities,
+          disable this option on one replica to publish the new values.
+          Wait for the resulting configuration to be applied by all replicas,
+          then disable it on the remaining replicas.
+        </p>
+        <p>
+          This preserves the entire <code>other_config</code> column, not
+          only capability flags.  Configuration changes such as bridge
+          mappings are also withheld.  It does not make incompatible OVN
+          or OVS versions compatible, and it does not prevent chassis
+          cleanup on a normal controller exit.  Use a restart that preserves
+          chassis state, such as <code>ovn-ctl restart_controller</code>,
+          during the upgrade.
+        </p>
+      </dd>
+
       <dt><code>external_ids:ovn-match-northd-version</code></dt>
       <dd>
         The boolean flag indicates if <code>ovn-controller</code> needs to

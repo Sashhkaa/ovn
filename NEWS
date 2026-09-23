@@ -1,5 +1,8 @@
 OVN v26.09.0 - Sep 18 2026
 --------------------------
+   - ovn-controller: Added the "ovn-chassis-preserve-other-config" option
+     in Open_vSwitch external-ids to preserve Chassis other_config during
+     rolling upgrades of replicated gateways.
    - Documented the "replicated gateway" setup, in which several ovn-controller
      instances share one chassis name and one anycast encapsulation IP
      reachable over the underlay through ECMP, so that they appear to OVN as

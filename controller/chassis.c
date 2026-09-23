@@ -70,6 +70,8 @@ struct ovs_chassis_cfg {
     struct ds iface_types;
     /* Is this chassis an interconnection gateway. */
     bool is_interconn;
+    /* Preserve the published Chassis.other_config during upgrades. */
+    bool preserve_other_config;
     /* Does OVS support sampling with ids taken from registers? */
     bool sample_with_regs;
     /* Does OVS support flushing CT zones using label/mark? */
@@ -236,6 +238,13 @@ get_is_interconn(const struct smap *ext_ids, const char *chassis_id)
                                               "ovn-is-interconn", false);
 }
 
+static bool
+get_preserve_other_config(const struct smap *ext_ids, const char *chassis_id)
+{
+    return get_chassis_external_id_value_bool(
+        ext_ids, chassis_id, "ovn-chassis-preserve-other-config", false);
+}
+
 static void
 update_chassis_transport_zones(const struct sset *transport_zones,
                                const struct sbrec_chassis *chassis_rec)
@@ -381,6 +390,8 @@ chassis_parse_ovs_config(const struct ovsrec_open_vswitch_table *ovs_table,
                                   &ovs_cfg->iface_types);
 
     ovs_cfg->is_interconn = get_is_interconn(&cfg->external_ids, chassis_id);
+    ovs_cfg->preserve_other_config =
+        get_preserve_other_config(&cfg->external_ids, chassis_id);
     ovs_cfg->sample_with_regs =
         ovs_feature_is_supported(OVS_SAMPLE_REG_SUPPORT);
     ovs_cfg->ct_label_flush =
@@ -854,6 +865,53 @@ chassis_get_record(struct ovsdb_idl_txn *ovnsb_idl_txn,
     return true;
 }
 
+/* Log changes suppressed by ovn-chassis-preserve-other-config. */
+static void
+chassis_log_preserved_other_config(const struct ovs_chassis_cfg *ovs_cfg,
+                                   const struct sbrec_chassis *chassis_rec)
+{
+    struct ds diff = DS_EMPTY_INITIALIZER;
+
+    /* Report the values that would replace the published configuration. */
+    struct smap local_config = SMAP_INITIALIZER(&local_config);
+    chassis_build_other_config(ovs_cfg, &local_config);
+
+    const struct smap_node *node;
+    SMAP_FOR_EACH (node, &local_config) {
+        const char *db_value = smap_get(&chassis_rec->other_config, node->key);
+
+        if (!db_value) {
+            ds_put_format(&diff, "\n  other_config:%s: database=<unset>, "
+                          "local='%s'", node->key, node->value);
+        } else if (strcmp(db_value, node->value)) {
+            ds_put_format(&diff, "\n  other_config:%s: database='%s', "
+                          "local='%s'", node->key, db_value, node->value);
+        }
+    }
+    smap_destroy(&local_config);
+
+    /* Options unknown to this chassis would be removed by
+     * remove_unsupported_options(), e.g., a feature flag set by a newer
+     * replica. */
+    struct sset supported_options = SSET_INITIALIZER(&supported_options);
+    update_supported_sset(&supported_options);
+    SMAP_FOR_EACH (node, &chassis_rec->other_config) {
+        if (!sset_contains(&supported_options, node->key)) {
+            ds_put_format(&diff, "\n  other_config:%s: database='%s', "
+                          "local=<unsupported>", node->key, node->value);
+        }
+    }
+    sset_destroy(&supported_options);
+
+    if (diff.length) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_INFO_RL(&rl, "Preserving other_config for chassis '%s'; "
+                     "not publishing local changes:%s",
+                     chassis_rec->name, ds_cstr(&diff));
+    }
+    ds_destroy(&diff);
+}
+
 /* Update a Chassis record based on the config in the ovs config.
  * Returns CHASSIS_UPDATED if 'chassis_rec' was updated, CHASSIS_NEED_DELETE if
  * another chassis exists with an encap with same IP and type as 'chassis', and
@@ -879,7 +937,11 @@ chassis_update(const struct sbrec_chassis *chassis_rec,
         update_status = CHASSIS_UPDATED;
     }
 
-    if (chassis_other_config_changed(ovs_cfg, chassis_rec)) {
+    if (ovs_cfg->preserve_other_config) {
+        if (ovs_feature_set_discovered()) {
+            chassis_log_preserved_other_config(ovs_cfg, chassis_rec);
+        }
+    } else if (chassis_other_config_changed(ovs_cfg, chassis_rec)) {
         struct smap other_config;
 
         smap_clone(&other_config, &chassis_rec->other_config);
@@ -892,7 +954,9 @@ chassis_update(const struct sbrec_chassis *chassis_rec,
 
     update_chassis_transport_zones(transport_zones, chassis_rec);
 
-    remove_unsupported_options(chassis_rec, &update_status);
+    if (!ovs_cfg->preserve_other_config) {
+        remove_unsupported_options(chassis_rec, &update_status);
+    }
 
     /* If any of the encaps should change, update them. */
     bool tunnels_changed =
@@ -963,7 +1027,8 @@ chassis_private_update(const struct sbrec_chassis_private *chassis_pvt,
     }
 }
 
-/* Returns this chassis's Chassis record, if it is available. */
+/* Returns this chassis's Chassis record, if it is available.
+ * With preserve-other-config enabled, an existing record is required. */
 const struct sbrec_chassis *
 chassis_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
             struct ovsdb_idl_index *sbrec_chassis_by_name,
@@ -982,6 +1047,15 @@ chassis_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
     /* Get the chassis config from the ovs table. */
     ovs_chassis_cfg_init(&ovs_cfg);
     if (!chassis_parse_ovs_config(ovs_table, br_int, &ovs_cfg)) {
+        return NULL;
+    }
+
+    if (ovs_cfg.preserve_other_config &&
+        !chassis_lookup_by_name(sbrec_chassis_by_name, chassis_id)) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_WARN_RL(&rl, "Cannot preserve other_config for chassis '%s': "
+                     "waiting for an existing Chassis record", chassis_id);
+        ovs_chassis_cfg_destroy(&ovs_cfg);
         return NULL;
     }
 

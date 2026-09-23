@@ -125,8 +125,9 @@ following requirements.
 Identical OVS and OVN configuration and features
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-All the nodes of the group must run the same OVS and OVN versions and must
-expose the same set of features. ``ovn-controller`` reports the capabilities
+During normal operation, all the nodes of the group must run the same OVS
+and OVN versions and expose the same set of features.  For temporarily mixing
+versions during a controlled upgrade, see :ref:`replicated-gateway-upgrades`. ``ovn-controller`` reports the capabilities
 of the local OVS instance in the ``Chassis`` record (``other_config``, for
 example the supported datapath interface types, and the various
 ``ovn-chassis-feature`` entries), and ``ovn-northd`` generates the logical
@@ -161,6 +162,75 @@ processes the packet is therefore not supported on a replicated gateway:
 Only stateless forwarding, e.g. plain routing and switching, stateless NAT and
 stateless ACLs, behaves correctly, because every packet can be handled
 independently by any node of the group.
+
+.. _replicated-gateway-upgrades:
+
+Rolling upgrades
+----------------
+
+The ``external_ids:ovn-chassis-preserve-other-config`` option in the local
+OVS database allows controlled deployments and rolling upgrades to preserve
+the published chassis configuration while replicas are updated individually.
+It is a boolean option and defaults to ``false``.
+
+When set to ``true``, ``ovn-controller`` neither updates the shared
+``Chassis.other_config`` column in the Southbound database nor removes keys
+it does not recognize.  Differences from the local configuration are logged
+with rate limiting.  This keeps new capabilities from being published before
+all replicas support them.
+
+The controller continues processing database updates, installing OpenFlow
+rules, and updating other Southbound columns and tables.  Hostname,
+encapsulations, and transport zones are still updated normally and must stay
+consistent across the replicas.  An existing ``Chassis`` record is required:
+with this option enabled, the controller waits rather than creating a new
+record without its configuration.
+
+The option takes effect without a controller restart.  Setting it to
+``false`` or removing it resumes normal publication of local configuration
+and removal of unsupported keys.
+
+Upgrade procedure
+~~~~~~~~~~~~~~~~~
+
+Before starting, make sure every replica supports the option.  All replicas,
+including the upgraded ones, must support the capabilities already published
+in the Southbound database.  Preserving the published values does not make
+incompatible OVN or OVS versions compatible.
+
+1. Enable the option on every replica before upgrading any of them::
+
+       $ ovs-vsctl set Open_vSwitch . \
+             external_ids:ovn-chassis-preserve-other-config=true
+
+   Ensure every controller has applied the setting before proceeding.
+   A replica that does not preserve the configuration can still overwrite
+   the shared record.
+
+2. Upgrade replicas one at a time.  Withdraw the replica's anycast IP
+   advertisement and wait for the underlay to remove it from ECMP before
+   upgrading OVN and OVS.  Restart the controller while preserving chassis
+   state, for example with ``ovn-ctl restart_controller``.  The option does
+   not prevent chassis cleanup on a normal controller exit.
+
+   Restore the advertisement only after the replica has applied the
+   configuration and is ready to forward traffic.  Repeat for each replica.
+
+3. Once all replicas have matching versions, configuration, and capabilities,
+   disable the option on one replica to publish the new configuration::
+
+       $ ovs-vsctl set Open_vSwitch . \
+             external_ids:ovn-chassis-preserve-other-config=false
+
+4. Wait for ``ovn-northd`` to process the new capabilities and for all replicas
+   to apply the resulting configuration.  Then disable the option on the
+   remaining replicas.
+
+The option preserves the entire ``other_config`` column, not only capability
+flags.  Configuration changes such as bridge mappings are also withheld
+until publication resumes.  Upgrade automation must check replica readiness
+and coordinate publication of the new configuration; controllers do not
+automatically detect when the whole group has been upgraded.
 
 Example
 -------

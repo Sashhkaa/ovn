@@ -39111,6 +39111,64 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([preserve chassis other_config])
+ovn_start
+net_add n1
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1 24 geneve
+wait_row_count Chassis 1 name=hv1
+
+# A hostname update is a barrier: the controller has processed the option,
+# and columns other than other_config continue to be updated.
+check ovs-vsctl set Open_vSwitch . \
+    external_ids:ovn-chassis-preserve-other-config=true \
+    external_ids:hostname=preserve-enabled
+wait_column preserve-enabled Chassis hostname name=hv1
+
+# Simulate a capability advertised by a newer replica.  It must not be
+# removed by this controller, and local changes must not be published.
+check ovn-sbctl set Chassis hv1 other_config:future-feature=true
+ovn-sbctl get Chassis hv1 other_config > other-config-before
+check ovs-vsctl set Open_vSwitch . \
+    external_ids:ovn-cms-options=enable-chassis-as-gw \
+    external_ids:hostname=preserve-updated \
+    external_ids:ovn-transport-zones=zone1
+wait_column preserve-updated Chassis hostname name=hv1
+wait_column zone1 Chassis transport_zones name=hv1
+AT_CHECK([ovn-sbctl get Chassis hv1 other_config > other-config-after
+          diff -u other-config-before other-config-after])
+OVS_WAIT_UNTIL([grep -q "Preserving other_config for chassis 'hv1'" \
+    hv1/ovn-controller.log])
+
+# Turning the option off publishes local values and removes unknown keys.
+check ovs-vsctl set Open_vSwitch . \
+    external_ids:ovn-chassis-preserve-other-config=false
+wait_row_count Chassis 1 name=hv1 \
+    other_config:ovn-cms-options=enable-chassis-as-gw
+OVS_WAIT_UNTIL([test -z "$(ovn-sbctl --bare --columns=name find Chassis \
+    name=hv1 other_config:future-feature=true)"])
+
+# Removing the option also resumes normal publication.
+check ovs-vsctl set Open_vSwitch . \
+    external_ids:ovn-chassis-preserve-other-config=true \
+    external_ids:hostname=preserve-again
+wait_column preserve-again Chassis hostname name=hv1
+check ovs-vsctl set Open_vSwitch . external_ids:ovn-cms-options="" \
+    external_ids:hostname=preserve-final
+wait_column preserve-final Chassis hostname name=hv1
+check_row_count Chassis 1 name=hv1 \
+    other_config:ovn-cms-options=enable-chassis-as-gw
+check ovs-vsctl remove Open_vSwitch . external_ids \
+    ovn-chassis-preserve-other-config
+wait_row_count Chassis 1 name=hv1 'other_config:ovn-cms-options=""'
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([chassis name override via file])
 ovn_start
 net_add n1
