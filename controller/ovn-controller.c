@@ -8131,13 +8131,28 @@ main(int argc, char *argv[])
             const char *chassis_id = get_ovs_chassis_id(ovs_table);
             const struct sbrec_chassis *chassis = NULL;
             const struct sbrec_chassis_private *chassis_private = NULL;
+            bool chassis_config_conflict = false;
             if (chassis_id) {
                 chassis = chassis_run(ovnsb_idl_txn, sbrec_chassis_by_name,
                                       sbrec_chassis_private_by_name,
                                       ovs_table, chassis_id,
                                       br_int, &transport_zones,
                                       &chassis_private,
-                                      sbrec_encaps_index_by_ip_and_type);
+                                      sbrec_encaps_index_by_ip_and_type,
+                                      &chassis_config_conflict);
+            }
+
+            if (chassis_config_conflict) {
+                VLOG_ERR("Refusing to overwrite the replicated Chassis "
+                         "record '%s', exiting.  Align the local "
+                         "configuration with the Southbound database (or "
+                         "clear other_config:replicated) and restart "
+                         "ovn-controller.", chassis_id);
+                /* Exit without cleaning up the databases: the Chassis
+                 * record is not ours to delete. */
+                exit_args.restart = true;
+                exit_args.exiting = true;
+                retval = EXIT_FAILURE;
             }
 
             /* If any OVS feature support changed, force a full recompute.

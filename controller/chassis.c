@@ -854,6 +854,76 @@ chassis_get_record(struct ovsdb_idl_txn *ovnsb_idl_txn,
     return true;
 }
 
+/*
+ * A Chassis record with other_config:replicated set to "true" is owned by
+ * an external entity (e.g., it is replicated from another availability
+ * zone) and must not be silently overwritten by the local ovn-controller.
+ * If the config this chassis would commit differs from what is already in
+ * the database, report every difference and let the caller bail out.
+ *
+ * Returns true if a difference was found, false otherwise.
+ */
+static bool
+chassis_replicated_conflict(const struct ovs_chassis_cfg *ovs_cfg,
+                            const char *chassis_id,
+                            const struct sbrec_chassis *chassis_rec)
+{
+    if (!smap_get_bool(&chassis_rec->other_config, "replicated", false)) {
+        return false;
+    }
+
+    struct ds diff = DS_EMPTY_INITIALIZER;
+
+    if (strcmp(chassis_id, chassis_rec->name)) {
+        ds_put_format(&diff, "\n  name: database='%s', local='%s'",
+                      chassis_rec->name, chassis_id);
+    }
+
+    if (strcmp(ovs_cfg->hostname, chassis_rec->hostname)) {
+        ds_put_format(&diff, "\n  hostname: database='%s', local='%s'",
+                      chassis_rec->hostname, ovs_cfg->hostname);
+    }
+
+    /* Compare every option this chassis would commit to other_config.
+     * Options that are only present in the database are left alone: they
+     * may legitimately be set by whoever owns the replicated record. */
+    struct smap local_config = SMAP_INITIALIZER(&local_config);
+    chassis_build_other_config(ovs_cfg, &local_config);
+
+    const struct smap_node *node;
+    SMAP_FOR_EACH (node, &local_config) {
+        const char *db_value = smap_get(&chassis_rec->other_config, node->key);
+
+        if (!db_value || strcmp(db_value, node->value)) {
+            ds_put_format(&diff, "\n  other_config:%s: database=%s%s%s, "
+                          "local='%s'", node->key, db_value ? "'" : "",
+                          db_value ? db_value : "<unset>",
+                          db_value ? "'" : "", node->value);
+        }
+    }
+    smap_destroy(&local_config);
+
+    if (chassis_tunnels_changed(&ovs_cfg->encap_type_set,
+                                &ovs_cfg->encap_ip_set,
+                                ovs_cfg->encap_ip_default,
+                                ovs_cfg->encap_csum, chassis_rec)) {
+        ds_put_format(&diff, "\n  encaps: database has %"PRIuSIZE" encap(s) "
+                      "that don't match the local encap config",
+                      chassis_rec->n_encaps);
+    }
+
+    if (!diff.length) {
+        ds_destroy(&diff);
+        return false;
+    }
+
+    VLOG_ERR("Chassis '%s' is marked as replicated in the Southbound "
+             "database but its configuration differs from the local one:%s",
+             chassis_id, ds_cstr(&diff));
+    ds_destroy(&diff);
+    return true;
+}
+
 /* Update a Chassis record based on the config in the ovs config.
  * Returns CHASSIS_UPDATED if 'chassis_rec' was updated, CHASSIS_NEED_DELETE if
  * another chassis exists with an encap with same IP and type as 'chassis', and
@@ -963,7 +1033,12 @@ chassis_private_update(const struct sbrec_chassis_private *chassis_pvt,
     }
 }
 
-/* Returns this chassis's Chassis record, if it is available. */
+/* Returns this chassis's Chassis record, if it is available.
+ *
+ * If the Chassis record already exists, is marked as replicated and the
+ * config that would be committed differs from what is already in the
+ * database, sets 'config_conflict' to true and returns NULL without
+ * modifying the record. */
 const struct sbrec_chassis *
 chassis_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
             struct ovsdb_idl_index *sbrec_chassis_by_name,
@@ -973,11 +1048,13 @@ chassis_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
             const struct ovsrec_bridge *br_int,
             const struct sset *transport_zones,
             const struct sbrec_chassis_private **chassis_private,
-            struct ovsdb_idl_index *sbrec_encaps_index_by_ip_and_type)
+            struct ovsdb_idl_index *sbrec_encaps_index_by_ip_and_type,
+            bool *config_conflict)
 {
     struct ovs_chassis_cfg ovs_cfg;
 
     *chassis_private = NULL;
+    *config_conflict = false;
 
     /* Get the chassis config from the ovs table. */
     ovs_chassis_cfg_init(&ovs_cfg);
@@ -994,6 +1071,14 @@ chassis_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
      * modified in the ovs table.
      */
     if (chassis_rec && ovnsb_idl_txn) {
+        /* Never overwrite a record that is owned by somebody else. */
+        if (existed && chassis_replicated_conflict(&ovs_cfg, chassis_id,
+                                                   chassis_rec)) {
+            *config_conflict = true;
+            ovs_chassis_cfg_destroy(&ovs_cfg);
+            return NULL;
+        }
+
         enum chassis_update_status update_status =
             chassis_update(chassis_rec, ovnsb_idl_txn, &ovs_cfg,
                            chassis_id,
