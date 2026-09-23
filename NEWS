@@ -1,5 +1,11 @@
 OVN v26.09.1 - xx xxx xxxx
 --------------------------
+   - Added "ovn-chassis-replicated" config option in Open_vSwitch
+     external-ids for ovn-controller instances that share a single Chassis
+     record.  When set, ovn-controller doesn't overwrite an existing Chassis
+     record.  Instead, it checks that the record's hostname, other_config
+     and encaps match the local configuration and, if they differ, leaves
+     the record untouched and waits until the configurations are aligned.
 
 OVN v26.09.0 - Sep 18 2026
 --------------------------

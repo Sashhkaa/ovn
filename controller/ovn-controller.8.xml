@@ -331,6 +331,28 @@
         interconnection gateway.
       </dd>
 
+      <dt><code>external_ids:ovn-chassis-replicated</code></dt>
+      <dd>
+        <p>
+          The boolean flag indicates that the <code>Chassis</code> record in
+          the Southbound database is shared by several
+          <code>ovn-controller</code> instances that use the same
+          <code>system-id</code> and the same (e.g. anycast)
+          <code>ovn-encap-ip</code>.  Default value is <code>false</code>.
+        </p>
+        <p>
+          If set to <code>true</code>, <code>ovn-controller</code> doesn't
+          create or update the <code>Chassis</code> record until the OVS
+          feature set is discovered.  If the record already exists and its
+          hostname, <code>other_config</code> or encaps differ from the
+          ones this instance would set, the record is left untouched and
+          the differences are logged.  Until the configurations are aligned,
+          <code>ovn-controller</code> doesn't process any changes and keeps
+          the already installed OpenFlow flows.  Once they are aligned, a
+          full recompute is performed.
+        </p>
+      </dd>
+
       <dt><code>external_ids:ovn-match-northd-version</code></dt>
       <dd>
         The boolean flag indicates if <code>ovn-controller</code> needs to

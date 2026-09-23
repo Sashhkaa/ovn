@@ -5616,6 +5616,7 @@ for c in $vgw1 $vgw2; do
     check m_as $c ip addr add $vgw_encap_ip/32 dev lo
     check m_as $c ovs-vsctl set open . external-ids:hostname=$vgw_name
     check m_as $c ovs-vsctl set open . external-ids:ovn-bridge-mappings=public:br-ex
+    check m_as $c ovs-vsctl set open . external-ids:ovn-chassis-replicated=true
 done
 
 for c in $vgw1 $vgw2; do
@@ -5749,5 +5750,51 @@ for c in $compute $client; do
 done
 
 check_ns_connectivity
+
+# Misconfigure one of the replicated gateway nodes.  It must neither overwrite
+# the shared Chassis record nor process any changes until its configuration
+# is aligned again, while keeping the already installed flows.
+route_flow_count() {
+    m_as $1 ovs-ofctl dump-flows br-int | grep -c 'nw_dst=192.168.123.0/24'
+}
+
+chassis_txns=$(sb_txn_count Chassis)
+check m_as $vgw1 ovs-vsctl set open . external-ids:ovn-cms-options=misconfigured
+
+OVS_WAIT_UNTIL([m_as $vgw1 grep -q \
+    "Replicated chassis '$vgw_name' configuration differs" \
+    /var/log/ovn/ovn-controller.log])
+check m_as $vgw1 grep -q \
+    "other_config:ovn-cms-options: database='', local='misconfigured'" \
+    /var/log/ovn/ovn-controller.log
+
+sleep 5
+AT_CHECK([m_central_as ovn-sbctl get Chassis $vgw_name other_config:ovn-cms-options], [0], [dnl
+""
+])
+check test $(($(sb_txn_count Chassis) - chassis_txns)) -le 1
+
+# The NB change is processed only by the node with the aligned configuration.
+check multinode_nbctl lr-route-add lr0 192.168.123.0/24 172.20.0.99
+OVS_WAIT_UNTIL([test $(route_flow_count $vgw2) -gt 0])
+check test $(route_flow_count $vgw1) -eq 0
+
+# The misconfigured node still carries the traffic with the installed flows.
+for c in $compute $client; do
+    check m_as $c ip route replace $vgw_encap_ip/32 via $vgw1_ip dev eth1
+done
+check_ns_connectivity
+
+# Once the configuration is aligned, the node catches up with the changes it
+# missed.
+check m_as $vgw1 ovs-vsctl remove open . external-ids ovn-cms-options
+OVS_WAIT_UNTIL([test $(route_flow_count $vgw1) -gt 0])
+check_ns_connectivity
+
+for c in $compute $client; do
+    check m_as $c ip route replace $vgw_encap_ip/32 \
+        nexthop via $vgw1_ip dev eth1 \
+        nexthop via $vgw2_ip dev eth1
+done
 
 AT_CLEANUP

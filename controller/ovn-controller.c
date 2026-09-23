@@ -8349,13 +8349,23 @@ main(int argc, char *argv[])
             const char *chassis_id = get_ovs_chassis_id(ovs_table);
             const struct sbrec_chassis *chassis = NULL;
             const struct sbrec_chassis_private *chassis_private = NULL;
+            bool replicated_conflict = false;
             if (chassis_id) {
                 chassis = chassis_run(ovnsb_idl_txn, sbrec_chassis_by_name,
                                       sbrec_chassis_private_by_name,
                                       ovs_table, chassis_id,
                                       br_int, &transport_zones,
                                       &chassis_private,
-                                      sbrec_encaps_index_by_ip_and_type);
+                                      sbrec_encaps_index_by_ip_and_type,
+                                      &replicated_conflict);
+            }
+
+            if (replicated_conflict) {
+                /* The shared Chassis record was left untouched, recompute
+                 * everything based on what is in the database. */
+                engine_set_force_recompute();
+                sset_destroy(&transport_zones);
+                goto replicated_chassis_conflict;
             }
 
             /* If any OVS feature support changed, force a full recompute.
@@ -8761,6 +8771,7 @@ main(int argc, char *argv[])
             ovn_netlink_notifiers_wait();
         }
 
+replicated_chassis_conflict:
         unixctl_server_run(unixctl);
 
         unixctl_server_wait(unixctl);

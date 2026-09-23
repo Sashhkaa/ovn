@@ -70,6 +70,8 @@ struct ovs_chassis_cfg {
     struct ds iface_types;
     /* Is this chassis an interconnection gateway. */
     bool is_interconn;
+    /* Is the Chassis record shared with other ovn-controller instances. */
+    bool is_replicated;
     /* Does OVS support sampling with ids taken from registers? */
     bool sample_with_regs;
     /* Does OVS support flushing CT zones using label/mark? */
@@ -236,6 +238,13 @@ get_is_interconn(const struct smap *ext_ids, const char *chassis_id)
                                               "ovn-is-interconn", false);
 }
 
+static bool
+get_is_replicated(const struct smap *ext_ids, const char *chassis_id)
+{
+    return get_chassis_external_id_value_bool(ext_ids, chassis_id,
+                                              "ovn-chassis-replicated", false);
+}
+
 static void
 update_chassis_transport_zones(const struct sset *transport_zones,
                                const struct sbrec_chassis *chassis_rec)
@@ -381,6 +390,7 @@ chassis_parse_ovs_config(const struct ovsrec_open_vswitch_table *ovs_table,
                                   &ovs_cfg->iface_types);
 
     ovs_cfg->is_interconn = get_is_interconn(&cfg->external_ids, chassis_id);
+    ovs_cfg->is_replicated = get_is_replicated(&cfg->external_ids, chassis_id);
     ovs_cfg->sample_with_regs =
         ovs_feature_is_supported(OVS_SAMPLE_REG_SUPPORT);
     ovs_cfg->ct_label_flush =
@@ -854,6 +864,81 @@ chassis_get_record(struct ovsdb_idl_txn *ovnsb_idl_txn,
     return true;
 }
 
+/*
+ * A replicated Chassis record is shared by several ovn-controller instances
+ * that use the same system-id and the same (anycast) encap IP.  None of them
+ * owns the record, so it must not be modified unless all of them agree on
+ * its content, otherwise the instances would keep overwriting each other.
+ *
+ * Returns true and logs every difference if the config this chassis would
+ * commit differs from what is already in the database, false otherwise.
+ */
+static bool
+chassis_replicated_conflict(const struct ovs_chassis_cfg *ovs_cfg,
+                            const char *chassis_id,
+                            const struct sbrec_chassis *chassis_rec)
+{
+    struct ds diff = DS_EMPTY_INITIALIZER;
+
+    if (strcmp(ovs_cfg->hostname, chassis_rec->hostname)) {
+        ds_put_format(&diff, "\n  hostname: database='%s', local='%s'",
+                      chassis_rec->hostname, ovs_cfg->hostname);
+    }
+
+    /* Every option this chassis would commit to other_config must match. */
+    struct smap local_config = SMAP_INITIALIZER(&local_config);
+    chassis_build_other_config(ovs_cfg, &local_config);
+
+    const struct smap_node *node;
+    SMAP_FOR_EACH (node, &local_config) {
+        const char *db_value = smap_get(&chassis_rec->other_config, node->key);
+
+        if (!db_value) {
+            ds_put_format(&diff, "\n  other_config:%s: database=<unset>, "
+                          "local='%s'", node->key, node->value);
+        } else if (strcmp(db_value, node->value)) {
+            ds_put_format(&diff, "\n  other_config:%s: database='%s', "
+                          "local='%s'", node->key, db_value, node->value);
+        }
+    }
+    smap_destroy(&local_config);
+
+    /* Options unknown to this chassis would be removed by
+     * remove_unsupported_options(), e.g., a feature flag set by a newer
+     * replica. */
+    struct sset supported_options = SSET_INITIALIZER(&supported_options);
+    update_supported_sset(&supported_options);
+    SMAP_FOR_EACH (node, &chassis_rec->other_config) {
+        if (!sset_contains(&supported_options, node->key)) {
+            ds_put_format(&diff, "\n  other_config:%s: database='%s', "
+                          "local=<unsupported>", node->key, node->value);
+        }
+    }
+    sset_destroy(&supported_options);
+
+    if (chassis_tunnels_changed(&ovs_cfg->encap_type_set,
+                                &ovs_cfg->encap_ip_set,
+                                ovs_cfg->encap_ip_default,
+                                ovs_cfg->encap_csum, chassis_rec)) {
+        ds_put_format(&diff, "\n  encaps: database has %"PRIuSIZE" encap(s) "
+                      "that don't match the local encap config",
+                      chassis_rec->n_encaps);
+    }
+
+    if (!diff.length) {
+        ds_destroy(&diff);
+        return false;
+    }
+
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+    VLOG_WARN_RL(&rl, "Replicated chassis '%s' configuration differs from "
+                 "the one in the Southbound database, not updating it until "
+                 "the configurations are aligned:%s",
+                 chassis_id, ds_cstr(&diff));
+    ds_destroy(&diff);
+    return true;
+}
+
 /* Update a Chassis record based on the config in the ovs config.
  * Returns CHASSIS_UPDATED if 'chassis_rec' was updated, CHASSIS_NEED_DELETE if
  * another chassis exists with an encap with same IP and type as 'chassis', and
@@ -973,11 +1058,13 @@ chassis_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
             const struct ovsrec_bridge *br_int,
             const struct sset *transport_zones,
             const struct sbrec_chassis_private **chassis_private,
-            struct ovsdb_idl_index *sbrec_encaps_index_by_ip_and_type)
+            struct ovsdb_idl_index *sbrec_encaps_index_by_ip_and_type,
+            bool *replicated_conflict)
 {
     struct ovs_chassis_cfg ovs_cfg;
 
     *chassis_private = NULL;
+    *replicated_conflict = false;
 
     /* Get the chassis config from the ovs table. */
     ovs_chassis_cfg_init(&ovs_cfg);
@@ -985,9 +1072,23 @@ chassis_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
         return NULL;
     }
 
+    if (ovs_cfg.is_replicated && !ovs_feature_set_discovered()) {
+        /* The feature dependent options can't be compared before the
+         * feature set is discovered. */
+        ovs_chassis_cfg_destroy(&ovs_cfg);
+        return NULL;
+    }
+
     const struct sbrec_chassis *chassis_rec = NULL;
     bool existed = chassis_get_record(ovnsb_idl_txn, sbrec_chassis_by_name,
                                       chassis_id, &chassis_rec);
+
+    if (existed && chassis_rec && ovs_cfg.is_replicated
+        && chassis_replicated_conflict(&ovs_cfg, chassis_id, chassis_rec)) {
+        *replicated_conflict = true;
+        ovs_chassis_cfg_destroy(&ovs_cfg);
+        return NULL;
+    }
 
     /* If we found (or created) a record, update it with the correct config
      * and store the current chassis_id for fast lookup in case it gets
