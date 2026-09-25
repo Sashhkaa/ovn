@@ -1,5 +1,10 @@
 OVN v26.09.0 - Sep 18 2026
 --------------------------
+   - Added a new "options:fail_open" key to the Load_Balancer_Health_Check
+     table.  If set to true and all the backends of the VIP are detected as
+     down, traffic is load balanced across all of them instead of being
+     dropped or rejected.  As soon as at least one backend is online again,
+     only the online backends are used.
    - Logical_Router_Port: Added a new "options:dhcpv4_primary_ip" key
      that selects which of the port's IPv4 addresses ovn-northd uses as
      the relay agent address (giaddr) in relayed DHCP packets.  When
