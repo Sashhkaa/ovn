@@ -623,17 +623,18 @@ ls_has_localnet_port(const struct ovn_datapath *od)
     PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_ECMP, 17, "lr_in_ip_routing_ecmp") \
     PIPELINE_STAGE(ROUTER, IN,  POLICY,          18, "lr_in_policy")          \
     PIPELINE_STAGE(ROUTER, IN,  POLICY_ECMP,     19, "lr_in_policy_ecmp")     \
-    PIPELINE_STAGE(ROUTER, IN,  DHCP_RELAY_RESP_CHK, 20,                      \
+    PIPELINE_STAGE(ROUTER, IN,  ICMP_REDIRECT,   20, "lr_in_icmp_redirect")   \
+    PIPELINE_STAGE(ROUTER, IN,  DHCP_RELAY_RESP_CHK, 21,                      \
                   "lr_in_dhcp_relay_resp_chk")                                \
-    PIPELINE_STAGE(ROUTER, IN,  DHCP_RELAY_RESP, 21,                          \
+    PIPELINE_STAGE(ROUTER, IN,  DHCP_RELAY_RESP, 22,                          \
                   "lr_in_dhcp_relay_resp")                                    \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,     22, "lr_in_arp_resolve")     \
-    PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN,     23, "lr_in_chk_pkt_len")     \
-    PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,     24, "lr_in_larger_pkts")     \
-    PIPELINE_STAGE(ROUTER, IN,  GW_REDIRECT,     25, "lr_in_gw_redirect")     \
-    PIPELINE_STAGE(ROUTER, IN,  NETWORK_ID,      26, "lr_in_network_id")      \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST,     27, "lr_in_arp_request")     \
-    PIPELINE_STAGE(ROUTER, IN,  ECMP_STATEFUL_EGR, 28,                        \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,     23, "lr_in_arp_resolve")     \
+    PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN,     24, "lr_in_chk_pkt_len")     \
+    PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,     25, "lr_in_larger_pkts")     \
+    PIPELINE_STAGE(ROUTER, IN,  GW_REDIRECT,     26, "lr_in_gw_redirect")     \
+    PIPELINE_STAGE(ROUTER, IN,  NETWORK_ID,      27, "lr_in_network_id")      \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST,     28, "lr_in_arp_request")     \
+    PIPELINE_STAGE(ROUTER, IN,  ECMP_STATEFUL_EGR, 29,                        \
                                 "lr_in_ecmp_stateful_egr")
 
 /* Logical router egress stages. */

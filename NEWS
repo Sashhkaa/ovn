@@ -127,6 +127,11 @@ OVN v26.09.0 - Sep 18 2026
      where routing for such a port has to stay distributed. Note that the
      router must not perform stateful processing (stateful NAT or load
      balancing) for that port.  See ovn-nb(5) for more information.
+   - Logical_Router_Port: Added a new "options:send_icmp4_redirects" key.
+     If set to true, the router sends an ICMPv4 Redirect (RFC 1812, 5.2.7.2)
+     to the source of a packet that is forwarded back out of the port it
+     arrived on, when the source and the next hop are on the same network
+     of that port.  Disabled by default.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
