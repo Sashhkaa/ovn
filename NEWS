@@ -81,6 +81,11 @@ Post v26.09.0
      different from the backend's port and the load balancer's protocol.
      They are set in the ip_port_mappings column in Load_Balancer table.
      See the ovn-nb(5) man page for more information.
+   - Added a new "options:fail_open" key to the Load_Balancer_Health_Check
+     table.  If set to true and all the backends of the VIP are detected as
+     down, traffic is load balanced across all of them instead of being
+     dropped or rejected.  As soon as at least one backend is online again,
+     only the online backends are used.
 
 OVN v26.09.0 - xxx xx xxxx
 --------------------------
