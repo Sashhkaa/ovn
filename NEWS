@@ -129,6 +129,12 @@ OVN v26.09.0 - xxx xx xxxx
      represent a logical router port (e.g. ovn-ic transit switch LSPs).
      Such ports are treated like type=router, including omission from
      _MC_flood_l2.
+   - Added a new "options:fail-open" key to the Load_Balancer_Health_Check
+     table.  If set to true and all the backends of the VIP are detected as
+     down, traffic is load balanced across all of them instead of being
+     dropped (or rejected).  As soon as at least one backend is online again,
+     only the online backends are used.
+
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
