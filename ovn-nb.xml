@@ -5028,6 +5028,23 @@ or
           router version of this option.
         </p>
       </column>
+
+      <column name="options" key="send_icmp4_redirects"
+              type='{"type": "boolean"}'>
+        <p>
+          If set to <code>true</code>, the router sends an ICMPv4 Redirect to
+          the source of a packet that arrived on this port and is forwarded
+          back out of it, provided that the source and the next hop are on
+          the same network of the port. The Redirect names the next hop as
+          the better first hop; the packet itself is still forwarded.
+          No Redirect is sent when :
+          - The next hop is the source of the packet.
+          - When the packet is itself an ICMP Error.
+          - When the destination itself belongs to one of directly connected
+            router's network: a Redirect always points to another router.
+          It is <code>false</code> by default.
+        </p>
+      </column>
     </group>
 
     <group title="Attachment">

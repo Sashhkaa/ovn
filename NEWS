@@ -129,6 +129,11 @@ OVN v26.09.0 - xxx xx xxxx
      represent a logical router port (e.g. ovn-ic transit switch LSPs).
      Such ports are treated like type=router, including omission from
      _MC_flood_l2.
+   - Logical_Router_Port: Added a new "options:send_icmp4_redirects" key.
+     If set to true, the router sends an ICMPv4 Redirect (RFC 1812, 5.2.7.2)
+     to the source of a packet that is forwarded back out of the port it
+     arrived on, when the source and the next hop are on the same network
+     of that port.  Disabled by default.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------

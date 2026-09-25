@@ -3097,6 +3097,12 @@ with priority 100 and action setting unique-generated per-datapath 32-bit value
 If packet didn't match any configured inport (*<main>* route table), register 7
 value is set to 0.
 
+If Logical Router Port *P* has ``options:send_icmp4_redirects`` set to
+``true``, the original Ethernet source address of the packet is also saved
+in ``xreg1[0..47]``, because routing overwrites ``eth.src`` with the
+address of the egress router port.  The saved address is used by
+:ref:`ICMP Redirect <lr-in-20>` as the destination of the ICMPv4 Redirect.
+
 This table contains the following logical flows:
 
 - Priority-100 flow with match ``inport == "LRP_NAME"`` value and action, which
@@ -3115,7 +3121,7 @@ setting ``reg0`` (or ``xxreg0`` for IPv6) to the next-hop IP address (leaving
 ``ip4.dst`` or ``ip6.dst``, the packet's final destination, unchanged) and
 advances to the next table for ARP resolution.  It also sets ``reg1`` (or
 ``xxreg1``) to the IP address owned by the selected router port (ingress table
-:ref:`ARP Request <lr-in-27>` will generate an ARP request, if needed, with
+:ref:`ARP Request <lr-in-28>` will generate an ARP request, if needed, with
 ``reg0`` as the target protocol address and ``reg1`` as the source protocol
 address).
 
@@ -3251,7 +3257,7 @@ setting ``reg0`` (or ``xxreg0`` for IPv6) to the next-hop IP address (leaving
 ``ip4.dst`` or ``ip6.dst``, the packet's final destination, unchanged) and
 advances to the next table for ARP resolution.  It also sets ``reg1`` (or
 ``xxreg1``) to the IP address owned by the selected router port (ingress table
-:ref:`ARP Request <lr-in-27>` will generate an ARP request, if needed, with
+:ref:`ARP Request <lr-in-28>` will generate an ARP request, if needed, with
 ``reg0`` as the target protocol address and ``reg1`` as the source protocol
 address).
 
@@ -3348,7 +3354,55 @@ nexthops.
 
 .. _lr-in-20:
 
-Ingress Table 20: DHCP Relay Response Check
+Ingress Table 20: ICMP Redirect
++~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This table sends ICMPv4 Redirect messages (RFC 792, type 5, code 1) as
+described in RFC 1812 section 5.2.7.2.  When a packet is forwarded back out
+of the logical router port it arrived on and the next hop is on the same
+network as the sender, the sender is told to use that next hop directly.  The
+original packet is still forwarded.  Flows are added only for logical router
+ports with ``options:send_icmp4_redirects`` set to ``true``.
+
+- For each logical router port *P* with
+  ``options:send_icmp4_redirects=true``, a priority-110 flow with match
+  ``inport == P && icmp4.type == {3, 5, 11,}`` and action ``next;``,
+  so that no Redirect is sent in reply to icmp4 errors (RFC 1122 3.2.2).
+
+- For each IPv4 network *N* of such a port *P*, a priority-110 flow with match
+  ``ip4 && ip4.dst == N`` and action ``next;``.  No Redirect is sent when the
+  destination itself is on the network of the port, so a Redirect always
+  points to another router and never to the destination host.
+
+- For each IPv4 network *N* of such a port *P*, whose Ethernet address is *E*
+  and IPv4 address on *N* is *A*, a priority-100 flow with match ``inport == P
+  && outport == P && ip4 && ip4.src == N && reg0 == N && !ip.later_frag`` and
+  the following actions::
+
+      icmp4_redirect {
+          eth.dst = xreg1[0..47];
+          eth.src = E;
+          ip4.dst = ip4.src;
+          ip4.src = A;
+          ip.ttl = 254;
+          outport = P;
+          flags.loopback = 1;
+          output;
+      };
+      next;
+
+  ``reg0`` holds the next hop selected by routing, and ``xreg1[0..47]`` holds
+  the original Ethernet source address saved in :ref:`IP Routing Pre
+  <lr-in-15>`.  The next hop is sent in the gateway field of the Redirect.
+  ``ovn-controller`` does not send the Redirect if the next hop is the source
+  of the packet itself.  These packets are rate-limited by the ``icmp4-error``
+  control plane protection meter.
+
+- A priority-0 flow that matches all packets to advance to the next table.
+
+.. _lr-in-21:
+
+Ingress Table 21: DHCP Relay Response Check
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This stage process the DHCP response packets coming from the DHCP server.
@@ -3366,9 +3420,9 @@ This stage process the DHCP response packets coming from the DHCP server.
 
 - A priority-0 flow that matches all packets to advance to the next table.
 
-.. _lr-in-21:
+.. _lr-in-22:
 
-Ingress Table 21: DHCP Relay Response
+Ingress Table 22: DHCP Relay Response
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This stage process the DHCP response packets on which ``dhcp_relay_resp_chk``
@@ -3393,9 +3447,9 @@ action is applied in the previous stage.
 
 - A priority-0 flow that matches all packets to advance to the next table.
 
-.. _lr-in-22:
+.. _lr-in-23:
 
-Ingress Table 22: ARP/ND Resolution
+Ingress Table 23: ARP/ND Resolution
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Any packet that reaches this table is an IP packet whose next-hop IPv4 address
@@ -3509,9 +3563,9 @@ contains the final destination.)  This table resolves the IP address in ``reg0``
   !is_chassis_resident("cr-ROUTER_PORT")`` has actions ``eth.dst = E; next;``,
   where *E* is the ethernet address of the logical router port.
 
-.. _lr-in-23:
+.. _lr-in-24:
 
-Ingress Table 23: Check packet length
+Ingress Table 24: Check packet length
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For distributed logical routers or gateway routers with gateway port configured
@@ -3534,9 +3588,9 @@ flow is added, with priority-55, to bypass the ``check_pkt_larger`` flow.
 This table adds one priority-0 fallback flow that matches all packets and
 advances to the next table.
 
-.. _lr-in-24:
+.. _lr-in-25:
 
-Ingress Table 24: Handle larger packets
+Ingress Table 25: Handle larger packets
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For distributed logical routers or gateway routers with gateway port configured
@@ -3583,9 +3637,9 @@ respectively::
 This table adds one priority-0 fallback flow that matches all packets and
 advances to the next table.
 
-.. _lr-in-25:
+.. _lr-in-26:
 
-Ingress Table 25: Gateway Redirect
+Ingress Table 26: Gateway Redirect
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For distributed logical routers where one or more of the logical router ports
@@ -3633,9 +3687,9 @@ following flows:
 
 - A priority-0 logical flow with match ``1`` has actions ``next;``.
 
-.. _lr-in-26:
+.. _lr-in-27:
 
-Ingress Table 26: Network ID
+Ingress Table 27: Network ID
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This table contains flows that set ``flags.network_id`` for IP packets:
@@ -3661,9 +3715,9 @@ This table contains flows that set ``flags.network_id`` for IP packets:
 
 - Catch-all: A priority-0 flow with match ``1`` has actions ``next;``.
 
-.. _lr-in-27:
+.. _lr-in-28:
 
-Ingress Table 27: ARP Request
+Ingress Table 28: ARP Request
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 In the common case where the Ethernet destination has been resolved, this table
@@ -3696,9 +3750,9 @@ or IPv6 Neighbor Solicitation request.  It holds the following flows:
 
 - Known MAC address.  A priority-0 flow with match ``1`` has actions ``next;``.
 
-.. _lr-in-28:
+.. _lr-in-29:
 
-Ingress Table 28: ECMP symmetric reply processing for egress
+Ingress Table 29: ECMP symmetric reply processing for egress
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This table contains logical flows that commit IP traffic forwarded by ECMP
