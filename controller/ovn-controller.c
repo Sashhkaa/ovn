@@ -8145,9 +8145,9 @@ main(int argc, char *argv[])
             if (chassis_config_conflict) {
                 VLOG_ERR("Refusing to overwrite the replicated Chassis "
                          "record '%s', exiting.  Align the local "
-                         "configuration with the Southbound database (or "
-                         "clear other_config:replicated) and restart "
-                         "ovn-controller.", chassis_id);
+                         "configuration (including "
+                         "external_ids:ovn-replicated) with the Southbound "
+                         "database and restart ovn-controller.", chassis_id);
                 /* Exit without cleaning up the databases: the Chassis
                  * record is not ours to delete. */
                 exit_args.restart = true;

@@ -70,6 +70,9 @@ struct ovs_chassis_cfg {
     struct ds iface_types;
     /* Is this chassis an interconnection gateway. */
     bool is_interconn;
+    /* Is the Chassis record shared by several ovn-controllers that must
+     * all agree on its config. */
+    bool replicated;
     /* Does OVS support sampling with ids taken from registers? */
     bool sample_with_regs;
     /* Does OVS support flushing CT zones using label/mark? */
@@ -236,6 +239,13 @@ get_is_interconn(const struct smap *ext_ids, const char *chassis_id)
                                               "ovn-is-interconn", false);
 }
 
+static bool
+get_replicated(const struct smap *ext_ids, const char *chassis_id)
+{
+    return get_chassis_external_id_value_bool(ext_ids, chassis_id,
+                                              "ovn-replicated", false);
+}
+
 static void
 update_chassis_transport_zones(const struct sset *transport_zones,
                                const struct sbrec_chassis *chassis_rec)
@@ -381,6 +391,7 @@ chassis_parse_ovs_config(const struct ovsrec_open_vswitch_table *ovs_table,
                                   &ovs_cfg->iface_types);
 
     ovs_cfg->is_interconn = get_is_interconn(&cfg->external_ids, chassis_id);
+    ovs_cfg->replicated = get_replicated(&cfg->external_ids, chassis_id);
     ovs_cfg->sample_with_regs =
         ovs_feature_is_supported(OVS_SAMPLE_REG_SUPPORT);
     ovs_cfg->ct_label_flush =
@@ -413,6 +424,8 @@ chassis_build_other_config(const struct ovs_chassis_cfg *ovs_cfg,
     smap_replace(config, "ovn-evpn-local-ip", ovs_cfg->evpn_local_ip);
     smap_replace(config, "is-interconn",
                  ovs_cfg->is_interconn ? "true" : "false");
+    smap_replace(config, "replicated",
+                 ovs_cfg->replicated ? "true" : "false");
     smap_replace(config, OVN_FEATURE_PORT_UP_NOTIF, "true");
     smap_replace(config, OVN_FEATURE_CT_NO_MASKED_LABEL, "true");
     smap_replace(config, OVN_FEATURE_MAC_BINDING_TIMESTAMP, "true");
@@ -528,6 +541,12 @@ chassis_other_config_changed(const struct ovs_chassis_cfg *ovs_cfg,
     bool chassis_is_interconn =
         smap_get_bool(&chassis_rec->other_config, "is-interconn", false);
     if (chassis_is_interconn != ovs_cfg->is_interconn) {
+        return true;
+    }
+
+    bool chassis_replicated =
+        smap_get_bool(&chassis_rec->other_config, "replicated", false);
+    if (chassis_replicated != ovs_cfg->replicated) {
         return true;
     }
 
@@ -784,6 +803,7 @@ update_supported_sset(struct sset *supported)
     sset_add(supported, "iface-types");
     sset_add(supported, "ovn-chassis-mac-mappings");
     sset_add(supported, "is-interconn");
+    sset_add(supported, "replicated");
     sset_add(supported, "ovn-evpn-vxlan-ports");
     sset_add(supported, "ovn-evpn-local-ip");
 
@@ -855,7 +875,8 @@ chassis_get_record(struct ovsdb_idl_txn *ovnsb_idl_txn,
 }
 
 /*
- * A Chassis record with other_config:replicated set to "true" is owned by
+ * A Chassis record with other_config:replicated set to "true" is shared by
+ * several ovn-controllers (they set external_ids:ovn-replicated) or owned by
  * an external entity (e.g., it is replicated from another availability
  * zone) and must not be silently overwritten by the local ovn-controller.
  * If the config this chassis would commit differs from what is already in

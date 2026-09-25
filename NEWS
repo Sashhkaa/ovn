@@ -113,6 +113,10 @@ OVN v26.09.0 - xxx xx xxxx
      reachable over the underlay through ECMP, so that they appear to OVN as
      a single chassis. See Documentation/topics/virtual-gateway.rst for the
      requirements and the restrictions.
+   - Added "external_ids:ovn-replicated" option to ovn-controller.  It is
+     copied to "other_config:replicated" of the Chassis record, and an
+     ovn-controller whose configuration differs from such a record exits
+     instead of overwriting it.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------

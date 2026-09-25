@@ -136,6 +136,13 @@ For the same reason, every chassis scoped configuration option has to be
 identical on all the nodes, including , for example: ``external_ids:hostname``,
 ``external_ids:ovn-bridge-mappings`` and all others.
 
+To have ``ovn-controller`` enforce this, set
+``external_ids:ovn-replicated=true`` on every node of the group. The flag is
+copied to ``other_config:replicated`` of the shared ``Chassis`` record, and a
+node whose configuration differs from the record (including a node that does
+not set the flag) logs the differences and exits instead of overwriting the
+record or claiming any port.
+
 Only stateless traffic is supported
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

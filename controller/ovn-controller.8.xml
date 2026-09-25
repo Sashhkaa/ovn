@@ -320,6 +320,35 @@
         interconnection gateway.
       </dd>
 
+      <dt><code>external_ids:ovn-replicated</code></dt>
+      <dd>
+        <p>
+          The boolean flag indicates that the <code>Chassis</code> record
+          is shared by several <code>ovn-controller</code> instances with the
+          same <code>system-id</code>, for example the nodes of a virtual
+          gateway.  <code>ovn-controller</code> copies this flag to
+          <code>other_config:replicated</code> of its <code>Chassis</code>
+          record.
+        </p>
+
+        <p>
+          If the existing <code>Chassis</code> record has
+          <code>other_config:replicated</code> set to <code>true</code> and
+          the local configuration differs from it (the hostname, the chassis
+          scoped options stored in <code>other_config</code>, including this
+          flag, or the encapsulations), <code>ovn-controller</code> logs every
+          difference and exits with an error without modifying the record or
+          claiming any port.
+        </p>
+
+        <p>
+          To clear the flag, remove it from all the instances sharing the
+          record first and then remove <code>other_config:replicated</code>
+          from the <code>Chassis</code> record.  The default value is
+          <code>false</code>.
+        </p>
+      </dd>
+
       <dt><code>external_ids:ovn-match-northd-version</code></dt>
       <dd>
         The boolean flag indicates if <code>ovn-controller</code> needs to
