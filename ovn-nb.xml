@@ -2587,7 +2587,9 @@
     <group title="Health Checks">
       <p>
         OVN supports health checks for load balancer endpoints. When health
-        checks are enabled, the load balancer uses only healthy endpoints.
+        checks are enabled, the load balancer uses only healthy endpoints,
+        unless <ref table="Load_Balancer_Health_Check" column="options"
+        key="fail_open"/> is enabled and no endpoint is healthy.
       </p>
 
       <p>
@@ -2911,6 +2913,29 @@ or
       <column name="options" key="failure_count" type='{"type": "integer"}'>
         The number of failure checks after which the endpoint is considered
         offline.
+      </column>
+
+      <column name="options" key="fail_open" type='{"type": "boolean"}'>
+        <p>
+          If set to <code>true</code> and none of the VIP's endpoints is
+          healthy, traffic is load balanced across all the endpoints that
+          have health checks configured, instead of being dropped or
+          rejected.  In that case this option takes precedence over the
+          <ref table="Load_Balancer" column="options" key="reject"/> option.
+          As soon as at least one endpoint is healthy again, only the
+          healthy endpoints are used.
+        </p>
+
+        <p>
+          A newly added endpoint is considered offline until its first
+          health check succeeds.  Therefore, when all the endpoints of a VIP
+          are new, traffic is load balanced across all of them until the
+          first health check succeeds.
+        </p>
+
+        <p>
+          The default is <code>false</code>.
+        </p>
       </column>
     </group>
 

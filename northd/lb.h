@@ -91,6 +91,8 @@ struct ovn_northd_lb_vip {
     size_t n_backends;
 
     struct nbrec_load_balancer_health_check *lb_health_check;
+    /* Value of the health check's "fail_open" option. */
+    bool fail_open;
 };
 
 struct ovn_northd_lb_backend {

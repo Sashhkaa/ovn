@@ -104,6 +104,10 @@ ovn_northd_lb_vip_init(struct ovn_northd_lb_vip *lb_vip_nb,
                                      sizeof *lb_vip_nb->backends_nb);
     lb_vip_nb->lb_health_check =
         ovn_lb_get_health_check(nbrec_lb, vip_port_str, template);
+    lb_vip_nb->fail_open =
+        lb_vip_nb->lb_health_check
+        && smap_get_bool(&lb_vip_nb->lb_health_check->options,
+                         "fail_open", false);
 }
 
 /*

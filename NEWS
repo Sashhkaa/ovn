@@ -44,6 +44,11 @@ Post v26.09.0
      table at startup; it defers its kernel route updates until the initial
      dump of the advertised routes of the local route-exchange datapaths is
      complete.
+   - Added a new "options:fail_open" key to the Load_Balancer_Health_Check
+     table.  If set to true and all the backends of the VIP are detected as
+     down, traffic is load balanced across all of them instead of being
+     dropped or rejected.  As soon as at least one backend is online again,
+     only the online backends are used.
 
 OVN v26.09.0 - xxx xx xxxx
 --------------------------
