@@ -170,6 +170,11 @@ OVN v26.09.0 - xxx xx xxxx
      change handlers, so a change is reconciled in place instead of re-running
      the whole ovn-ic computation.  The "inc-engine/show-stats" command
      reports the per-node recompute counters.
+   - Added a new "options:fail-open" key to the Load_Balancer_Health_Check
+     table.  If set to true and all the backends of the VIP are detected as
+     down, traffic is load balanced across all of them instead of being
+     dropped (or rejected).  As soon as at least one backend is online again,
+     only the online backends are used.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
