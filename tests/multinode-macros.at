@@ -296,23 +296,33 @@ multinode_setup_northd() {
     m_as $c ovn-sbctl set-connection p${REMOTE_PROT}:6642
 }
 
-# multinode_setup_controller NODE ENCAP_IP REMOTE_IP [ENCAP_TYPE]
+# multinode_setup_controller NODE SYSTEM_ID ENCAP_IP REMOTE_IP
+#                            [ENCAP_TYPE] [START_CONTROLLER]
 #
-# Sets up controller on specified node.
+# Sets up controller on specified node. SYSTEM_ID defaults to NODE; passing a
+# different value (or the same value on more than one node) allows a test to
+# control the chassis name the node registers with.  START_CONTROLLER defaults
+# to "yes"; with "no" only OVS is set up, so that a test can finish the node
+# configuration before starting ovn-controller itself.
 multinode_setup_controller() {
     c=$1
+    system_id=${2:-$1}
     encap_ip=$3
     remote_ip=$4
     encap_type=${5:-"geneve"}
+    start_controller=${6:-"yes"}
 
     # Cleanup existing one
     m_as $c /usr/share/openvswitch/scripts/ovs-ctl stop
     m_as $c /usr/share/ovn/scripts/ovn-ctl stop_controller
     m_as $c sh -c "rm -f /etc/openvswitch/*.db"
 
-    m_as $c /usr/share/openvswitch/scripts/ovs-ctl start --system-id=$c
-    echo "Using ${CONTROLLER_SSL_ARGS} for ovn-controller".
-    m_as $c /usr/share/ovn/scripts/ovn-ctl start_controller ${CONTROLLER_SSL_ARGS}
+    m_as $c /usr/share/openvswitch/scripts/ovs-ctl start --system-id=$system_id
+    if [[ "$start_controller" = "yes" ]]; then
+        echo "Using ${CONTROLLER_SSL_ARGS} for ovn-controller".
+        m_as $c /usr/share/ovn/scripts/ovn-ctl start_controller \
+            ${CONTROLLER_SSL_ARGS}
+    fi
 
     m_as $c ovs-vsctl set open . external_ids:ovn-encap-ip=$encap_ip
     m_as $c ovs-vsctl set open . external-ids:ovn-encap-type=$encap_type

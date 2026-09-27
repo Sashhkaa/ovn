@@ -135,6 +135,11 @@ OVN v26.09.0 - Sep 18 2026
      to the source of a packet that is forwarded back out of the port it
      arrived on, when the source and the next hop are on the same network
      of that port.  Disabled by default.
+   - Documented the "replicated gateway" setup, in which several ovn-controller
+     instances share one chassis name and one anycast encapsulation IP
+     reachable over the underlay through ECMP, so that they appear to OVN as
+     a single chassis. See Documentation/topics/replicated-gateway.rst for the
+     requirements and the restrictions.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
