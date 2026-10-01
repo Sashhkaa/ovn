@@ -3827,7 +3827,19 @@ Egress Table 2: Post UNDNAT
 
 - A priority-70 logical flow is added that initiates CT state for traffic that
   is configured to be SNATed on Distributed routers. This allows the next table,
-  ``lr_out_snat``, to effectively match on various CT states.
+  ``lr_out_snat``, to effectively match on various CT states. The flow matches
+  on ``ip && ip4.src == A && outport == GW && (!ct.trk || !ct.rpl)`` with an
+  action ``ct_next(snat);``, where *A* is the logical IP or network of the NAT
+  rule and *GW* is the logical router gateway port.
+
+  If the NAT rule is of type dnat_and_snat, the flow is added with priority 75
+  instead, so that the traffic of its logical IP is not tracked by a SNAT rule
+  covering the same network. The action is ``ct_next(dnat);``. If the
+  dnat_and_snat rule has ``stateless=true`` in the options, the flow does not
+  match on CT state and its action is ``next;``, so that the traffic bypasses
+  conntrack.
+
+  These flows are not added if ``options:ct-commit-all`` is set to ``true``.
 
 - A priority-50 logical flow is added that commits any untracked flows from the
   previous table :ref:`UNDNAT <lr-out-1>` for Gateway routers.  This flow
@@ -3966,7 +3978,17 @@ based on the configuration in the OVN Northbound database.
   ``ip4.src == A && outport == GW``, this flow matches on ``ip4.dst == A &&
   inport == GW``. A CT state is initiated for this traffic so that the following
   table, ``lr_out_post_snat``, can identify whether the traffic flow was
-  initiated from the internal or external network.
+  initiated from the internal or external network. The flow has priority *P*,
+  an additional match ``(!ct.trk || !ct.rpl)`` and an action ``ct_snat;``.
+
+  If the NAT rule is of type dnat_and_snat, the flow is added with priority
+  ``P + 5`` and an action ``ct_dnat;``, so that the traffic of its logical IP
+  is tracked in the DNAT CT zone instead of the SNAT CT zone of a SNAT rule
+  covering the same network. If the dnat_and_snat rule has ``stateless=true``
+  in the options, the flow does not match on CT state and its action is
+  ``next;``, so that the traffic bypasses conntrack.
+
+  This flow is not added if ``options:ct-commit-all`` is set to ``true``.
 
 - If the ``options:ct-commit-all`` is set to ``true`` the following two flows
   are configured matching on ``ip && (!ct.trk || !ct.rpl) && flags.unsnat_new ==
@@ -3988,8 +4010,12 @@ Packets reaching this table are processed according to the flows below:
   routers, and was initiated from an external network (i.e. it matches
   ``ct.new``), is committed to the SNAT CT zone. This ensures that replies
   returning from the SNATed network do not have their source address translated.
-  For details about match rules and priority see section :ref:`SNAT on
-  Distributed Routers <lr-out-3>`.
+  The action is ``ct_commit_to_zone(snat);``. If the NAT rule is of type
+  dnat_and_snat, the traffic is committed to the DNAT CT zone with an action
+  ``ct_commit_to_zone(dnat);`` instead. Traffic of a dnat_and_snat rule that
+  has ``stateless=true`` in the options is not committed. For details about
+  match rules and priority see section :ref:`SNAT on Distributed Routers
+  <lr-out-3>`.
 
 - A priority-0 logical flow that matches all packets not already handled (match
   ``1``) and action ``next;``.
