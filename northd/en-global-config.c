@@ -217,9 +217,10 @@ en_global_config_run(struct engine_node *node , void *data)
         nbrec_nb_global_set_options(nb, options);
     }
 
-    if (smap_get_bool(&nb->options, "ignore_chassis_features", false)) {
-        northd_enable_all_features(config_data);
-    } else {
+    /* Enable all features before calling build_chassis_features() as
+     * build_chassis_features() only sets the feature flags to false. */
+    northd_enable_all_features(config_data);
+    if (!smap_get_bool(&nb->options, "ignore_chassis_features", false)) {
         build_chassis_features(sbrec_chassis_table, &config_data->features);
     }
 

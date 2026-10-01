@@ -11652,6 +11652,38 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([Chassis-feature compatibility - chassis deletion])
+ovn_start
+
+check ovn-sbctl chassis-add hv1 geneve 127.0.0.1 \
+  -- set chassis hv1 other_config:ct-state-save=true
+check ovn-nbctl --wait=sb sync
+
+AT_CHECK([as northd ovn-appctl -t ovn-northd debug/chassis-features-list | grep "ct_state_save"], [0], [dnl
+ct_state_save: true
+])
+
+AS_BOX([Add chassis without the feature])
+check ovn-sbctl chassis-add hv2 geneve 127.0.0.2
+check ovn-nbctl --wait=sb sync
+
+AT_CHECK([as northd ovn-appctl -t ovn-northd debug/chassis-features-list | grep "ct_state_save"], [0], [dnl
+ct_state_save: false
+])
+
+AS_BOX([Delete chassis without the feature])
+check ovn-sbctl chassis-del hv2
+check ovn-nbctl --wait=sb sync
+
+AT_CHECK([as northd ovn-appctl -t ovn-northd debug/chassis-features-list | grep "ct_state_save"], [0], [dnl
+ct_state_save: true
+])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([check OVN QoS])
 AT_KEYWORDS([OVN-QoS])
 ovn_start
