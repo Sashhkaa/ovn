@@ -1430,8 +1430,8 @@ AT_CAPTURE_FILE([crflows2])
 AT_CHECK([grep -e "lr_out_snat" drflows5 | ovn_strip_lflows], [0], [dnl
   table=??(lr_out_snat        ), priority=0    , match=(1), action=(next;)
   table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
-  table=??(lr_out_snat        ), priority=161  , match=(ip && ip4.dst == 50.0.0.11 && inport == "DR-S1" && is_chassis_resident("cr-DR-S1") && ip4.src == $allowed_range), action=(next;)
   table=??(lr_out_snat        ), priority=161  , match=(ip && ip4.src == 50.0.0.11 && outport == "DR-S1" && is_chassis_resident("cr-DR-S1") && ip4.dst == $allowed_range), action=(ip4.src=172.16.1.2; next;)
+  table=??(lr_out_snat        ), priority=166  , match=(ip && ip4.dst == 50.0.0.11 && inport == "DR-S1" && is_chassis_resident("cr-DR-S1") && ip4.src == $allowed_range), action=(next;)
 ])
 
 AT_CHECK([grep -e "lr_out_snat" crflows5 | ovn_strip_lflows], [0], [dnl
@@ -1460,9 +1460,9 @@ AT_CAPTURE_FILE([crflows2])
 AT_CHECK([grep -e "lr_out_snat" drflows6 | ovn_strip_lflows], [0], [dnl
   table=??(lr_out_snat        ), priority=0    , match=(1), action=(next;)
   table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
-  table=??(lr_out_snat        ), priority=161  , match=(ip && ip4.dst == 50.0.0.11 && inport == "DR-S1" && is_chassis_resident("cr-DR-S1")), action=(next;)
   table=??(lr_out_snat        ), priority=161  , match=(ip && ip4.src == 50.0.0.11 && outport == "DR-S1" && is_chassis_resident("cr-DR-S1")), action=(ip4.src=172.16.1.2; next;)
   table=??(lr_out_snat        ), priority=163  , match=(ip && ip4.src == 50.0.0.11 && outport == "DR-S1" && is_chassis_resident("cr-DR-S1") && ip4.dst == $disallowed_range), action=(next;)
+  table=??(lr_out_snat        ), priority=166  , match=(ip && ip4.dst == 50.0.0.11 && inport == "DR-S1" && is_chassis_resident("cr-DR-S1")), action=(next;)
 ])
 
 AT_CHECK([grep -e "lr_out_snat" crflows6 | ovn_strip_lflows], [0], [dnl
@@ -1509,8 +1509,8 @@ AT_CHECK([grep -e "lr_out_snat" drflows | ovn_strip_lflows], [0], [dnl
   table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
   table=??(lr_out_snat        ), priority=153  , match=(ip && ip4.dst == 50.0.0.0/24 && inport == "DR-public" && is_chassis_resident("cr-DR-public") && (!ct.trk || !ct.rpl)), action=(ct_snat;)
   table=??(lr_out_snat        ), priority=153  , match=(ip && ip4.src == 50.0.0.0/24 && outport == "DR-public" && is_chassis_resident("cr-DR-public") && (!ct.trk || !ct.rpl)), action=(ct_snat(172.16.1.10);)
-  table=??(lr_out_snat        ), priority=161  , match=(ip && ip4.dst == 50.0.0.11 && inport == "DR-public" && is_chassis_resident("cr-DR-public")), action=(next;)
   table=??(lr_out_snat        ), priority=161  , match=(ip && ip4.src == 50.0.0.11 && outport == "DR-public" && is_chassis_resident("cr-DR-public")), action=(ip4.src=172.16.1.2; next;)
+  table=??(lr_out_snat        ), priority=166  , match=(ip && ip4.dst == 50.0.0.11 && inport == "DR-public" && is_chassis_resident("cr-DR-public")), action=(next;)
 ])
 
 AT_CHECK([grep -e "lr_out_post_snat" drflows | ovn_strip_lflows], [0], [dnl
