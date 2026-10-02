@@ -18369,6 +18369,9 @@ build_lrouter_out_snat_match(struct lflow_table *lflows,
  * - DNAT_AND_SNAT: traffic to/from the host is tracked through the DNAT CT
  *   zone with slightly higher priority flows, so that it is not tracked by
  *   a broader SNAT covering the same logical IP.
+ * - DNAT: same as DNAT_AND_SNAT for traffic that goes to the host.  Traffic
+ *   from the host already gets the DNAT CT zone state in S_ROUTER_OUT_UNDNAT
+ *   and is SNATed, if at all, by a broader SNAT.
  * - Stateless DNAT_AND_SNAT: the same higher priority flows just skip the
  *   tracking, stateless NAT must bypass conntrack. */
 static void
@@ -18390,25 +18393,33 @@ build_lrouter_out_snat_track_flows(struct lflow_table *lflows,
 
     const struct nbrec_nat *nat = nat_entry->nb;
     uint16_t priority = lrouter_nat_get_priority(od, nat, false, cidr_bits);
+    /* Traffic to and from hosts behind SNAT is tracked in the SNAT CT zone.
+     * DNAT_AND_SNAT uses the DNAT CT zone in both directions.  DNAT-only
+     * rules use it here only for traffic going to the host. */
     const char *zone = nat_entry->type == SNAT ? "snat" : "dnat";
+
+    /* Give DNAT flows slightly higher priority so they win over SNAT flows
+     * covering the same logical IP. */
     uint16_t prio_offset = nat_entry->type == SNAT ? 0 : 5;
 
     /* For traffic that comes from the SNAT network, initiate CT state from
      * the correct zone, before entering S_ROUTER_OUT_SNAT to allow matching
      * on various CT states. */
-    build_lrouter_out_snat_match(lflows, od, nat, match, distributed_nat,
-                                 cidr_bits, is_v6, l3dgw_port, lflow_ref,
-                                 false);
-    ds_clear(actions);
-    if (stateless) {
-        ds_put_cstr(actions, "next;");
-    } else {
-        ds_put_cstr(match, " && (!ct.trk || !ct.rpl)");
-        ds_put_format(actions, "ct_next(%s);", zone);
+    if (nat_entry->type != DNAT) {
+        build_lrouter_out_snat_match(lflows, od, nat, match, distributed_nat,
+                                     cidr_bits, is_v6, l3dgw_port, lflow_ref,
+                                     false);
+        ds_clear(actions);
+        if (stateless) {
+            ds_put_cstr(actions, "next;");
+        } else {
+            ds_put_cstr(match, " && (!ct.trk || !ct.rpl)");
+            ds_put_format(actions, "ct_next(%s);", zone);
+        }
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 70 + prio_offset,
+                      ds_cstr(match), ds_cstr(actions), lflow_ref,
+                      WITH_HINT(&nat->header_));
     }
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 70 + prio_offset,
-                  ds_cstr(match), ds_cstr(actions), lflow_ref,
-                  WITH_HINT(&nat->header_));
 
     /* Traffic that goes into the SNAT network. */
     build_lrouter_out_snat_match(lflows, od, nat, match, distributed_nat,
@@ -18547,7 +18558,14 @@ build_lrouter_out_snat_flow(struct lflow_table *lflows,
                             struct lflow_ref *lflow_ref, bool commit_all,
                             const struct chassis_features *features)
 {
-    if (!(nat_entry->type == SNAT || nat_entry->type == DNAT_AND_SNAT)) {
+    if (nat_entry->type == DNAT) {
+        /* Nothing to SNAT, but traffic to the host still has to be tracked
+         * in the DNAT CT zone. */
+        build_lrouter_out_snat_track_flows(lflows, od, nat_entry, match,
+                                           actions, distributed_nat,
+                                           cidr_bits, is_v6, l3dgw_port,
+                                           lflow_ref, commit_all, features,
+                                           false);
         return;
     }
 

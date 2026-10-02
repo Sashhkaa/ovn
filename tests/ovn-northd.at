@@ -1543,6 +1543,51 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([dnat inside SNAT network on distributed router])
+ovn_start
+
+check ovn-sbctl chassis-add gw1 geneve 127.0.0.1 \
+  -- set chassis gw1 other_config:ct-commit-to-zone="true" \
+  -- set chassis gw1 other_config:ct-next-zone="true"
+
+check ovn-nbctl lr-add DR
+check ovn-nbctl lrp-add DR DR-public 02:ac:10:01:00:01 172.16.1.1/24
+check ovn-nbctl lrp-add DR DR-S1 02:ac:10:01:00:02 50.0.0.1/24
+check ovn-nbctl lrp-set-gateway-chassis DR-public gw1
+
+check ovn-nbctl lr-nat-add DR snat 172.16.1.10 50.0.0.0/24
+check ovn-nbctl lr-nat-add DR dnat 172.16.1.2 50.0.0.11
+check ovn-nbctl --wait=sb sync
+
+dnl Traffic to the DNAT logical IP must be tracked in the DNAT CT zone and
+dnl not by the flows of the SNAT covering its network.
+ovn-sbctl dump-flows DR > drflows
+AT_CAPTURE_FILE([drflows])
+
+AT_CHECK([grep -e "lr_out_post_undnat" drflows | ovn_strip_lflows], [0], [dnl
+  table=??(lr_out_post_undnat ), priority=0    , match=(1), action=(next;)
+  table=??(lr_out_post_undnat ), priority=70   , match=(ip && ip4.src == 50.0.0.0/24 && outport == "DR-public" && is_chassis_resident("cr-DR-public") && (!ct.trk || !ct.rpl)), action=(ct_next(snat);)
+])
+
+AT_CHECK([grep -e "lr_out_snat" drflows | ovn_strip_lflows], [0], [dnl
+  table=??(lr_out_snat        ), priority=0    , match=(1), action=(next;)
+  table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=??(lr_out_snat        ), priority=153  , match=(ip && ip4.dst == 50.0.0.0/24 && inport == "DR-public" && is_chassis_resident("cr-DR-public") && (!ct.trk || !ct.rpl)), action=(ct_snat;)
+  table=??(lr_out_snat        ), priority=153  , match=(ip && ip4.src == 50.0.0.0/24 && outport == "DR-public" && is_chassis_resident("cr-DR-public") && (!ct.trk || !ct.rpl)), action=(ct_snat(172.16.1.10);)
+  table=??(lr_out_snat        ), priority=166  , match=(ip && ip4.dst == 50.0.0.11 && inport == "DR-public" && is_chassis_resident("cr-DR-public") && (!ct.trk || !ct.rpl)), action=(ct_dnat;)
+])
+
+AT_CHECK([grep -e "lr_out_post_snat" drflows | ovn_strip_lflows], [0], [dnl
+  table=??(lr_out_post_snat   ), priority=0    , match=(1), action=(next;)
+  table=??(lr_out_post_snat   ), priority=153  , match=(ip && ip4.dst == 50.0.0.0/24 && inport == "DR-public" && is_chassis_resident("cr-DR-public") && ct.new), action=(ct_commit_to_zone(snat);)
+  table=??(lr_out_post_snat   ), priority=166  , match=(ip && ip4.dst == 50.0.0.11 && inport == "DR-public" && is_chassis_resident("cr-DR-public") && ct.new), action=(ct_commit_to_zone(dnat);)
+])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([check Load balancer health check and Service Monitor sync])
 ovn_start
 check ovn-nbctl lb-add lb1 10.0.0.10:80 10.0.0.3:80,20.0.0.3:80
