@@ -85,7 +85,8 @@
         nodes may share the same <code>system-id</code>, so that they appear
         to OVN as a single chassis backed by an anycast encapsulation IP.
         See the "Replicated Gateway" document for the requirements and the
-        restrictions of such a setup.
+        restrictions of such a setup, and
+        <code>external_ids:ovn-chassis-replicated</code>.
       </p></dd>
 
       <dt><code>external_ids:hostname</code></dt>
@@ -329,6 +330,31 @@
       <dd>
         The boolean flag indicates if the chassis is used as an
         interconnection gateway.
+      </dd>
+
+      <dt><code>external_ids:ovn-chassis-replicated</code></dt>
+      <dd>
+        <p>
+          The boolean flag indicates that the <code>Chassis</code> record of
+          this chassis is shared with other <code>ovn-controller</code>
+          instances that run with the same <code>system-id</code> on other
+          nodes, see the "Replicated Gateway" document.  Default value is
+          <code>false</code>.
+        </p>
+
+        <p>
+          When set, <code>ovn-controller</code> marks the <code>Chassis</code>
+          record with <code>other_config:replicated=true</code> and never
+          overwrites a record that differs from its local configuration:
+          it logs every difference and stops processing until either the
+          local or the Southbound configuration changes.  The same is done by
+          an instance that finds a record marked as replicated in the
+          Southbound database while this flag is not set locally.  On exit,
+          <code>ovn-controller</code> keeps the <code>Chassis</code> and
+          <code>Chassis_Private</code> records, the port bindings and the
+          IGMP groups of the chassis, because they are still used by the
+          other instances, and only cleans up the local resources.
+        </p>
       </dd>
 
       <dt><code>external_ids:ovn-match-northd-version</code></dt>

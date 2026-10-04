@@ -8832,8 +8832,15 @@ loop_done:
     const struct ovsrec_open_vswitch_table *ovs_table =
         ovsrec_open_vswitch_table_get(ovs_idl_loop.idl);
     bool restart = exit_args.restart || !get_ovn_cleanup_on_exit(ovs_table);
+    /* A replicated Chassis record, and everything that refers to it, is
+     * shared with the other ovn-controller instances running with the same
+     * chassis name, so it is never removed on exit.  Only the local
+     * resources are cleaned up. */
+    bool replicated = chassis_is_replicated(ovs_table);
     VLOG_INFO("Exiting ovn-controller, resource cleanup: %s",
-              restart ? "False (--restart)" : "True");
+              restart ? "False (--restart)"
+                      : replicated ? "Local only (replicated chassis)"
+                                   : "True");
 
     /* It's time to exit.  Clean up the databases if we are not restarting */
     if (!restart) {
@@ -8858,12 +8865,12 @@ loop_done:
                                                             ovs_table);
             const char *chassis_id = get_ovs_chassis_id(ovs_table);
             const struct sbrec_chassis *chassis
-                = (chassis_id
+                = (chassis_id && !replicated
                    ? chassis_lookup_by_name(sbrec_chassis_by_name, chassis_id)
                    : NULL);
 
             const struct sbrec_chassis_private *chassis_private
-                = (chassis_id
+                = (chassis_id && !replicated
                    ? chassis_private_lookup_by_name(
                          sbrec_chassis_private_by_name, chassis_id)
                    : NULL);
@@ -8873,8 +8880,10 @@ loop_done:
             done = chassis_cleanup(ovs_idl_txn, ovnsb_idl_txn, ovs_table,
                                    chassis, chassis_private) && done;
             done = encaps_cleanup(ovs_idl_txn, br_int) && done;
-            done = igmp_group_cleanup(ovnsb_idl_txn, sbrec_igmp_group, chassis)
-                   && done;
+            if (!replicated) {
+                done = igmp_group_cleanup(ovnsb_idl_txn, sbrec_igmp_group,
+                                          chassis) && done;
+            }
             if (done) {
                 poll_immediate_wake();
             }

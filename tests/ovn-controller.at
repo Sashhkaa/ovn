@@ -4008,6 +4008,82 @@ start_controller
 OVN_CLEANUP([hv1])
 AT_CLEANUP
 
+AT_SETUP([ovn-controller - replicated chassis])
+AT_KEYWORDS([replicated])
+ovn_start
+
+net_add n1
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+check ovs-vsctl set open . external_ids:ovn-chassis-replicated=true
+ovn_attach n1 br-phys 192.168.0.11
+
+check ovn-nbctl ls-add ls1
+check ovn-nbctl lsp-add ls1 lsp1
+check ovs-vsctl add-port br-int vif1 -- \
+    set interface vif1 external_ids:iface-id=lsp1
+wait_for_ports_up lsp1
+
+is_replicated() {
+    test "$(ovn-sbctl get chassis hv1 other_config:replicated 2>/dev/null)" \
+        = '"true"'
+}
+
+start_controller() {
+    rm hv1/ovn-controller.log
+    start_daemon ovn-controller
+}
+
+# The record is created by the replicated chassis and marked as replicated.
+OVS_WAIT_UNTIL([is_replicated])
+ch=$(fetch_column chassis _uuid name=hv1)
+check_column "$ch" Port_Binding chassis logical_port=lsp1
+
+# Another instance sharing the record has a different config, the record must
+# not be overwritten.
+hostname=$(fetch_column chassis hostname name=hv1)
+check ovn-sbctl set chassis hv1 hostname=other
+OVS_WAIT_UNTIL([grep -q "Chassis 'hv1' is replicated but its configuration" \
+                hv1/ovn-controller.log])
+OVS_WAIT_UNTIL([grep -q "hostname: database='other', local='$hostname'" \
+                hv1/ovn-controller.log])
+check_column other chassis hostname name=hv1
+
+# Once the configurations are aligned the processing resumes.
+check ovn-sbctl set chassis hv1 hostname="$hostname"
+check ovn-nbctl --wait=hv sync
+
+# Exiting without --restart must not remove anything that is shared with the
+# other instances.
+OVN_CONTROLLER_EXIT([hv1], [])
+check grep -q "Exiting ovn-controller, resource cleanup: Local only (replicated chassis)" \
+    hv1/ovn-controller.log
+check_row_count Chassis 1 name=hv1
+check_row_count Chassis_Private 1 name=hv1
+check_column "$ch" Port_Binding chassis logical_port=lsp1
+
+# Without the local option a record marked as replicated is not touched.
+check ovs-vsctl remove open . external_ids ovn-chassis-replicated
+start_controller
+OVS_WAIT_UNTIL([grep -q "other_config:replicated: database='true', local=<unset>" \
+                hv1/ovn-controller.log])
+AT_CHECK([is_replicated])
+
+check ovs-vsctl set open . external_ids:ovn-chassis-replicated=true
+check ovn-nbctl --wait=hv sync
+
+# A record that was removed is created again, still marked as replicated.
+check ovn-sbctl chassis-del hv1
+wait_row_count Chassis 1 name=hv1
+OVS_WAIT_UNTIL([is_replicated])
+wait_column "$(fetch_column chassis _uuid name=hv1)" Port_Binding chassis \
+    logical_port=lsp1
+
+OVN_CLEANUP([hv1
+/is replicated but its configuration in the Southbound database differs/d])
+AT_CLEANUP
+
 AT_SETUP([ovn-cntroller options:enable_chassis_nb_cfg_update])
 ovn_start
 

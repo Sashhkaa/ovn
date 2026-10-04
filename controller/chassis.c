@@ -70,6 +70,8 @@ struct ovs_chassis_cfg {
     struct ds iface_types;
     /* Is this chassis an interconnection gateway. */
     bool is_interconn;
+    /* Is this chassis shared by several ovn-controller instances. */
+    bool replicated;
     /* Does OVS support sampling with ids taken from registers? */
     bool sample_with_regs;
     /* Does OVS support flushing CT zones using label/mark? */
@@ -236,6 +238,13 @@ get_is_interconn(const struct smap *ext_ids, const char *chassis_id)
                                               "ovn-is-interconn", false);
 }
 
+static bool
+get_is_replicated(const struct smap *ext_ids, const char *chassis_id)
+{
+    return get_chassis_external_id_value_bool(ext_ids, chassis_id,
+                                              "ovn-chassis-replicated", false);
+}
+
 static void
 update_chassis_transport_zones(const struct sset *transport_zones,
                                const struct sbrec_chassis *chassis_rec)
@@ -381,6 +390,7 @@ chassis_parse_ovs_config(const struct ovsrec_open_vswitch_table *ovs_table,
                                   &ovs_cfg->iface_types);
 
     ovs_cfg->is_interconn = get_is_interconn(&cfg->external_ids, chassis_id);
+    ovs_cfg->replicated = get_is_replicated(&cfg->external_ids, chassis_id);
     ovs_cfg->sample_with_regs =
         ovs_feature_is_supported(OVS_SAMPLE_REG_SUPPORT);
     ovs_cfg->ct_label_flush =
@@ -413,6 +423,9 @@ chassis_build_other_config(const struct ovs_chassis_cfg *ovs_cfg,
     smap_replace(config, "ovn-evpn-local-ip", ovs_cfg->evpn_local_ip);
     smap_replace(config, "is-interconn",
                  ovs_cfg->is_interconn ? "true" : "false");
+    if (ovs_cfg->replicated) {
+        smap_replace(config, "replicated", "true");
+    }
     smap_replace(config, OVN_FEATURE_PORT_UP_NOTIF, "true");
     smap_replace(config, OVN_FEATURE_CT_NO_MASKED_LABEL, "true");
     smap_replace(config, OVN_FEATURE_MAC_BINDING_TIMESTAMP, "true");
@@ -528,6 +541,11 @@ chassis_other_config_changed(const struct ovs_chassis_cfg *ovs_cfg,
     bool chassis_is_interconn =
         smap_get_bool(&chassis_rec->other_config, "is-interconn", false);
     if (chassis_is_interconn != ovs_cfg->is_interconn) {
+        return true;
+    }
+
+    if (ovs_cfg->replicated &&
+        !smap_get_bool(&chassis_rec->other_config, "replicated", false)) {
         return true;
     }
 
@@ -856,11 +874,12 @@ chassis_get_record(struct ovsdb_idl_txn *ovnsb_idl_txn,
 }
 
 /*
- * A Chassis record with other_config:replicated set to "true" is owned by
- * an external entity (e.g., it is replicated from another availability
- * zone) and must not be silently overwritten by the local ovn-controller.
- * If the config this chassis would commit differs from what is already in
- * the database, report every difference and let the caller bail out.
+ * A replicated Chassis record is shared by several ovn-controller instances
+ * that run with the same chassis name, see "ovn-chassis-replicated".  None
+ * of them owns the record, so none of them may silently overwrite it with
+ * its own config.  If the config this chassis would commit differs from what
+ * is already in the database, report every difference and let the caller
+ * bail out.
  *
  * Returns true if a difference was found, false otherwise.
  */
@@ -890,6 +909,13 @@ chassis_replicated_conflict(const struct ovs_chassis_cfg *ovs_cfg,
 
     const struct smap_node *node;
     SMAP_FOR_EACH (node, &local_config) {
+        if (!strcmp(node->key, "replicated")) {
+            /* A chassis that is configured as replicated may mark an
+             * existing record as replicated, see below for the opposite
+             * direction. */
+            continue;
+        }
+
         const char *db_value = smap_get(&chassis_rec->other_config, node->key);
 
         if (!db_value || strcmp(db_value, node->value)) {
@@ -900,6 +926,13 @@ chassis_replicated_conflict(const struct ovs_chassis_cfg *ovs_cfg,
         }
     }
     smap_destroy(&local_config);
+
+    if (!ovs_cfg->replicated &&
+        smap_get_bool(&chassis_rec->other_config, "replicated", false)) {
+        ds_put_cstr(&diff, "\n  other_config:replicated: database='true', "
+                           "local=<unset> (external_ids:ovn-chassis-replicated "
+                           "is not set)");
+    }
 
     struct sset db_tzones = SSET_INITIALIZER(&db_tzones);
     for (size_t i = 0; i < chassis_rec->n_transport_zones; i++) {
@@ -930,9 +963,9 @@ chassis_replicated_conflict(const struct ovs_chassis_cfg *ovs_cfg,
         return false;
     }
 
-    VLOG_ERR("Chassis '%s' is marked as replicated in the Southbound "
-             "database but its configuration differs from the local one, "
-             "not updating it until the configurations are aligned:%s",
+    VLOG_ERR("Chassis '%s' is replicated but its configuration in the "
+             "Southbound database differs from the local one, not updating "
+             "it until the configurations are aligned:%s",
              chassis_id, ds_cstr(&diff));
     ds_destroy(&diff);
     return true;
@@ -1049,11 +1082,14 @@ chassis_private_update(const struct sbrec_chassis_private *chassis_pvt,
 
 /* Returns this chassis's Chassis record, if it is available.
  *
- * If the Chassis record already exists and is marked as replicated, it is
- * not modified until the OVS feature set is discovered, because the feature
- * dependent options can't be computed before that.  If the config that
- * would be committed differs from what is already in the database, sets
- * 'config_conflict' to true and returns NULL without modifying the record. */
+ * A replicated Chassis record, i.e. one that is either configured locally
+ * with "ovn-chassis-replicated" or already marked as replicated in the
+ * database, is neither created nor modified until the OVS feature set is
+ * discovered, because the feature dependent options can't be computed
+ * before that and the other instances sharing the record would see them
+ * as a difference.  If the config that would be committed differs from
+ * what is already in the database, sets 'config_conflict' to true and
+ * returns NULL without modifying the record. */
 const struct sbrec_chassis *
 chassis_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
             struct ovsdb_idl_index *sbrec_chassis_by_name,
@@ -1077,6 +1113,11 @@ chassis_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
         return NULL;
     }
 
+    if (ovs_cfg.replicated && !ovs_feature_set_discovered()) {
+        ovs_chassis_cfg_destroy(&ovs_cfg);
+        return NULL;
+    }
+
     const struct sbrec_chassis *chassis_rec = NULL;
     bool existed = chassis_get_record(ovnsb_idl_txn, sbrec_chassis_by_name,
                                       chassis_id, &chassis_rec);
@@ -1086,9 +1127,10 @@ chassis_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
      * modified in the ovs table.
      */
     if (chassis_rec && ovnsb_idl_txn) {
-        /* Never overwrite a record that is owned by somebody else. */
-        if (existed && smap_get_bool(&chassis_rec->other_config,
-                                     "replicated", false)) {
+        /* Never overwrite a record that is shared with somebody else. */
+        if (existed && (ovs_cfg.replicated ||
+                        smap_get_bool(&chassis_rec->other_config,
+                                      "replicated", false))) {
             if (!ovs_feature_set_discovered()) {
                 ovs_chassis_cfg_destroy(&ovs_cfg);
                 return NULL;
@@ -1302,6 +1344,22 @@ clear_chassis_index_if_needed(
         ovsrec_open_vswitch_update_other_config_delkey(cfg, idx_key);
     }
     free(idx_key);
+}
+
+/* Returns true if the local chassis is configured with
+ * "ovn-chassis-replicated", i.e. its Chassis record is shared with other
+ * ovn-controller instances. */
+bool
+chassis_is_replicated(const struct ovsrec_open_vswitch_table *ovs_table)
+{
+    const struct ovsrec_open_vswitch *cfg =
+        ovsrec_open_vswitch_table_first(ovs_table);
+    const char *chassis_id = get_ovs_chassis_id(ovs_table);
+
+    if (!cfg || !chassis_id) {
+        return false;
+    }
+    return get_is_replicated(&cfg->external_ids, chassis_id);
 }
 
 /* Returns true if the database is all cleaned up, false if more work is

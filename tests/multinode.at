@@ -5615,6 +5615,8 @@ for c in $vgw1 $vgw2; do
     on_exit "m_as $c ip addr del $vgw_encap_ip/32 dev lo"
     check m_as $c ip addr add $vgw_encap_ip/32 dev lo
     check m_as $c ovs-vsctl set open . external-ids:hostname=$vgw_name
+    on_exit "m_as $c ovs-vsctl remove open . external-ids ovn-chassis-replicated"
+    check m_as $c ovs-vsctl set open . external-ids:ovn-chassis-replicated=true
     check m_as $c ovs-vsctl set open . external-ids:ovn-bridge-mappings=public:br-ex
 done
 

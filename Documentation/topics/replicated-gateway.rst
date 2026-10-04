@@ -93,6 +93,7 @@ A typical deployment looks as follows:
   interface, so that the kernel accepts the tunnel packets destined to it::
 
       $ ovs-vsctl set open . external-ids:system-id=vgw
+      $ ovs-vsctl set open . external-ids:ovn-chassis-replicated=true
       $ ovs-vsctl set open . external-ids:ovn-encap-ip=10.0.0.1
       $ ovs-vsctl set open . external-ids:ovn-encap-type=geneve
       $ ip address add 10.0.0.1/32 dev lo
@@ -130,15 +131,38 @@ expose the same set of features. ``ovn-controller`` reports the capabilities
 of the local OVS instance in the ``Chassis`` record (``other_config``, for
 example the supported datapath interface types, and the various
 ``ovn-chassis-feature`` entries), and ``ovn-northd`` generates the logical
-flows for the chassis based on those values. If the nodes disagree, the
-``Chassis`` record will keep flapping between the values reported by each node,
-``ovn-northd`` will keep recomputing, and the node whose capabilities do not
-match the ones currently published may not be able to process the flows it
-receives.
+flows for the chassis based on those values.
 
 For the same reason, every chassis scoped configuration option has to be
 identical on all the nodes, including, for example: ``external_ids:hostname``,
 ``external_ids:ovn-bridge-mappings`` and all others.
+
+Shared records
+~~~~~~~~~~~~~~
+
+Every node of the group must be configured with
+``external_ids:ovn-chassis-replicated=true``.  The first node that connects to
+the Southbound database creates the ``Chassis`` record and marks it with
+``other_config:replicated=true``, the other nodes find the record already in
+place.  The record does not belong to any particular node, it is kept as long
+as the replicated chassis exists, regardless of which nodes of the group are
+running.
+
+If the configuration of a node differs from the one stored in the ``Chassis``
+record, that node does not overwrite the record.  It logs every difference and
+stops processing, keeping the flows it has already installed, until either its
+local configuration or the record is fixed.  The same happens to a node that
+runs with the replicated chassis name but without
+``external_ids:ovn-chassis-replicated``.  Without this protection the record
+would keep flapping between the values reported by each node and
+``ovn-northd`` would keep recomputing.
+
+Stopping or restarting a node, with or without ``--restart``, never removes
+the ``Chassis`` and ``Chassis_Private`` records, the port bindings or the IGMP
+groups of the replicated chassis, because the other nodes still use them.
+Only the local resources of the node, such as its tunnel ports, are cleaned
+up.  To remove the replicated chassis, stop all of its nodes and delete the
+records with ``ovn-sbctl chassis-del``.
 
 Only stateless traffic is supported
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

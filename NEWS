@@ -138,7 +138,11 @@ OVN v26.09.0 - Sep 18 2026
    - Documented the "replicated gateway" setup, in which several ovn-controller
      instances share one chassis name and one anycast encapsulation IP
      reachable over the underlay through ECMP, so that they appear to OVN as
-     a single chassis. See Documentation/topics/replicated-gateway.rst for the
+     a single chassis. Such nodes must be configured with the new
+     "external_ids:ovn-chassis-replicated" option, which keeps them from
+     overwriting the shared Chassis record with a different configuration and
+     from removing the shared records on exit.
+     See Documentation/topics/replicated-gateway.rst for the
      requirements and the restrictions.
 
 OVN v26.03.0 - xxx xx xxxx

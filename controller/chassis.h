@@ -47,6 +47,7 @@ const struct sbrec_chassis *chassis_run(
     const struct sbrec_chassis_private **chassis_private,
     struct ovsdb_idl_index *sbrec_encaps_index_by_ip_and_type,
     bool *config_conflict);
+bool chassis_is_replicated(const struct ovsrec_open_vswitch_table *);
 bool chassis_cleanup(struct ovsdb_idl_txn *ovs_idl_txn,
                      struct ovsdb_idl_txn *ovnsb_idl_txn,
                      const struct ovsrec_open_vswitch_table *,
