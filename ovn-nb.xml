@@ -2616,6 +2616,30 @@
           <code>[2001::1]</code>=<code>sw0-p1:[2002::1]</code>.
           Remote endpoint: same as for IP.
         </p>
+
+        <p>
+          By default, health checks are sent to the endpoint's port using the
+          load balancer's <ref column="protocol"/>.  Both can be overridden
+          per endpoint by adding them after the source IP:
+          <code>port_name:source_ip:protocol:port</code>, optionally
+          followed by <code>:<var>target_zone_name</var></code>
+          for a remote endpoint.  <var>protocol</var> is either
+          <code>tcp</code> or <code>udp</code> and <var>port</var> is in
+          the range 1 to 65535.  Either of them may be left empty to keep
+          its default.  An endpoint whose health check protocol or port is
+          invalid is not monitored.
+        </p>
+
+        <p>
+          For example, <code>10.0.0.4</code>=
+          <code>sw0-p1:10.0.0.2:udp:8081</code> probes the endpoint
+          <code>10.0.0.4</code> of a TCP load balancer with UDP health checks
+          to port <code>8081</code>,
+          <code>sw0-p1:10.0.0.2::8081:az1</code> probes the remote endpoint
+          with the load balancer's protocol on port <code>8081</code>, and
+          <code>sw0-p1:[2002::1]:udp:8081</code> is the IPv6 equivalent of
+          the first example.
+        </p>
       </column>
     </group>
 

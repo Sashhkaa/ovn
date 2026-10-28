@@ -110,11 +110,80 @@ ovn_northd_lb_vip_init(struct ovn_northd_lb_vip *lb_vip_nb,
                          "fail_open", false);
 }
 
+static bool
+parse_ip_port_mapping_optional_params(char *fields, const char *mapping,
+                                      const char **hc_protocol, uint16_t *hc_port,
+                                      bool *is_remote, char **az_name)
+{
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+    char *field[3];
+    size_t n_fields = 0;
+
+    for (char *f = fields; f; n_fields++) {
+        if (n_fields == ARRAY_SIZE(field)) {
+            VLOG_WARN_RL(&rl, "Too many fields in ip_port_mappings %s",
+                         mapping);
+            return false;
+        }
+        field[n_fields] = f;
+        f = strchr(f, ':');
+        if (f) {
+            *f++ = '\0';
+        }
+    }
+
+    const char *protocol = NULL;
+    const char *port = NULL;
+    char *az = NULL;
+    if (n_fields == 1) {
+        az = field[0];
+    } else {
+        protocol = field[0];
+        port = field[1];
+        az = n_fields == 3 ? field[2] : NULL;
+    }
+
+    if (az && !*az) {
+        VLOG_WARN_RL(&rl, "Empty AZ name specified in ip_port_mappings %s",
+                     mapping);
+        return false;
+    }
+
+    if (protocol && *protocol) {
+        if (!strcmp(protocol, "tcp")) {
+            *hc_protocol = "tcp";
+        } else if (!strcmp(protocol, "udp")) {
+            *hc_protocol = "udp";
+        } else {
+            VLOG_WARN_RL(&rl, "Invalid health check protocol \"%s\" in "
+                         "ip_port_mappings %s, expected tcp or udp",
+                         protocol, mapping);
+            return false;
+        }
+    }
+
+    if (port && *port) {
+        unsigned int value;
+        if (!str_to_uint(port, 10, &value) || !value || value > 65535) {
+            VLOG_WARN_RL(&rl, "Invalid health check port \"%s\" in "
+                         "ip_port_mappings %s", port, mapping);
+            return false;
+        }
+        *hc_port = value;
+    }
+
+    *az_name = az;
+    *is_remote = az != NULL;
+
+    return true;
+}
+
 /*
  * Parses ip_port_mappings in the format :
- * "ip:logical_port[:src_ip][:az_name]".
+ * "ip:logical_port[:src_ip][:protocol:port][:az_name]".
  * src_ip parameter is optional when distributed mode is enabled,
- * without health checks configured.
+ * without health checks configured. Protocol and port override
+ * the protocol and the port used by health checks.
  * If az_name is present and non-empty, it indicates this is a
  * remote service monitor (backend is in another availability zone),
  * it should be propogated to another AZ by interconnection processing.
@@ -148,6 +217,8 @@ ovn_lb_vip_backends_ip_port_mappings_init(const struct ovn_northd_lb *lb,
         char *port_name = NULL;
         char *first_colon = NULL;
         bool is_remote = false;
+        uint16_t hc_port = 0;
+        const char *hc_protocol = NULL;
 
         port_name = xstrdup(s);
         first_colon = strchr(port_name, ':');
@@ -166,8 +237,9 @@ ovn_lb_vip_backends_ip_port_mappings_init(const struct ovn_northd_lb *lb,
         }
 
         *first_colon = '\0';
+        char *fields = NULL;
         if (first_colon[1] == '[') {
-            /* IPv6 case - format: port:[ipv6]:az or port:[ipv6] */
+            /* IPv6 case - format: port:[ipv6][:fields] */
             char *ip_end = strchr(first_colon + 2, ']');
             if (!ip_end) {
                 VLOG_WARN_RL(&rl, "Malformed IPv6 address in backend %s", s);
@@ -178,27 +250,22 @@ ovn_lb_vip_backends_ip_port_mappings_init(const struct ovn_northd_lb *lb,
             *ip_end = '\0';
 
             if (ip_end[1] == ':') {
-                az_name = ip_end + 2;
-                if (!*az_name) {
-                    VLOG_WARN_RL(&rl, "Empty AZ name specified for backend %s",
-                                 port_name);
-                    goto cleanup;
-                }
-                is_remote = true;
+                fields = ip_end + 2;
             }
         } else {
-            /* IPv4 case - format: port:ip:az or port:ip */
+            /* IPv4 case - format: port:ip[:fields] */
             src_ip = first_colon + 1;
-            char *az_colon = strchr(src_ip, ':');
-            if (az_colon) {
-                *az_colon = '\0';
-                az_name = az_colon + 1;
-                if (!*az_name) {
-                    VLOG_WARN_RL(&rl, "Empty AZ name specified for backend %s",
-                                 port_name);
-                    goto cleanup;
-                }
-                is_remote = true;
+            fields = strchr(src_ip, ':');
+            if (fields) {
+                *fields++ = '\0';
+            }
+        }
+
+        if (fields) {
+            if (!parse_ip_port_mapping_optional_params(fields, s,
+                                                       &hc_protocol, &hc_port,
+                                                       &is_remote, &az_name)) {
+                goto cleanup;
             }
         }
 
@@ -222,6 +289,12 @@ init_backend:
         backend_nb->remote_backend = is_remote;
         backend_nb->svc_mon_lrp = NULL;
         backend_nb->distributed_backend = lb->is_distributed;
+        backend_nb->svc_mon_port = hc_port ? hc_port : backend->port;
+        if (!hc_protocol) {
+            hc_protocol = lb->nlb->protocol && lb->nlb->protocol[0]
+                          ? lb->nlb->protocol : "tcp";
+        }
+        backend_nb->svc_mon_protocol = xstrdup(hc_protocol);
 cleanup:
         free(port_name);
     }
@@ -237,6 +310,7 @@ void ovn_northd_lb_vip_destroy(struct ovn_northd_lb_vip *vip)
         free(vip->backends_nb[i].logical_port);
         free(vip->backends_nb[i].svc_mon_src_ip);
         free(vip->backends_nb[i].az_name);
+        free(vip->backends_nb[i].svc_mon_protocol);
     }
     free(vip->backends_nb);
 }

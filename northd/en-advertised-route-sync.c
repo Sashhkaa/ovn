@@ -548,8 +548,6 @@ build_lb_routes_for_lb(const struct ovn_port *advertising_op,
     }
 
     const struct ovn_northd_lb *lb = lb_dps->lb;
-    const char *protocol = lb->nlb->protocol && lb->nlb->protocol[0]
-                           ? lb->nlb->protocol : "tcp";
     for (size_t v = 0; v < lb->n_vips; v++) {
         const struct ovn_lb_vip *vip = &lb->vips[v];
         const struct ovn_northd_lb_vip *vip_nb = &lb->vips_nb[v];
@@ -603,8 +601,8 @@ build_lb_routes_for_lb(const struct ovn_port *advertising_op,
             if (backend_nb->health_check) {
                 sset_add_and_free(
                     &route_e->health_checks,
-                    xasprintf("%s,%s,%"PRIu16, protocol, backend->ip_str,
-                              backend->port));
+                    xasprintf("%s,%s,%"PRIu16, backend_nb->svc_mon_protocol,
+                              backend->ip_str, backend_nb->svc_mon_port));
             } else {
                 route_e->has_ungated_lb = true;
             }
