@@ -104,6 +104,12 @@ struct ovn_northd_lb_backend {
     char *svc_mon_src_ip;
     /* Target Availability Zone name for service monitoring. */
     char *az_name;
+    /* Port and protocol used by the health check. They default to the
+     * backend's port and the load balancer's protocol, but can be
+     * overridden by the "hc_port" and "hc_protocol" options of the
+     * backend's ip_port_mappings entry. */
+    uint16_t svc_mon_port;
+    char *svc_mon_protocol;
     /* LRP used as the source of health_check traffic.  This may be NULL if
      * health_check uses "reserved" IP address that does not belong to any
      * LRP in the backend's datapath. */

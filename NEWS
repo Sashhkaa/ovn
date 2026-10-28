@@ -77,6 +77,10 @@ Post v26.09.0
      the replies from the backends of its load balancers.  The CMS must make
      sure that the replies re-enter the router on the chassis that load
      balanced the request.  See ovn-nb(5).
+   - Load balancer health checks can now use a port and a protocol
+     different from the backend's port and the load balancer's protocol.
+     They are set in the ip_port_mappings column in Load_Balancer table.
+     See the ovn-nb(5) man page for more information.
 
 OVN v26.09.0 - xxx xx xxxx
 --------------------------

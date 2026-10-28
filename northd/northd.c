@@ -3483,11 +3483,6 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                 source_mac = svc_global_addresses->mac_src;
             }
 
-            const char *protocol = lb->nlb->protocol;
-            if (!protocol || !protocol[0]) {
-                protocol = "tcp";
-            }
-
             struct service_monitor_info *mon_info =
                 create_or_get_service_mon(ovnsb_txn,
                                           local_svc_monitors_map,
@@ -3496,8 +3491,8 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                                           backend->ip_str,
                                           backend_nb->logical_port,
                                           NULL,
-                                          backend->port,
-                                          protocol,
+                                          backend_nb->svc_mon_port,
+                                          backend_nb->svc_mon_protocol,
                                           backend_nb->remote_backend);
 
             set_service_mon_options(mon_info->sbrec_mon,
@@ -3541,23 +3536,17 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
 }
 
 static bool
-backend_is_available(const struct ovn_northd_lb *lb,
-                     const struct ovn_lb_backend *backend,
+backend_is_available(const struct ovn_lb_backend *backend,
                      const struct ovn_northd_lb_backend *backend_nb,
                      const struct svc_monitors_map_data *svc_mons_data)
 {
-    char *protocol = lb->nlb->protocol;
-    if (!protocol || !protocol[0]) {
-        protocol = "tcp";
-    }
-
     struct service_monitor_info *mon_info =
         get_service_mon(svc_mons_data->local_svc_monitors_map,
                         svc_mons_data->ic_learned_svc_monitors_map,
                         backend->ip_str,
                         backend_nb->logical_port,
-                        backend->port,
-                        protocol);
+                        backend_nb->svc_mon_port,
+                        backend_nb->svc_mon_protocol);
 
     if (!mon_info) {
         return false;
@@ -3621,8 +3610,7 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
             }
 
             if (backend_nb->health_check &&
-                !backend_is_available(lb,
-                                      backend,
+                !backend_is_available(backend,
                                       backend_nb,
                                       svc_mons_data)) {
                 continue;
@@ -9401,7 +9389,6 @@ build_lb_rules_for_stateless_acl(struct lflow_table *lflows,
 static void
 build_lb_health_check_response_lflows(
     struct lflow_table *lflows,
-    const struct ovn_northd_lb *lb,
     const struct ovn_lb_vip *lb_vip,
     const struct ovn_northd_lb_vip *lb_vip_nb,
     const struct ovn_lb_datapaths *lb_dps,
@@ -9426,10 +9413,7 @@ build_lb_health_check_response_lflows(
             continue;
         }
 
-        const char *protocol = lb->nlb->protocol;
-        if (!protocol || !protocol[0]) {
-            protocol = "tcp";
-        }
+        const char *protocol = backend_nb->svc_mon_protocol;
 
         /* A type=external backend has no VIF of its own.  Its replies reach
          * br-int through one of the switch's localnet ports, so they need
@@ -9480,8 +9464,8 @@ build_lb_health_check_response_lflows(
                               backend->ip_str,
                               backend_nb->svc_mon_lrp->lrp_networks.ea_s);
                 if (!strcmp(protocol, "tcp")) {
-                    ds_put_format(&probe_match, "tcp.src == %s",
-                                  backend->port_str);
+                    ds_put_format(&probe_match, "tcp.src == %"PRIu16,
+                                  backend_nb->svc_mon_port);
                 } else {
                     ds_put_cstr(&probe_match, "icmp6.type == 1");
                 }
@@ -9492,8 +9476,8 @@ build_lb_health_check_response_lflows(
                               backend->ip_str,
                               backend_nb->svc_mon_lrp->lrp_networks.ea_s);
                 if (!strcmp(protocol, "tcp")) {
-                    ds_put_format(&probe_match, "tcp.src == %s",
-                                  backend->port_str);
+                    ds_put_format(&probe_match, "tcp.src == %"PRIu16,
+                                  backend_nb->svc_mon_port);
                 } else {
                     ds_put_cstr(&probe_match, "icmp4.type == 3");
                 }
@@ -14253,7 +14237,7 @@ build_lrouter_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
                                                  lr_datapaths);
 
         build_lb_health_check_response_lflows(
-            lflows, lb, lb_vip, &lb->vips_nb[i], lb_dps, lr_datapaths,
+            lflows, lb_vip, &lb->vips_nb[i], lb_dps, lr_datapaths,
             ls_ports, meter_groups, match, action);
 
         if (!build_empty_lb_event_flow(lb_vip, lb, match, action)) {
