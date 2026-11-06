@@ -5873,7 +5873,7 @@ m_underlay_ip() {
     m_as $1 ip -4 addr show eth1 | grep inet | awk '{print $2}' | cut -d'/' -f1
 }
 
-central_ip=$(m_as ovn-central-az1 ip -4 addr show eth1 | grep inet | awk '{print $2}' | cut -d'/' -f1)
+central_ip=$( (m_central_as ip -4 addr show eth1 2>/dev/null || m_central_as ip -4 addr show eth2) | grep inet | awk '{print $2}' | cut -d'/' -f1)
 vgw1_ip=$(m_underlay_ip $vgw1)
 vgw2_ip=$(m_underlay_ip $vgw2)
 compute_ip=$(m_underlay_ip $compute)
@@ -5887,15 +5887,9 @@ m_as $client ip link del sw1p1-p
 for c in $vgw1 $vgw2; do
     # Bring the node back to its original chassis name and encap IP.
     on_exit "multinode_setup_controller $c $c $(m_underlay_ip $c) $central_ip"
-    multinode_setup_controller $c $vgw_name $vgw_encap_ip $central_ip geneve no
+    multinode_setup_controller $c $vgw_name $vgw_encap_ip $central_ip geneve $vgw_name
     on_exit "m_as $c ip addr del $vgw_encap_ip/32 dev lo"
     check m_as $c ip addr add $vgw_encap_ip/32 dev lo
-    check m_as $c ovs-vsctl set open . external-ids:hostname=$vgw_name
-    check m_as $c ovs-vsctl set open . external-ids:ovn-bridge-mappings=public:br-ex
-done
-
-for c in $vgw1 $vgw2; do
-    m_as $c /usr/share/ovn/scripts/ovn-ctl start_controller ${CONTROLLER_SSL_ARGS}
 done
 
 # Both gateway nodes must end up sharing a single chassis record with a single
@@ -5912,7 +5906,6 @@ for c in $compute $client; do
         nexthop via $vgw1_ip dev eth1 \
         nexthop via $vgw2_ip dev eth1
 done
-
 
 # The anycast encap IP is reachable over the underlay from both nodes.
 AT_CHECK([m_as $compute ping -q -c 3 -i 0.3 -w 2 $vgw_encap_ip | FORMAT_PING], [0], [dnl

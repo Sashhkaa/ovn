@@ -21,9 +21,9 @@
 
       Avoid deeper levels because they do not render well.
 
-===================
+==================
 Replicated Gateway
-===================
+==================
 
 A *replicated gateway* is a group of two or more physical nodes that present
 themselves to OVN as a single chassis. Every node of the group runs its own
@@ -74,8 +74,8 @@ the local node rather than from the configuration must be forced to the same
 value on every node.  More detailed information on this is provided in the
 ``Identical OVS and OVN configuration and features`` section below.  Second,
 the nodes do not share any runtime state, so nothing that relies on conntrack
-can be used on a replicated gateway, see the ``Only stateless traffic is
-supported`` section below.
+can be used on a replicated gateway, see the
+``Only stateless traffic is supported`` section below.
 
 Use case
 --------
