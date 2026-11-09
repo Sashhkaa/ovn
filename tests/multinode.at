@@ -5862,56 +5862,63 @@ cleanup_multinode_resources
 # internal connectivity, public switch is connected to dgp port that claimed by
 # replicated chassis. Compute and client node both have underlay route for replicated gw ip (1.1.1.1)
 
-vgw1=ovn-gw-1
-vgw2=ovn-gw-2
+replicated_gw1=ovn-gw-1
+replicated_gw2=ovn-gw-2
 compute=ovn-chassis-1
 client=ovn-chassis-2
-vgw_name=ovn-replicated-gw
-vgw_encap_ip=1.1.1.1
+replicated_gw_name=ovn-replicated-gw
+replicated_gw_encap_ip=1.1.1.1
 
 m_underlay_ip() {
     m_as $1 ip -4 addr show eth1 | grep inet | awk '{print $2}' | cut -d'/' -f1
 }
 
 central_ip=$( (m_central_as ip -4 addr show eth1 2>/dev/null || m_central_as ip -4 addr show eth2) | grep inet | awk '{print $2}' | cut -d'/' -f1)
-vgw1_ip=$(m_underlay_ip $vgw1)
-vgw2_ip=$(m_underlay_ip $vgw2)
+replicated_gw1_ip=$(m_underlay_ip $replicated_gw1)
+replicated_gw2_ip=$(m_underlay_ip $replicated_gw2)
 compute_ip=$(m_underlay_ip $compute)
 
 m_as $compute ip link del sw0p1-p
 m_as $client ip link del sw0p2-p
 m_as $client ip link del sw1p1-p
 
+# A stopped ovn-controller may leave its Chassis_Private behind, blocking
+# 'ovn-nbctl --wait=hv' forever; delete chassis that are no longer in use.
+on_exit "multinode_sbctl --if-exists chassis-del $replicated_gw_name"
+
 # Bring up both gateway nodes as the very same chassis: same chassis name and
 # same encap IP, which is not part of the underlay address space.
-for c in $vgw1 $vgw2; do
+for c in $replicated_gw1 $replicated_gw2; do
     # Bring the node back to its original chassis name and encap IP.
     on_exit "multinode_setup_controller $c $c $(m_underlay_ip $c) $central_ip"
-    multinode_setup_controller $c $vgw_name $vgw_encap_ip $central_ip geneve $vgw_name
-    on_exit "m_as $c ip addr del $vgw_encap_ip/32 dev lo"
-    check m_as $c ip addr add $vgw_encap_ip/32 dev lo
+    multinode_setup_controller $c $replicated_gw_name $replicated_gw_encap_ip \
+        $central_ip geneve $replicated_gw_name
+    check multinode_sbctl --if-exists chassis-del $c
+    on_exit "m_as $c ip addr del $replicated_gw_encap_ip/32 dev lo"
+    check m_as $c ip addr add $replicated_gw_encap_ip/32 dev lo
 done
 
 # Both gateway nodes must end up sharing a single chassis record with a single
 # encap record.
-m_wait_row_count Chassis 1 name=$vgw_name
-m_wait_row_count Encap 1 chassis_name=$vgw_name
-m_check_column "$vgw_encap_ip" Encap ip chassis_name=$vgw_name
+m_wait_row_count Chassis 1 name=$replicated_gw_name
+m_wait_row_count Encap 1 chassis_name=$replicated_gw_name
+m_check_column "$replicated_gw_encap_ip" Encap ip \
+    chassis_name=$replicated_gw_name
 
 # ECMP route to the replicated gateway encap IP in the underlay, both on the
 # compute node and on the external client.
 for c in $compute $client; do
-    on_exit "m_as $c ip route del $vgw_encap_ip/32"
-    check m_as $c ip route replace $vgw_encap_ip/32 \
-        nexthop via $vgw1_ip dev eth1 \
-        nexthop via $vgw2_ip dev eth1
+    on_exit "m_as $c ip route del $replicated_gw_encap_ip/32"
+    check m_as $c ip route replace $replicated_gw_encap_ip/32 \
+        nexthop via $replicated_gw1_ip dev eth1 \
+        nexthop via $replicated_gw2_ip dev eth1
 done
 
 # The anycast encap IP is reachable over the underlay from both nodes.
-AT_CHECK([m_as $compute ping -q -c 3 -i 0.3 -w 2 $vgw_encap_ip | FORMAT_PING], [0], [dnl
+AT_CHECK([m_as $compute ping -q -c 3 -i 0.3 -w 2 $replicated_gw_encap_ip | FORMAT_PING], [0], [dnl
 3 packets transmitted, 3 received, 0% packet loss, time 0ms
 ])
-AT_CHECK([m_as $client ping -q -c 3 -i 0.3 -w 2 $vgw_encap_ip | FORMAT_PING], [0], [dnl
+AT_CHECK([m_as $client ping -q -c 3 -i 0.3 -w 2 $replicated_gw_encap_ip | FORMAT_PING], [0], [dnl
 3 packets transmitted, 3 received, 0% packet loss, time 0ms
 ])
 
@@ -5920,8 +5927,8 @@ cr_lport_log_count() {
                    grep -ac 'Claiming lport cr-lr0-public'"
 }
 
-vgw1_cr_logs=$(cr_lport_log_count $vgw1)
-vgw2_cr_logs=$(cr_lport_log_count $vgw2)
+replicated_gw1_cr_logs=$(cr_lport_log_count $replicated_gw1)
+replicated_gw2_cr_logs=$(cr_lport_log_count $replicated_gw2)
 
 check multinode_nbctl ls-add sw0
 check multinode_nbctl lsp-add sw0 sw0-port1
@@ -5936,7 +5943,7 @@ check multinode_nbctl lsp-add public external_client
 check multinode_nbctl lsp-set-addresses external_client "50:55:00:00:00:03 172.20.0.99"
 check multinode_nbctl lrp-add lr0 lr0-public 00:11:22:00:ff:01 172.20.0.100/24
 check multinode_nbctl lsp-add-router-port public public-lr0 lr0-public
-check multinode_nbctl lrp-set-gateway-chassis lr0-public $vgw_name 10
+check multinode_nbctl lrp-set-gateway-chassis lr0-public $replicated_gw_name 10
 
 m_as $compute /data/create_fake_vm.sh sw0-port1 sw0p1 50:54:00:00:00:03 1342 10.0.0.3 24 10.0.0.1 1000::3/64 1000::a
 m_as $client /data/create_fake_vm.sh external_client external 50:55:00:00:00:03 1342 172.20.0.99 24 172.20.0.100 1001::3/64 1001::a
@@ -5947,8 +5954,10 @@ m_wait_for_ports_up external_client
 
 # The distributed gateway port is claimed by the replicated gateway chassis.
 m_wait_row_count Port_Binding 1 logical_port=cr-lr0-public
-vgw_uuid=$(m_central_as ovn-sbctl --bare --columns _uuid find Chassis name=$vgw_name)
-m_wait_column "$vgw_uuid" Port_Binding chassis logical_port=cr-lr0-public
+replicated_gw_uuid=$(m_central_as ovn-sbctl --bare --columns _uuid \
+    find Chassis name=$replicated_gw_name)
+m_wait_column "$replicated_gw_uuid" Port_Binding chassis \
+    logical_port=cr-lr0-public
 
 # The two controllers share a single Chassis record and a single binding for
 # the chassisredirect port.  Since both nodes are configured identically and
@@ -5967,9 +5976,10 @@ sleep 5
 check test $(($(sb_txn_count Chassis) - chassis_txns)) -le 1
 check test $(($(sb_txn_count Port_Binding) - pb_txns)) -le 1
 
-cr_logs=$(($(cr_lport_log_count $vgw1) + $(cr_lport_log_count $vgw2)))
+cr_logs=$(($(cr_lport_log_count $replicated_gw1) + \
+          $(cr_lport_log_count $replicated_gw2)))
 # Claim on both
-check test $((cr_logs - vgw1_cr_logs - vgw2_cr_logs)) -le 2
+check test $((cr_logs - replicated_gw1_cr_logs - replicated_gw2_cr_logs)) -le 2
 
 check multinode_nbctl --wait=hv sync
 
@@ -5993,18 +6003,19 @@ check_ns_connectivity() {
 }
 
 # The traffic towards the replicated gateway must be tunneled to the anycast encap IP.
-M_START_TCPDUMPS([$compute], [-c 2 -neei eth1 host $vgw_encap_ip and udp port 6081], [ch1_underlay])
+M_START_TCPDUMPS([$compute], [-c 2 -neei eth1 host $replicated_gw_encap_ip and udp port 6081], [ch1_underlay])
 
 check_ns_connectivity
 
 OVS_WAIT_UNTIL([test -s ch1_underlay.tcpdump])
-AT_CHECK([grep -q "$vgw_encap_ip" ch1_underlay.tcpdump])
+AT_CHECK([grep -q "$replicated_gw_encap_ip" ch1_underlay.tcpdump])
 
 # Each of the two replicated gateway nodes on its own must be able to carry the
 # traffic: pin the underlay route to a single nexthop at a time.
-for nexthop in $vgw1_ip $vgw2_ip; do
+for nexthop in $replicated_gw1_ip $replicated_gw2_ip; do
     for c in $compute $client; do
-        check m_as $c ip route replace $vgw_encap_ip/32 via $nexthop dev eth1
+        check m_as $c ip route replace $replicated_gw_encap_ip/32 \
+            via $nexthop dev eth1
     done
 
     check_ns_connectivity
@@ -6012,9 +6023,9 @@ done
 
 # Back to ECMP over both gateway nodes.
 for c in $compute $client; do
-    check m_as $c ip route replace $vgw_encap_ip/32 \
-        nexthop via $vgw1_ip dev eth1 \
-        nexthop via $vgw2_ip dev eth1
+    check m_as $c ip route replace $replicated_gw_encap_ip/32 \
+        nexthop via $replicated_gw1_ip dev eth1 \
+        nexthop via $replicated_gw2_ip dev eth1
 done
 
 check_ns_connectivity

@@ -106,7 +106,7 @@ A typical deployment looks as follows:
             nexthop via 192.168.0.2 dev eth0
 
   In a real deployment the route is normally learned from the fabric, with the
-  gateway nodes advertising the anycast prefix over BGP.
+  gateway nodes advertising the anycast ip.
 
 * The logical topology is configured as usual, referring to the chassis by its
   single name, e.g.::
