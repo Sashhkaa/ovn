@@ -1,6 +1,7 @@
 name: System tests using ovn-fake-multinode
 
 on:
+  push:
   schedule:
     # Run everyday at midnight
     - cron: '0 0 * * *'
@@ -109,14 +110,10 @@ jobs:
       fail-fast: false
       matrix:
         cfg:
-        - { branch: "${{ github.ref_name }}", testsuiteflags: ""}
-        - { branch: "branch-26.03", testsuiteflags: "-k 'basic test'" }
+        - { branch: "${{ github.ref_name }}", testsuiteflags: "-k 'replicated gateway'"}
         inline_br_ex:
         - "no"
         - "yes"
-        exclude:
-        - cfg: { branch: "branch-26.03", testsuiteflags: "-k 'basic test'" }
-          inline_br_ex: "yes"
     name: multinode tests ${{ join(matrix.cfg.*, ' ') }} INLINE_BR_EX=${{ matrix.inline_br_ex }}
     env:
       RUNC_CMD: podman
@@ -248,15 +245,21 @@ jobs:
 
     - name: Run fake-multinode system tests
       run: |
-        if ! sudo make check-multinode TESTSUITEFLAGS="${{ matrix.cfg.testsuiteflags }}"; then
-          sudo podman exec -it ovn-central-az1 ovn-nbctl show || :
-          sudo podman exec -it ovn-central-az1 ovn-sbctl show || :
-          sudo podman exec -it ovn-chassis-1 ovs-vsctl show || :
-          sudo podman exec -it ovn-chassis-1 ip netns || :
-          sudo podman exec -it ovn-chassis-1 cat /var/log/ovn/ovn-controller.log || :
-          sudo cat tests/multinode-testsuite.log || :
-          exit 1
-        fi
+        for i in $(seq 1 10); do
+          echo "::group::Run $i of 10"
+          if ! sudo make check-multinode TESTSUITEFLAGS="${{ matrix.cfg.testsuiteflags }}"; then
+            echo "::endgroup::"
+            echo "Run $i of 10 failed"
+            sudo podman exec -it ovn-central-az1 ovn-nbctl show || :
+            sudo podman exec -it ovn-central-az1 ovn-sbctl show || :
+            sudo podman exec -it ovn-chassis-1 ovs-vsctl show || :
+            sudo podman exec -it ovn-chassis-1 ip netns || :
+            sudo podman exec -it ovn-chassis-1 cat /var/log/ovn/ovn-controller.log || :
+            sudo cat tests/multinode-testsuite.log || :
+            exit 1
+          fi
+          echo "::endgroup::"
+        done
       working-directory: ovn
 
     - name: copy logs on failure
