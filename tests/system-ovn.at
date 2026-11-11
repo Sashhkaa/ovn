@@ -16517,6 +16517,126 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([dynamic-routing - maintained VRF changes during restart])
+AT_KEYWORDS([dynamic-routing])
+
+# R1 - maintained VRF, router removed while ovn-controller is down.
+# R2 - maintained VRF, vrf-id changed while ovn-controller is down.
+# R3 - VRF created by the CMS (no maintain-vrf), router removed while
+#      ovn-controller is down.  OVN must never delete this one.
+vrf1=2101
+vrf2=2102
+vrf2_new=2103
+vrf3=2104
+VRF_RESERVE([$vrf1])
+VRF_RESERVE([$vrf2])
+VRF_RESERVE([$vrf2_new])
+VRF_RESERVE([$vrf3])
+on_exit "ip link del ovnvrf$vrf1 2>/dev/null || :"
+on_exit "ip link del ovnvrf$vrf2 2>/dev/null || :"
+on_exit "ip link del ovnvrf$vrf2_new 2>/dev/null || :"
+on_exit "ip link del ovnvrf$vrf3 2>/dev/null || :"
+
+ovn_start
+OVS_TRAFFIC_VSWITCHD_START()
+ADD_BR([br-int])
+
+# Set external-ids in br-int needed for ovn-controller.
+check ovs-vsctl \
+    -- set Open_vSwitch . external-ids:system-id=hv1 \
+    -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
+    -- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
+    -- set Open_vSwitch . external-ids:ovn-encap-ip=169.0.0.1 \
+    -- set bridge br-int fail-mode=secure other-config:disable-in-band=true
+
+start_daemon ovn-controller
+
+# The CMS owns the VRF of R3.
+check ip link add ovnvrf$vrf3 type vrf table $vrf3
+check ip link set ovnvrf$vrf3 up
+
+check ovn-nbctl ls-add public
+
+check ovn-nbctl                                             \
+    -- lr-add R1                                            \
+    -- set Logical_Router R1                                \
+            options:chassis=hv1                             \
+            options:dynamic-routing=true                    \
+            options:dynamic-routing-vrf-id=$vrf1            \
+    -- lrp-add R1 rp1-public 00:00:02:01:02:01 172.16.1.1/24 \
+    -- lrp-set-options rp1-public                           \
+            dynamic-routing-maintain-vrf=true               \
+    -- lsp-add-router-port public public-rp1 rp1-public
+
+check ovn-nbctl                                             \
+    -- lr-add R2                                            \
+    -- set Logical_Router R2                                \
+            options:chassis=hv1                             \
+            options:dynamic-routing=true                    \
+            options:dynamic-routing-vrf-id=$vrf2            \
+    -- lrp-add R2 rp2-public 00:00:02:01:02:02 172.16.1.2/24 \
+    -- lrp-set-options rp2-public                           \
+            dynamic-routing-maintain-vrf=true               \
+    -- lsp-add-router-port public public-rp2 rp2-public
+
+check ovn-nbctl                                             \
+    -- lr-add R3                                            \
+    -- set Logical_Router R3                                \
+            options:chassis=hv1                             \
+            options:dynamic-routing=true                    \
+            options:dynamic-routing-vrf-id=$vrf3            \
+    -- lrp-add R3 rp3-public 00:00:02:01:02:03 172.16.1.3/24 \
+    -- lsp-add-router-port public public-rp3 rp3-public
+
+check ovn-nbctl --wait=hv sync
+
+OVS_WAIT_UNTIL([ip link show ovnvrf$vrf1 >/dev/null 2>&1])
+OVS_WAIT_UNTIL([ip link show ovnvrf$vrf2 >/dev/null 2>&1])
+AT_CHECK([ip link show ovnvrf$vrf3], [0], [ignore])
+
+# Stopping with --restart keeps all the VRFs.
+OVN_CONTROLLER_EXIT([], [--restart])
+AT_CHECK([ip link show ovnvrf$vrf1], [0], [ignore])
+AT_CHECK([ip link show ovnvrf$vrf2], [0], [ignore])
+AT_CHECK([ip link show ovnvrf$vrf3], [0], [ignore])
+
+# Change the configuration while ovn-controller is down.
+check ovn-nbctl --wait=sb lr-del R1
+check ovn-nbctl --wait=sb set Logical_Router R2 \
+    options:dynamic-routing-vrf-id=$vrf2_new
+check ovn-nbctl --wait=sb lr-del R3
+
+start_daemon ovn-controller
+OVS_WAIT_UNTIL([test "$(ovn-appctl -t ovn-controller debug/status)" == "running"])
+check ovn-nbctl --wait=hv sync
+
+# R2 now uses the new VRF.
+OVS_WAIT_UNTIL([ip link show ovnvrf$vrf2_new >/dev/null 2>&1])
+
+# The VRFs OVN created for configuration that is gone by now have to be
+# removed: R1 doesn't exist anymore and R2 moved to another vrf-id.
+OVS_WAIT_WHILE([ip link show ovnvrf$vrf1 >/dev/null 2>&1])
+OVS_WAIT_WHILE([ip link show ovnvrf$vrf2 >/dev/null 2>&1])
+
+# The stale VRFs are gone, so the cleanup has run by now.  It must not
+# have touched the VRF that was created by the CMS.
+AT_CHECK([ip link show ovnvrf$vrf3], [0], [ignore])
+
+# Graceful exit removes the VRF OVN maintains, but not the one the CMS
+# created.
+OVN_CLEANUP_CONTROLLER([hv1])
+AT_CHECK([ip link show ovnvrf$vrf2_new], [1], [ignore], [ignore])
+AT_CHECK([ip link show ovnvrf$vrf3], [0], [ignore])
+
+OVN_CLEANUP_NORTHD
+
+as
+OVS_TRAFFIC_VSWITCHD_STOP(["/.*error receiving.*/d
+/.*terminating with signal 15.*/d"])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([dynamic-routing - LB VIPs on gateway router IPv4])
 AT_KEYWORDS([dynamic-routing])
 
