@@ -18846,6 +18846,84 @@ build_lrouter_out_snat_match(struct lflow_table *lflows,
     }
 }
 
+/* Track connections to/from SNAT networks so that replies to externally
+ * initiated connections are not SNATed.  Stateless NAT bypasses this tracking
+ * with higher priority flows. */
+static void
+build_lrouter_out_snat_track_flows(struct lflow_table *lflows,
+                                   const struct ovn_datapath *od,
+                                   const struct ovn_nat *nat_entry,
+                                   struct ds *match, struct ds *actions,
+                                   bool distributed_nat, int cidr_bits,
+                                   bool is_v6, struct ovn_port *l3dgw_port,
+                                   struct lflow_ref *lflow_ref,
+                                   bool commit_all,
+                                   const struct chassis_features *features,
+                                   bool stateless)
+{
+    if (!features->ct_commit_to_zone || !features->ct_next_zone ||
+        od->is_gw_router || commit_all || lrouter_use_common_zone(od)) {
+        return;
+    }
+
+    const struct nbrec_nat *nat = nat_entry->nb;
+    uint16_t priority = lrouter_nat_get_priority(od, nat, false, cidr_bits);
+    /* Stateful SNAT uses the SNAT CT zone, while stateful DNAT_AND_SNAT uses
+     * the DNAT CT zone.  Give DNAT_AND_SNAT higher priority to override the
+     * tracking flows of a SNAT rule covering the same network, including
+     * when stateless NAT must bypass conntrack altogether. */
+    const char *zone = nat_entry->type == SNAT ? "snat" : "dnat";
+    uint16_t prio_offset = nat_entry->type == SNAT ? 0 : 5;
+
+    /* For traffic coming from the NAT logical IP or network, initiate CT
+     * state in the correct zone before S_ROUTER_OUT_SNAT so that it can match
+     * on CT states.  Stateless NAT skips this lookup. */
+    build_lrouter_out_snat_match(lflows, od, nat, match, distributed_nat,
+                                 cidr_bits, is_v6, l3dgw_port, lflow_ref,
+                                 false);
+    ds_clear(actions);
+    if (stateless) {
+        ds_put_cstr(actions, "next;");
+    } else {
+        ds_put_cstr(match, " && (!ct.trk || !ct.rpl)");
+        ds_put_format(actions, "ct_next(%s);", zone);
+    }
+    ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 70 + prio_offset,
+                  ds_cstr(match), ds_cstr(actions), lflow_ref,
+                  WITH_HINT(&nat->header_));
+
+    /* Look up traffic going into the NAT logical IP or network in the same
+     * zone to distinguish new connections from replies.  Stateless NAT
+     * bypasses both this lookup and the commit in S_ROUTER_OUT_POST_SNAT. */
+    build_lrouter_out_snat_match(lflows, od, nat, match, distributed_nat,
+                                 cidr_bits, is_v6, l3dgw_port, lflow_ref,
+                                 true);
+    if (stateless) {
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, priority + prio_offset,
+                      ds_cstr(match), "next;", lflow_ref,
+                      WITH_HINT(&nat->header_));
+        return;
+    }
+
+    size_t match_any_state_len = match->length;
+    ds_put_cstr(match, " && (!ct.trk || !ct.rpl)");
+    ds_clear(actions);
+    ds_put_format(actions, "ct_%s;", zone);
+    ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, priority + prio_offset,
+                  ds_cstr(match), ds_cstr(actions), lflow_ref,
+                  WITH_HINT(&nat->header_));
+
+    /* Commit new traffic going into the NAT logical IP or network to the
+     * correct CT zone to avoid SNATing replies. */
+    ds_truncate(match, match_any_state_len);
+    ds_put_cstr(match, " && ct.new");
+    ds_clear(actions);
+    ds_put_format(actions, "ct_commit_to_zone(%s);", zone);
+    ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_SNAT, priority + prio_offset,
+                  ds_cstr(match), ds_cstr(actions), lflow_ref,
+                  WITH_HINT(&nat->header_));
+}
+
 static void
 build_lrouter_out_snat_stateless_flow(struct lflow_table *lflows,
                                       const struct ovn_datapath *od,
@@ -18854,7 +18932,9 @@ build_lrouter_out_snat_stateless_flow(struct lflow_table *lflows,
                                       bool distributed_nat,
                                       struct eth_addr mac, int cidr_bits,
                                       bool is_v6, struct ovn_port *l3dgw_port,
-                                      struct lflow_ref *lflow_ref)
+                                      struct lflow_ref *lflow_ref,
+                                      bool commit_all,
+                                      const struct chassis_features *features)
 {
     if (!(nat_entry->type == SNAT || nat_entry->type == DNAT_AND_SNAT)) {
         return;
@@ -18878,6 +18958,11 @@ build_lrouter_out_snat_stateless_flow(struct lflow_table *lflows,
 
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, priority, ds_cstr(match),
                   ds_cstr(actions), lflow_ref, WITH_HINT(&nat->header_));
+
+    build_lrouter_out_snat_track_flows(lflows, od, nat_entry, match, actions,
+                                       distributed_nat, cidr_bits, is_v6,
+                                       l3dgw_port, lflow_ref, commit_all,
+                                       features, true);
 }
 
 static void
@@ -18974,55 +19059,10 @@ build_lrouter_out_snat_flow(struct lflow_table *lflows,
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, priority, ds_cstr(match),
                   ds_cstr(actions), lflow_ref, WITH_HINT(&nat->header_));
 
-    /* For the SNAT networks, we need to make sure that connections are
-     * properly tracked so we can decide whether to perform SNAT on traffic
-     * exiting the network. */
-    if (features->ct_commit_to_zone && features->ct_next_zone &&
-        !od->is_gw_router && !commit_all) {
-        const char *zone;
-        uint16_t prio_offset;
-        if (nat_entry->type == SNAT) {
-            /* Traffic to/from hosts behind SNAT is tracked through the
-             * SNAT CT zone.*/
-            zone = "snat";
-            prio_offset = 0;
-        } else {
-            /* Traffic to/from hosts behind DNAT_AND_SNAT is tracked through
-             * the DNAT CT zone with slightly higher priority flows.*/
-            zone = "dnat";
-            prio_offset = 5;
-        }
-
-        /* For traffic that comes from the SNAT network, initiate CT state
-         * from the correct zone, before entering S_ROUTER_OUT_SNAT to allow
-         * matching on various CT states.*/
-        ds_clear(actions);
-        ds_put_format(actions, "ct_next(%s);", zone);
-        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 70 + prio_offset,
-                      ds_cstr(match), ds_cstr(actions),
-                      lflow_ref);
-
-        build_lrouter_out_snat_match(lflows, od, nat, match,
-                                     distributed_nat, cidr_bits, is_v6,
-                                     l3dgw_port, lflow_ref, true);
-        size_t match_any_state_len = match->length;
-        ds_put_cstr(match, " && (!ct.trk || !ct.rpl)");
-        ds_clear(actions);
-        ds_put_format(actions, "ct_%s;", zone);
-        ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, priority + prio_offset,
-                      ds_cstr(match), ds_cstr(actions),
-                      lflow_ref);
-
-        /* New traffic that goes into the SNAT network is committed to the
-         * correct CT zone to avoid SNAT-ing replies.*/
-        ds_truncate(match, match_any_state_len);
-        ds_put_cstr(match, " && ct.new");
-        ds_clear(actions);
-        ds_put_format(actions, "ct_commit_to_zone(%s);", zone);
-        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_SNAT,
-                      priority + prio_offset, ds_cstr(match), ds_cstr(actions),
-                      lflow_ref);
-    }
+    build_lrouter_out_snat_track_flows(lflows, od, nat_entry, match, actions,
+                                       distributed_nat, cidr_bits, is_v6,
+                                       l3dgw_port, lflow_ref, commit_all,
+                                       features, false);
 }
 
 static void
@@ -19545,7 +19585,8 @@ build_lrouter_nat_defrag_and_lb(
                                                   nat_entry->is_distributed,
                                                   nat_entry->mac, cidr_bits,
                                                   is_v6, nat_entry->l3dgw_port,
-                                                  lflow_ref);
+                                                  lflow_ref, commit_all,
+                                                  features);
         } else if (lrouter_use_common_zone(od)) {
             build_lrouter_out_snat_in_czone_flow(lflows, od, nat_entry, match,
                                                  actions,
