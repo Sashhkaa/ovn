@@ -49012,6 +49012,81 @@ wait_row_count MAC_Binding 1 ip="192.168.1.112" mac='"f0:00:00:00:00:02"' logica
 wait_row_count MAC_Binding 1 ip="192.168.1.223" mac='"02:00:00:00:00:ee"' logical_port='"down_link"'
 wait_row_count MAC_Binding 0 ip="192.168.1.222" mac='"02:00:00:00:00:ee"' logical_port='"down_link"'
 
+# Connect a second router with its DGP active on hv1, while lr1 is active
+# on hv2. Initially hv2 is not a member of lr2's HA group, so lr2's
+# datapath is not local there.
+check ovn-nbctl clear Logical_Router_Port down_link gateway_chassis
+check ovn-nbctl lrp-set-gateway-chassis down_link hv2 20
+check ovn-nbctl lr-add lr2
+check ovn-nbctl lrp-add lr2 down_link_lr2 f0:00:00:00:00:f2 192.168.1.2/24
+check ovn-nbctl lrp-set-gateway-chassis down_link_lr2 hv1 20
+check ovn-nbctl lsp-add ls1 up_link_lr2 -- \
+    lsp-set-type up_link_lr2 router -- \
+    lsp-set-addresses up_link_lr2 router -- \
+    lsp-set-options up_link_lr2 router-port=down_link_lr2
+
+hv1_uuid=$(fetch_column Chassis _uuid name=hv1)
+hv2_uuid=$(fetch_column Chassis _uuid name=hv2)
+wait_column "$hv2_uuid" Port_Binding chassis logical_port=cr-down_link
+wait_column "$hv1_uuid" Port_Binding chassis logical_port=cr-down_link_lr2
+check ovn-nbctl --wait=hv sync
+
+AT_CAPTURE_FILE([external-garp.expected])
+
+# Only lr1 can learn: lr2's pipeline is absent on the receiving chassis.
+sha=02:00:00:00:00:ee
+tha=00:00:00:00:00:00
+spa=192.168.1.224
+tpa=$spa
+garp=$(fmt_pkt "Ether(dst='ff:ff:ff:ff:ff:ff', src='${sha}')/ \
+                ARP(hwsrc='${sha}', hwdst='${tha}', psrc='${spa}', pdst='${tpa}')")
+as hv2 ovs-appctl netdev-dummy/receive vif_ext "$garp"
+echo "$garp" > external-garp.expected
+OVN_CHECK_PACKETS_CONTAIN([hv2/vif2-tx.pcap], [external-garp.expected])
+wait_row_count MAC_Binding 1 ip="192.168.1.224" mac='"02:00:00:00:00:ee"' logical_port='"down_link"'
+wait_row_count MAC_Binding 0 ip="192.168.1.224" logical_port='"down_link_lr2"'
+
+# Make hv2 a backup for lr2, installing its datapath without moving its
+# active DGP from hv1. The same localnet GARP can now be learnt by both.
+check ovn-nbctl lrp-set-gateway-chassis down_link_lr2 hv2 10
+ovn_wait_for_bfd_up hv2 hv1
+wait_column "$hv1_uuid" Port_Binding chassis logical_port=cr-down_link_lr2
+check ovn-nbctl --wait=hv sync
+
+sha=02:00:00:00:00:ee
+tha=00:00:00:00:00:00
+spa=192.168.1.225
+tpa=$spa
+garp=$(fmt_pkt "Ether(dst='ff:ff:ff:ff:ff:ff', src='${sha}')/ \
+                ARP(hwsrc='${sha}', hwdst='${tha}', psrc='${spa}', pdst='${tpa}')")
+as hv2 ovs-appctl netdev-dummy/receive vif_ext "$garp"
+echo "$garp" > external-garp.expected
+OVN_CHECK_PACKETS_CONTAIN([hv2/vif2-tx.pcap], [external-garp.expected])
+wait_row_count MAC_Binding 1 ip="192.168.1.225" mac='"02:00:00:00:00:ee"' logical_port='"down_link"'
+wait_row_count MAC_Binding 1 ip="192.168.1.225" mac='"02:00:00:00:00:ee"' logical_port='"down_link_lr2"'
+# Installing lr2's datapath must not retroactively learn the earlier GARP.
+wait_row_count MAC_Binding 0 ip="192.168.1.224" logical_port='"down_link_lr2"'
+
+# Both datapaths remain local on hv2, but neither DGP is active there.
+# The localnet GARP must reach the VIF through MC_FLOOD_L2, and neither
+# router may learn it.
+check ovn-nbctl lrp-set-gateway-chassis down_link hv2 10
+check ovn-nbctl lrp-set-gateway-chassis down_link hv1 20
+ovn_wait_for_bfd_up hv2 hv1
+wait_column "$hv1_uuid" Port_Binding chassis logical_port=cr-down_link
+check ovn-nbctl --wait=hv sync
+
+sha=02:00:00:00:00:ee
+tha=00:00:00:00:00:00
+spa=192.168.1.226
+tpa=$spa
+garp=$(fmt_pkt "Ether(dst='ff:ff:ff:ff:ff:ff', src='${sha}')/ \
+                ARP(hwsrc='${sha}', hwdst='${tha}', psrc='${spa}', pdst='${tpa}')")
+as hv2 ovs-appctl netdev-dummy/receive vif_ext "$garp"
+echo "$garp" > external-garp.expected
+OVN_CHECK_PACKETS_CONTAIN([hv2/vif2-tx.pcap], [external-garp.expected])
+wait_row_count MAC_Binding 0 ip="192.168.1.226"
+
 OVN_CLEANUP([hv1],[hv2])
 AT_CLEANUP
 ])
